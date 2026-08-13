@@ -36,6 +36,17 @@ internal sealed class ShareXModV04Settings
     public bool ChromeBackgroundCapture { get; set; } = false;
     public bool ChromeGenericAriaExpansion { get; set; } = false;
 
+    // Preserve embedded screenshots/images at their original resource quality as an appendix.
+    // This never upscales/re-encodes the source asset: it tries to save the exact bytes Chrome loaded.
+    public bool ChromeImageAppendixEnabled { get; set; } = true;
+    public int ChromeImageAppendixMaxAssets { get; set; } = 40;
+    public int ChromeImageAppendixMinRenderedWidth { get; set; } = 220;
+    public int ChromeImageAppendixMinRenderedHeight { get; set; } = 120;
+    public int ChromeImageAppendixMinNaturalWidth { get; set; } = 400;
+    public int ChromeImageAppendixMinNaturalHeight { get; set; } = 240;
+    public bool ChromeImageAppendixPreferLargestSrcset { get; set; } = true;
+    public bool ChromeImageAppendixIncludeCssBackgrounds { get; set; } = true;
+
     public static ShareXModV04Settings Load()
     {
         string path = Path.Combine(AppContext.BaseDirectory, "ShareX.Mod.v04.json");

@@ -355,7 +355,7 @@ namespace ShareX.ScreenCaptureLib
 
             bool bestGuess = false;
 
-            if (matchCount == 0 && bestMatchCount > 0)
+            if (matchCount == 0 && bestMatchCount > 0 && robustSession == null)
             {
                 matchCount = bestMatchCount;
                 matchIndex = bestMatchIndex;

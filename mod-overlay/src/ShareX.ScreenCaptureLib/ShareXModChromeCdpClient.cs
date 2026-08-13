@@ -3,10 +3,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Net.Http;
 using System.Net.WebSockets;
-using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -26,8 +24,7 @@ internal sealed class ShareXModChromeCdpClient : IAsyncDisposable
 
     public async Task<IReadOnlyList<ShareXModChromeTarget>> ListTargetsAsync(string endpoint, CancellationToken cancellationToken = default)
     {
-        string url = endpoint.TrimEnd('/') + "/json/list";
-        using HttpResponseMessage response = await http.GetAsync(url, cancellationToken);
+        using HttpResponseMessage response = await http.GetAsync(endpoint.TrimEnd('/') + "/json/list", cancellationToken);
         response.EnsureSuccessStatusCode();
         using JsonDocument json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
         List<ShareXModChromeTarget> targets = new();
@@ -51,13 +48,13 @@ internal sealed class ShareXModChromeCdpClient : IAsyncDisposable
         if (string.IsNullOrWhiteSpace(target.WebSocketDebuggerUrl)) throw new InvalidOperationException("Chrome target has no DevTools WebSocket URL.");
         await socket.ConnectAsync(new Uri(target.WebSocketDebuggerUrl), cancellationToken);
         Target = target;
-        await SendCommandAsync("Runtime.enable", null, cancellationToken);
-        await SendCommandAsync("Page.enable", null, cancellationToken);
+        using JsonDocument _1 = await SendCdpCommandAsync("Runtime.enable", null, cancellationToken);
+        using JsonDocument _2 = await SendCdpCommandAsync("Page.enable", null, cancellationToken);
     }
 
-    public async Task<JsonDocument> EvaluateAsync(string expression, bool awaitPromise = false, CancellationToken cancellationToken = default)
+    public Task<JsonDocument> EvaluateAsync(string expression, bool awaitPromise = false, CancellationToken cancellationToken = default)
     {
-        return await SendCommandAsync("Runtime.evaluate", new
+        return SendCdpCommandAsync("Runtime.evaluate", new
         {
             expression,
             returnByValue = true,
@@ -68,7 +65,7 @@ internal sealed class ShareXModChromeCdpClient : IAsyncDisposable
 
     public async Task<byte[]> CaptureScreenshotAsync(bool captureBeyondViewport = false, CancellationToken cancellationToken = default)
     {
-        using JsonDocument response = await SendCommandAsync("Page.captureScreenshot", new
+        using JsonDocument response = await SendCdpCommandAsync("Page.captureScreenshot", new
         {
             format = "png",
             fromSurface = true,
@@ -111,13 +108,7 @@ internal sealed class ShareXModChromeCdpClient : IAsyncDisposable
       const overflowY = cs.overflowY;
       const scrollable = (overflowY === 'auto' || overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 64;
       if (!scrollable || el.clientHeight < 48) continue;
-      state.scrollers.push({
-        el,
-        style: el.getAttribute('style'),
-        scrollTop: el.scrollTop,
-        scrollHeight: el.scrollHeight,
-        clientHeight: el.clientHeight
-      });
+      state.scrollers.push({ el, style: el.getAttribute('style'), scrollTop: el.scrollTop });
       el.style.setProperty('max-height', 'none', 'important');
       el.style.setProperty('height', 'auto', 'important');
       el.style.setProperty('overflow-y', 'visible', 'important');
@@ -163,7 +154,8 @@ internal sealed class ShareXModChromeCdpClient : IAsyncDisposable
 
     public async Task ScrollToAsync(double y, CancellationToken cancellationToken = default)
     {
-        using JsonDocument _ = await EvaluateAsync($"window.scrollTo({{top:{y.ToString(System.Globalization.CultureInfo.InvariantCulture)},behavior:'instant'}}); ({y.ToString(System.Globalization.CultureInfo.InvariantCulture)})", false, cancellationToken);
+        string ys = y.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        using JsonDocument _ = await EvaluateAsync($"window.scrollTo({{top:{ys},behavior:'instant'}}); ({ys})", false, cancellationToken);
     }
 
     public async Task<(double y, double height, double viewport)> GetScrollMetricsAsync(CancellationToken cancellationToken = default)
@@ -173,7 +165,7 @@ internal sealed class ShareXModChromeCdpClient : IAsyncDisposable
         return (value.GetProperty("y").GetDouble(), value.GetProperty("height").GetDouble(), value.GetProperty("viewport").GetDouble());
     }
 
-    private async Task<JsonDocument> SendCommandAsync(string method, object? parameters, CancellationToken cancellationToken)
+    public async Task<JsonDocument> SendCdpCommandAsync(string method, object? parameters = null, CancellationToken cancellationToken = default)
     {
         await sendLock.WaitAsync(cancellationToken);
         try
@@ -186,7 +178,7 @@ internal sealed class ShareXModChromeCdpClient : IAsyncDisposable
             using MemoryStream message = new();
             while (true)
             {
-                ValueWebSocketReceiveResult received = await socket.ReceiveAsync(buffer, cancellationToken);
+                WebSocketReceiveResult received = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), cancellationToken);
                 if (received.MessageType == WebSocketMessageType.Close) throw new WebSocketException("Chrome DevTools connection closed.");
                 message.Write(buffer, 0, received.Count);
                 if (!received.EndOfMessage) continue;
@@ -207,7 +199,10 @@ internal sealed class ShareXModChromeCdpClient : IAsyncDisposable
                 return json;
             }
         }
-        finally { sendLock.Release(); }
+        finally
+        {
+            sendLock.Release();
+        }
     }
 
     public async ValueTask DisposeAsync()

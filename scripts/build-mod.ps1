@@ -17,8 +17,14 @@ try {
     & git -C $repoRoot worktree add --detach $worktree HEAD
     if ($LASTEXITCODE -ne 0) { throw "git worktree add failed" }
 
-    & pwsh -NoProfile -File (Join-Path $worktree "scripts\apply-overlay.ps1")
-    if ($LASTEXITCODE -ne 0) { throw "Overlay apply failed" }
+    & pwsh -NoProfile -File (Join-Path $worktree "scripts\run-v04-hooks.ps1")
+    if ($LASTEXITCODE -ne 0) { throw "v0.4 overlay hook application failed" }
+
+    $postHook = Join-Path $worktree "scripts\apply-v041-post-hooks.ps1"
+    if (Test-Path $postHook) {
+        & pwsh -NoProfile -File $postHook
+        if ($LASTEXITCODE -ne 0) { throw "v0.4.1 post-hook application failed" }
+    }
 
     Push-Location $worktree
     try {

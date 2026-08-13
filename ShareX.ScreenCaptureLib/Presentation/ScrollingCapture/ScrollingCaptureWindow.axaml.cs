@@ -173,11 +173,11 @@ public partial class ScrollingCaptureWindow : Window
         finally
         {
             SetCaptureControlsEnabled(true);
-            LoadImage(_service.Result);
+            await LoadShareXModImageAsync(_service.Result);
             RestoreAndActivate();
         }
 
-        if (_service.Options.AutoUpload)
+        if (_service.Options.AutoUpload && !ShareXModOversizedImageSupport.IsOversized(_service.Result))
         {
             UploadResult();
         }

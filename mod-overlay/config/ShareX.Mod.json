@@ -1,0 +1,16 @@
+{
+  "enabled": true,
+  "manualStopOnly": true,
+  "continueAfterCombineFailure": true,
+  "maxConsecutiveCombineFailures": 8,
+  "maxConsecutiveUnchangedFrames": 3,
+  "saveRawFramesOnFailure": true,
+  "rawFrameHistory": 4,
+  "diagnosticsEnabled": true,
+  "fallbackMatcherEnabled": true,
+  "fallbackMaxMeanDifference": 14.0,
+  "fallbackMinScrollDelta": 12,
+  "fallbackMaxScrollDeltaRatio": 0.9,
+  "fallbackCoarseStep": 8,
+  "sessionDirectory": "ShareX-Mod\\ScrollingCaptureSessions"
+}

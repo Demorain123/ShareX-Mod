@@ -38,14 +38,28 @@ $new = @'
 '@
 $marker = "ShareXModImageAppendixTail.Build"
 
-if ($text.Contains($marker)) {
-    Write-Host "[v0.4.1-post] appendix tail hook already present." -ForegroundColor DarkYellow
-    exit 0
+if (-not $text.Contains($marker)) {
+    if (-not $text.Contains($old)) {
+        throw "v0.4.1 appendix tail hook anchor not found."
+    }
+    $text = $text.Replace($old, $new)
+    [IO.File]::WriteAllText($manager, $text, [Text.UTF8Encoding]::new($true))
+    Write-Host "[v0.4.1-post] appended high-resolution image assets to long-capture tail." -ForegroundColor Cyan
 }
-if (-not $text.Contains($old)) {
-    throw "v0.4.1 appendix tail hook anchor not found."
+else {
+    Write-Host "[v0.4.1-post] appendix tail hook already present." -ForegroundColor DarkYellow
 }
 
-$text = $text.Replace($old, $new)
-[IO.File]::WriteAllText($manager, $text, [Text.UTF8Encoding]::new($true))
-Write-Host "[v0.4.1-post] appended high-resolution image assets to long-capture tail." -ForegroundColor Cyan
+# The background-CDP prototype predates SegmentStore's final-PNG registry field. Keep the
+# optional code build-compatible without making browser integration mandatory.
+$background = Join-Path $repoRoot "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModChromeBackgroundCapture.cs"
+if (Test-Path $background) {
+    $backgroundText = [IO.File]::ReadAllText($background)
+    $legacy = "ShareXModSegmentedOutputRegistry.Register(preview, manifestPath, sourceWidth, totalPixelHeight);"
+    $compatible = "ShareXModSegmentedOutputRegistry.Register(preview, manifestPath, string.Empty, sourceWidth, totalPixelHeight);"
+    if ($backgroundText.Contains($legacy)) {
+        $backgroundText = $backgroundText.Replace($legacy, $compatible)
+        [IO.File]::WriteAllText($background, $backgroundText, [Text.UTF8Encoding]::new($true))
+        Write-Host "[v0.4.1-post] updated optional browser-background registry call." -ForegroundColor Cyan
+    }
+}

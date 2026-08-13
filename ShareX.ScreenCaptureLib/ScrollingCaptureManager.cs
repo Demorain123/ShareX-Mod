@@ -47,6 +47,7 @@ namespace ShareX.ScreenCaptureLib
         private int bestMatchCount, bestMatchIndex, bestIgnoreBottomOffset;
         private WindowInfo selectedWindow;
         private Rectangle selectedRectangle;
+        private ShareXModRobustScrollingSession robustSession;
 
         public ScrollingCaptureManager(ScrollingCaptureOptions options)
         {
@@ -90,6 +91,8 @@ namespace ShareX.ScreenCaptureLib
                 bestMatchIndex = 0;
                 bestIgnoreBottomOffset = 0;
                 Reset();
+                robustSession?.Dispose();
+                robustSession = ShareXModRobustScrollingSession.TryCreate(selectedRectangle, Options);
 
                 ScrollingCaptureRegionWindow regionWindow = null;
 
@@ -121,10 +124,20 @@ namespace ShareX.ScreenCaptureLib
                     while (!stopRequested)
                     {
                         lastScreenshot = screenshot.CaptureRectangle(selectedRectangle);
+                        robustSession?.OnFrameCaptured(lastScreenshot);
 
-                        if (CompareLastTwoImages())
+                        bool unchangedFrame = CompareLastTwoImages();
+
+                        if (unchangedFrame)
                         {
-                            break;
+                            if (robustSession == null || robustSession.ShouldStopOnUnchangedFrame())
+                            {
+                                break;
+                            }
+                        }
+                        else
+                        {
+                            robustSession?.OnChangedFrame();
                         }
 
                         switch (Options.ScrollMethod)
@@ -151,7 +164,7 @@ namespace ShareX.ScreenCaptureLib
 
                         Stopwatch timer = Stopwatch.StartNew();
 
-                        if (lastScreenshot != null)
+                        if (lastScreenshot != null && !unchangedFrame)
                         {
                             Bitmap newResult = await CombineImagesAsync(Result, lastScreenshot);
 
@@ -159,10 +172,26 @@ namespace ShareX.ScreenCaptureLib
                             {
                                 Result?.Dispose();
                                 Result = newResult;
+                                robustSession?.OnPrimaryCombineSuccess();
                             }
                             else
                             {
-                                break;
+                                Bitmap recoveredResult = robustSession?.TryFallbackCombine(Result, previousScreenshot, lastScreenshot);
+
+                                if (recoveredResult != null)
+                                {
+                                    Result?.Dispose();
+                                    Result = recoveredResult;
+                                    status = ScrollingCaptureStatus.PartiallySuccessful;
+                                }
+                                else if (robustSession?.ShouldContinueAfterCombineFailure() == true)
+                                {
+                                    status = ScrollingCaptureStatus.PartiallySuccessful;
+                                }
+                                else
+                                {
+                                    break;
+                                }
                             }
                         }
 
@@ -193,6 +222,10 @@ namespace ShareX.ScreenCaptureLib
                 finally
                 {
                     regionWindow?.Close();
+
+                    robustSession?.Complete(stopRequested ? "manual-stop" : "automatic-stop", status, Result);
+                    robustSession?.Dispose();
+                    robustSession = null;
 
                     Reset(true);
                     IsCapturing = false;
@@ -322,7 +355,7 @@ namespace ShareX.ScreenCaptureLib
 
             bool bestGuess = false;
 
-            if (matchCount == 0 && bestMatchCount > 0)
+            if (matchCount == 0 && bestMatchCount > 0 && robustSession == null)
             {
                 matchCount = bestMatchCount;
                 matchIndex = bestMatchIndex;

@@ -1,8 +1,10 @@
 {
-  "enabled": false,
-  "maxConsecutiveCombineFailures": 5,
+  "enabled": true,
+  "manualStopOnly": true,
+  "continueAfterCombineFailure": true,
+  "maxConsecutiveCombineFailures": 0,
   "saveRawFramesOnFailure": true,
   "diagnosticsEnabled": true,
   "fallbackMatcherEnabled": true,
-  "manualStopAlwaysWins": true
+  "fallbackMaxMeanDifference": 20.0
 }

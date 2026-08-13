@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "ShareX-Mod Chrome Enhanced",
+  "version": "0.4.0",
+  "description": "Experimental browser-aware long capture companion for ShareX-Mod.",
+  "permissions": ["activeTab", "debugger", "storage"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "ShareX-Mod Chrome Enhanced",
+    "default_popup": "popup.html"
+  }
+}

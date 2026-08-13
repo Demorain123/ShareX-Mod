@@ -1,0 +1,54 @@
+name: Validate ShareX-Mod v0.4
+
+on:
+  push:
+    branches:
+      - "mod/**"
+    paths:
+      - "mod-overlay/**"
+      - "ShareX.ScreenCaptureLib/**"
+      - ".github/workflows/validate-mod-v04.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Apply overlay patches
+        shell: pwsh
+        run: |
+          $patches = Get-ChildItem "mod-overlay\patches\*.patch" | Sort-Object Name
+          foreach ($patch in $patches) {
+            Write-Host "Checking $($patch.Name)"
+            git apply --check $patch.FullName
+            git apply $patch.FullName
+          }
+          git diff --check
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Restore Release x64
+        run: dotnet restore --runtime win-x64 ShareX.sln
+
+      - name: Build Release x64
+        run: dotnet build --no-restore --configuration Release -p:Platform=x64 --self-contained true /m:1 ShareX.sln
+
+      - name: Build portable package
+        shell: pwsh
+        run: |
+          & "ShareX.Setup\bin\Release\win-x64\ShareX.Setup.exe" -silent -job "Release" -platform "x64"
+
+      - name: Upload v0.4 portable
+        uses: actions/upload-artifact@v7
+        with:
+          name: ShareX-Mod-v0.4-dev-portable-x64
+          path: Output\*-portable-x64.zip

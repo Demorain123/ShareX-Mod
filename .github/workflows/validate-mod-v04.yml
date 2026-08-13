@@ -8,6 +8,7 @@ on:
       - "mod-overlay/**"
       - "scripts/apply-v04-hooks.ps1"
       - "scripts/run-v04-hooks.ps1"
+      - "scripts/apply-v041-post-hooks.ps1"
       - "ShareX.ScreenCaptureLib/**"
       - "Directory.build.targets"
       - ".github/workflows/validate-mod-v04.yml"
@@ -23,10 +24,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Validate and apply v0.4 overlay hooks
+      - name: Validate and apply v0.4.1 overlay hooks
         shell: pwsh
         run: |
           pwsh -NoProfile -File "scripts\run-v04-hooks.ps1"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -File "scripts\apply-v041-post-hooks.ps1"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git diff --check
 
@@ -46,8 +49,8 @@ jobs:
         run: |
           & "ShareX.Setup\bin\Release\win-x64\ShareX.Setup.exe" -silent -job "Release" -platform "x64"
 
-      - name: Upload v0.4 portable
+      - name: Upload v0.4.1 portable
         uses: actions/upload-artifact@v7
         with:
-          name: ShareX-Mod-v0.4-dev-portable-x64
+          name: ShareX-Mod-v0.4.1-dev-portable-x64
           path: Output\*-portable-x64.zip

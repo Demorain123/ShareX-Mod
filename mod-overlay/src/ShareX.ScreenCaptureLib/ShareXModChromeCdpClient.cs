@@ -105,7 +105,7 @@ internal sealed class ShareXModChromeCdpClient : IAsyncDisposable
             using MemoryStream message = new();
             while (true)
             {
-                ValueWebSocketReceiveResult received = await socket.ReceiveAsync(buffer, cancellationToken);
+                WebSocketReceiveResult received = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), cancellationToken);
                 if (received.MessageType == WebSocketMessageType.Close) throw new WebSocketException("Chrome DevTools connection closed.");
                 message.Write(buffer, 0, received.Count);
                 if (!received.EndOfMessage) continue;

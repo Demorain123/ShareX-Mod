@@ -1,4 +1,4 @@
-#region License Information (GPL v3)
+﻿#region License Information (GPL v3)
 
 /*
     ShareX - A program that allows you to take screenshots and share any file type
@@ -7,7 +7,7 @@
     This program is free software; you can redistribute it and/or
     modify it under the terms of the GNU General Public License
     as published by the Free Software Foundation; either version 2
-    of the license, or (at your option) any later version.
+    of the License, or (at your option) any later version.
 
     This program is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -56,8 +56,6 @@ namespace ShareX.ScreenCaptureLib
 
         public void Dispose()
         {
-            robustSession?.Dispose();
-            robustSession = null;
             Reset();
         }
 
@@ -224,9 +222,11 @@ namespace ShareX.ScreenCaptureLib
                 finally
                 {
                     regionWindow?.Close();
+
                     robustSession?.Complete(stopRequested ? "manual-stop" : "automatic-stop", status, Result);
                     robustSession?.Dispose();
                     robustSession = null;
+
                     Reset(true);
                     IsCapturing = false;
                 }
@@ -282,15 +282,19 @@ namespace ShareX.ScreenCaptureLib
             if (result == null)
             {
                 status = ScrollingCaptureStatus.Successful;
+
                 return (Bitmap)currentImage.Clone();
             }
 
             int matchCount = 0;
             int matchIndex = 0;
             int matchLimit = currentImage.Height / 2;
+
             int ignoreSideOffset = Math.Max(50, currentImage.Width / 20);
             ignoreSideOffset = Math.Min(ignoreSideOffset, currentImage.Width / 3);
+
             Rectangle rect = new Rectangle(ignoreSideOffset, result.Height - currentImage.Height, currentImage.Width - ignoreSideOffset * 2, currentImage.Height);
+
             BitmapData bdResult = result.LockBits(new Rectangle(0, 0, result.Width, result.Height), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
             BitmapData bdCurrentImage = currentImage.LockBits(new Rectangle(0, 0, currentImage.Width, currentImage.Height), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
             int stride = bdResult.Stride;
@@ -298,6 +302,7 @@ namespace ShareX.ScreenCaptureLib
             IntPtr resultScan0 = bdResult.Scan0 + pixelSize * ignoreSideOffset;
             IntPtr currentImageScan0 = bdCurrentImage.Scan0 + pixelSize * ignoreSideOffset;
             int compareLength = pixelSize * rect.Width;
+
             int ignoreBottomOffsetMax = currentImage.Height / 3;
             int ignoreBottomOffset = Math.Max(50, currentImage.Height / 10);
 
@@ -319,6 +324,7 @@ namespace ShareX.ScreenCaptureLib
             }
 
             ignoreBottomOffset = Math.Min(ignoreBottomOffset, ignoreBottomOffsetMax);
+
             int rectBottom = rect.Bottom - ignoreBottomOffset - 1;
 
             for (int currentImageY = currentImage.Height - 1; currentImageY >= 0 && matchCount < matchLimit; currentImageY--)
@@ -346,6 +352,7 @@ namespace ShareX.ScreenCaptureLib
 
             result.UnlockBits(bdResult);
             currentImage.UnlockBits(bdCurrentImage);
+
             bool bestGuess = false;
 
             if (matchCount == 0 && bestMatchCount > 0)
@@ -375,8 +382,11 @@ namespace ShareX.ScreenCaptureLib
                     {
                         g.CompositingMode = CompositingMode.SourceCopy;
                         g.InterpolationMode = InterpolationMode.NearestNeighbor;
-                        g.DrawImage(result, new Rectangle(0, 0, result.Width, result.Height - ignoreBottomOffset), new Rectangle(0, 0, result.Width, result.Height - ignoreBottomOffset), GraphicsUnit.Pixel);
-                        g.DrawImage(currentImage, new Rectangle(0, result.Height - ignoreBottomOffset, currentImage.Width, matchHeight), new Rectangle(0, matchIndex + 1, currentImage.Width, matchHeight), GraphicsUnit.Pixel);
+
+                        g.DrawImage(result, new Rectangle(0, 0, result.Width, result.Height - ignoreBottomOffset),
+                            new Rectangle(0, 0, result.Width, result.Height - ignoreBottomOffset), GraphicsUnit.Pixel);
+                        g.DrawImage(currentImage, new Rectangle(0, result.Height - ignoreBottomOffset, currentImage.Width, matchHeight),
+                            new Rectangle(0, matchIndex + 1, currentImage.Width, matchHeight), GraphicsUnit.Pixel);
                     }
 
                     if (bestGuess)
@@ -393,6 +403,7 @@ namespace ShareX.ScreenCaptureLib
             }
 
             status = ScrollingCaptureStatus.Failed;
+
             return null;
         }
     }

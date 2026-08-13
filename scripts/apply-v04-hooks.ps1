@@ -74,7 +74,7 @@ Update-RequiredLiteral -Path $manager `
 '@ `
     -Marker "ShareXModV04Settings modV04 = ShareXModV04Settings.Load();"
 
-# 4) Chrome Enhanced is opportunistic. Failure falls back to generic ShareX capture.
+# 4) Chrome background mode is attempted first. If it cannot attach, the normal robust capture remains the fallback.
 Update-RequiredLiteral -Path $manager `
     -Old @'
                     await Task.Delay(Options.StartDelay);
@@ -83,6 +83,23 @@ Update-RequiredLiteral -Path $manager `
 '@ `
     -New @'
                     await Task.Delay(Options.StartDelay);
+
+                    if (modV04.ChromeEnhancedEnabled && modV04.ChromeBackgroundCapture)
+                    {
+                        ShareXModChromeBackgroundCaptureResult chromeBackgroundResult =
+                            await ShareXModChromeBackgroundCaptureEntry.TryCaptureAsync(
+                                selectedWindow.Handle,
+                                modV04,
+                                () => stopRequested);
+
+                        if (chromeBackgroundResult != null)
+                        {
+                            Result?.Dispose();
+                            Result = chromeBackgroundResult.Preview;
+                            status = ScrollingCaptureStatus.Successful;
+                            return status;
+                        }
+                    }
 
                     if (modV04.ChromeEnhancedEnabled)
                     {
@@ -98,7 +115,7 @@ Update-RequiredLiteral -Path $manager `
 
                     if (Options.AutoScrollTop)
 '@ `
-    -Marker "modChromeSession = await ShareXModChromeEnhancedSession.TryCreateAsync"
+    -Marker "ShareXModChromeBackgroundCaptureEntry.TryCaptureAsync"
 
 # 5) Observe every raw frame, and don't mistake lazy-load pauses for the end when robust manual-stop mode is enabled.
 Update-RequiredLiteral -Path $manager `

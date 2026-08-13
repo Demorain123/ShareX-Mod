@@ -6,7 +6,9 @@ on:
       - "mod/**"
     paths:
       - "mod-overlay/**"
+      - "scripts/apply-v04-hooks.ps1"
       - "ShareX.ScreenCaptureLib/**"
+      - "Directory.build.targets"
       - ".github/workflows/validate-mod-v04.yml"
   workflow_dispatch:
 
@@ -20,15 +22,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Apply overlay patches
+      - name: Validate and apply v0.4 overlay hooks
         shell: pwsh
         run: |
-          $patches = Get-ChildItem "mod-overlay\patches\*.patch" | Sort-Object Name
-          foreach ($patch in $patches) {
-            Write-Host "Checking $($patch.Name)"
-            git apply --check $patch.FullName
-            git apply $patch.FullName
-          }
+          pwsh -NoProfile -File "scripts\apply-v04-hooks.ps1"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git diff --check
 
       - name: Setup .NET

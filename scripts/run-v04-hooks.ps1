@@ -56,22 +56,46 @@ try {
 
         $manager = Join-Path $repoRoot "ShareX.ScreenCaptureLib\ScrollingCaptureManager.cs"
 
-        # Match only against the central moving-content band while robust mode is enabled.
-        # This keeps fixed side controls/timelines (for example Discourse's Back button) from
-        # becoming false anchors without cropping them out of the captured output itself.
         Replace-GeneratedLiteral -Path $manager `
             -Old "            int ignoreSideOffset = Math.Max(50, currentImage.Width / 20);" `
             -New "            int ignoreSideOffset = Math.Max(50, currentImage.Width / (modRobustSession != null ? 4 : 20));" `
             -Marker "currentImage.Width / (modRobustSession != null ? 4 : 20)"
 
-        # Upstream accepts even a one-row exact match. On browser pages a blank/static row can
-        # therefore produce a catastrophic seam at the very beginning of a long capture.
-        # Robust mode requires a short run of exact rows; otherwise the tolerant overlay matcher
-        # gets the frame instead of trusting a weak primary match.
         Replace-GeneratedLiteral -Path $manager `
             -Old "            if (matchCount > 0)" `
             -New "            if (matchCount > 0 && (modRobustSession == null || matchCount >= Math.Max(6, currentImage.Height / 160)))" `
             -Marker "matchCount >= Math.Max(6, currentImage.Height / 160)"
+
+        $oldPrimary = @'
+                            Bitmap newResult = await CombineImagesAsync(Result, lastScreenshot);
+                            bool fallbackCombined = false;
+'@
+        $newPrimary = @'
+                            Bitmap newResult = await CombineImagesAsync(Result, lastScreenshot);
+
+                            if (newResult != null && modRobustSession != null && previousScreenshot != null &&
+                                ShareXModAnchorMatcher.TryEstimateScrollDelta(previousScreenshot, lastScreenshot, out ShareXModAnchorMatch modAnchor))
+                            {
+                                int actualGrowth = newResult.Height - Result.Height;
+                                int expectedGrowth = modAnchor.ScrollDelta;
+                                int growthTolerance = Math.Max(40, (int)Math.Round(Math.Abs(expectedGrowth) * 0.30));
+
+                                if (expectedGrowth <= 0 || actualGrowth <= 0 || Math.Abs(actualGrowth - expectedGrowth) > growthTolerance)
+                                {
+                                    newResult.Dispose();
+                                    newResult = null;
+                                    bestMatchCount = 0;
+                                    bestMatchIndex = 0;
+                                    bestIgnoreBottomOffset = 0;
+                                }
+                            }
+
+                            bool fallbackCombined = false;
+'@
+        Replace-GeneratedLiteral -Path $manager `
+            -Old $oldPrimary `
+            -New $newPrimary `
+            -Marker "int growthTolerance = Math.Max(40"
     }
 
     exit 0

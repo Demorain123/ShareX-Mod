@@ -24,27 +24,58 @@ internal static class ShareXModVerticalFallbackMatcher
             return false;
         }
 
-        if (!TryEstimateScrollDelta(previousFrame, currentFrame, settings, out scrollDelta, out score) ||
-            scrollDelta <= 0 || scrollDelta >= currentFrame.Height)
+        if (ShareXModAnchorMatcher.TryEstimateScrollDelta(previousFrame, currentFrame, out ShareXModAnchorMatch anchorMatch))
+        {
+            scrollDelta = anchorMatch.ScrollDelta;
+            score = anchorMatch.Score;
+        }
+        else if (!TryEstimateScrollDelta(previousFrame, currentFrame, settings, out scrollDelta, out score))
         {
             return false;
         }
 
-        Bitmap newResult = new Bitmap(result.Width, result.Height + scrollDelta, PixelFormat.Format32bppArgb);
-
-        using (Graphics g = Graphics.FromImage(newResult))
+        if (scrollDelta == 0 || Math.Abs(scrollDelta) >= currentFrame.Height)
         {
-            g.CompositingMode = CompositingMode.SourceCopy;
-            g.InterpolationMode = InterpolationMode.NearestNeighbor;
-            g.DrawImageUnscaled(result, 0, 0);
-            g.DrawImage(currentFrame,
-                new Rectangle(0, result.Height, currentFrame.Width, scrollDelta),
-                new Rectangle(0, currentFrame.Height - scrollDelta, currentFrame.Width, scrollDelta),
-                GraphicsUnit.Pixel);
+            return false;
         }
 
-        combined = newResult;
-        return true;
+        if (scrollDelta > 0)
+        {
+            Bitmap newResult = new Bitmap(result.Width, result.Height + scrollDelta, PixelFormat.Format32bppArgb);
+
+            using (Graphics g = Graphics.FromImage(newResult))
+            {
+                g.CompositingMode = CompositingMode.SourceCopy;
+                g.InterpolationMode = InterpolationMode.NearestNeighbor;
+                g.DrawImageUnscaled(result, 0, 0);
+                g.DrawImage(currentFrame,
+                    new Rectangle(0, result.Height, currentFrame.Width, scrollDelta),
+                    new Rectangle(0, currentFrame.Height - scrollDelta, currentFrame.Width, scrollDelta),
+                    GraphicsUnit.Pixel);
+            }
+
+            combined = newResult;
+            return true;
+        }
+        else
+        {
+            int prepend = -scrollDelta;
+            Bitmap newResult = new Bitmap(result.Width, result.Height + prepend, PixelFormat.Format32bppArgb);
+
+            using (Graphics g = Graphics.FromImage(newResult))
+            {
+                g.CompositingMode = CompositingMode.SourceCopy;
+                g.InterpolationMode = InterpolationMode.NearestNeighbor;
+                g.DrawImage(currentFrame,
+                    new Rectangle(0, 0, currentFrame.Width, prepend),
+                    new Rectangle(0, 0, currentFrame.Width, prepend),
+                    GraphicsUnit.Pixel);
+                g.DrawImageUnscaled(result, 0, prepend);
+            }
+
+            combined = newResult;
+            return true;
+        }
     }
 
     private static bool TryEstimateScrollDelta(Bitmap previousFrame, Bitmap currentFrame,

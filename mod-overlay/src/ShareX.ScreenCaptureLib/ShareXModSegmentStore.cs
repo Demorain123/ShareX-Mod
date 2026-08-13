@@ -29,6 +29,7 @@ internal sealed class ShareXModSegmentStore : IDisposable
 
     public bool HasParts => parts.Count > 0;
     public string DirectoryPath => directory;
+    public string FinalPngPath => Path.Combine(directory, "capture-full.png");
 
     public static ShareXModSegmentStore? TryCreate(ShareXModV04Settings settings)
     {
@@ -55,16 +56,14 @@ internal sealed class ShareXModSegmentStore : IDisposable
         finalized = true;
         SavePart(tail);
         completedHeight += tail.Height;
+        BuildFinalPng(tail.Width, completedHeight);
         WriteManifest(true, tail.Width, completedHeight);
         return CreatePreview(tail.Width, completedHeight);
     }
 
     public Bitmap? AppendTailPartsAndCreatePreview(IEnumerable<string> tailPaths)
     {
-        if (!finalized || parts.Count == 0 || tailPaths == null)
-        {
-            return null;
-        }
+        if (!finalized || parts.Count == 0 || tailPaths == null) return null;
 
         int expectedWidth = parts[0].Width;
         int appended = 0;
@@ -74,27 +73,32 @@ internal sealed class ShareXModSegmentStore : IDisposable
             try
             {
                 using Bitmap source = new(path);
-                if (source.Width != expectedWidth || source.Height < 1)
-                {
-                    continue;
-                }
-
+                if (source.Width != expectedWidth || source.Height < 1) continue;
                 SavePart(source);
                 completedHeight += source.Height;
                 appended++;
             }
-            catch
-            {
-            }
+            catch { }
         }
 
-        if (appended == 0)
-        {
-            return null;
-        }
+        if (appended == 0) return null;
 
+        BuildFinalPng(expectedWidth, completedHeight);
         WriteManifest(true, expectedWidth, completedHeight);
         return CreatePreview(expectedWidth, completedHeight);
+    }
+
+    private void BuildFinalPng(int width, long height)
+    {
+        try
+        {
+            string[] paths = parts.Select(x => Path.Combine(directory, x.FileName)).ToArray();
+            ShareXModSegmentedPngWriter.Write(FinalPngPath, paths, width, height);
+        }
+        catch
+        {
+            try { if (File.Exists(FinalPngPath)) File.Delete(FinalPngPath); } catch { }
+        }
     }
 
     private void SavePart(Bitmap bitmap)
@@ -125,7 +129,7 @@ internal sealed class ShareXModSegmentStore : IDisposable
             y += partHeight;
         }
 
-        ShareXModSegmentedOutputRegistry.Register(preview, Path.Combine(directory, "manifest.json"), sourceWidth, sourceHeight);
+        ShareXModSegmentedOutputRegistry.Register(preview, Path.Combine(directory, "manifest.json"), FinalPngPath, sourceWidth, sourceHeight);
         return preview;
     }
 
@@ -140,6 +144,7 @@ internal sealed class ShareXModSegmentStore : IDisposable
                 final,
                 width,
                 height,
+                finalPng = File.Exists(FinalPngPath) ? Path.GetFileName(FinalPngPath) : null,
                 partCount = parts.Count,
                 parts,
                 created = DateTimeOffset.Now
@@ -170,15 +175,17 @@ internal static class ShareXModSegmentedOutputRegistry
     private static readonly object Sync = new();
     private static WeakReference<Bitmap>? previewRef;
     private static string? manifestPath;
+    private static string? finalPngPath;
     private static int sourceWidth;
     private static long sourceHeight;
 
-    public static void Register(Bitmap preview, string manifest, int width, long height)
+    public static void Register(Bitmap preview, string manifest, string finalPng, int width, long height)
     {
         lock (Sync)
         {
             previewRef = new WeakReference<Bitmap>(preview);
             manifestPath = manifest;
+            finalPngPath = finalPng;
             sourceWidth = width;
             sourceHeight = height;
         }
@@ -186,10 +193,16 @@ internal static class ShareXModSegmentedOutputRegistry
 
     public static bool TryGet(Bitmap? bitmap, out string? manifest, out int width, out long height)
     {
+        return TryGet(bitmap, out manifest, out _, out width, out height);
+    }
+
+    public static bool TryGet(Bitmap? bitmap, out string? manifest, out string? finalPng, out int width, out long height)
+    {
         lock (Sync)
         {
             bool match = bitmap != null && previewRef != null && previewRef.TryGetTarget(out Bitmap? target) && ReferenceEquals(target, bitmap);
             manifest = match ? manifestPath : null;
+            finalPng = match ? finalPngPath : null;
             width = match ? sourceWidth : 0;
             height = match ? sourceHeight : 0;
             return match;

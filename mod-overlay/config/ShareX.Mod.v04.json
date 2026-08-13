@@ -24,5 +24,14 @@
   "chromeRevealDiscourseSpoilers": true,
   "chromeExpandNestedScrollContainers": true,
   "chromeBackgroundCapture": false,
-  "chromeGenericAriaExpansion": false
+  "chromeGenericAriaExpansion": false,
+
+  "chromeImageAppendixEnabled": true,
+  "chromeImageAppendixMaxAssets": 40,
+  "chromeImageAppendixMinRenderedWidth": 220,
+  "chromeImageAppendixMinRenderedHeight": 120,
+  "chromeImageAppendixMinNaturalWidth": 400,
+  "chromeImageAppendixMinNaturalHeight": 240,
+  "chromeImageAppendixPreferLargestSrcset": true,
+  "chromeImageAppendixIncludeCssBackgrounds": true
 }

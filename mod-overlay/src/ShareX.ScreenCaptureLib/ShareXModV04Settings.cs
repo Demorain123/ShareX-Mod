@@ -27,7 +27,6 @@ internal sealed class ShareXModV04Settings
     public double SettleBlankComplexityThreshold { get; set; } = 2.0;
     public int SettleBlankExtraWaitMs { get; set; } = 500;
 
-    // Chrome Enhanced is deliberately opt-in while the generic path remains the stable default.
     public bool ChromeEnhancedEnabled { get; set; } = false;
     public string ChromeCdpEndpoint { get; set; } = "http://127.0.0.1:9222";
     public bool ChromeExpandDetails { get; set; } = true;
@@ -36,8 +35,20 @@ internal sealed class ShareXModV04Settings
     public bool ChromeBackgroundCapture { get; set; } = false;
     public bool ChromeGenericAriaExpansion { get; set; } = false;
 
-    // Preserve embedded screenshots/images at their original resource quality as an appendix.
-    // This never upscales/re-encodes the source asset: it tries to save the exact bytes Chrome loaded.
+    public double ChromeBackgroundStartY { get; set; } = 0;
+    public double ChromeBackgroundEndY { get; set; } = 0;
+    public int ChromeBackgroundTileHeight { get; set; } = 2800;
+    public int ChromeBackgroundMinimumTileHeight { get; set; } = 1400;
+    public int ChromeBackgroundMaximumTileHeight { get; set; } = 3600;
+    public bool ChromeBackgroundUseNaturalCuts { get; set; } = true;
+    public int ChromeBackgroundCutSearchRadius { get; set; } = 520;
+    public int ChromeBackgroundSettleMs { get; set; } = 420;
+    public int ChromeBackgroundImageWaitMs { get; set; } = 1800;
+    public int ChromeBackgroundStableBottomPasses { get; set; } = 3;
+    public int ChromeBackgroundMaxParts { get; set; } = 300;
+    public double ChromeBackgroundMaxCssHeight { get; set; } = 750000;
+    public string ChromeBackgroundOutputDirectory { get; set; } = "ShareX-Mod\\ChromeBackgroundCaptures";
+
     public bool ChromeImageAppendixEnabled { get; set; } = true;
     public int ChromeImageAppendixMaxAssets { get; set; } = 40;
     public int ChromeImageAppendixMinRenderedWidth { get; set; } = 220;

@@ -15,13 +15,13 @@ diff --git a/ShareX.ScreenCaptureLib/ScrollingCaptureManager.cs b/ShareX.ScreenC
          private WindowInfo selectedWindow;
          private Rectangle selectedRectangle;
 +        private ShareXModRobustScrollingSession robustSession;
-@@ -86,6 +87,8 @@ namespace ShareX.ScreenCaptureLib
-                 bestMatchIndex = 0;
+@@ -86,6 +87,9 @@ namespace ShareX.ScreenCaptureLib
                  bestIgnoreBottomOffset = 0;
                  Reset();
 +                robustSession?.Dispose();
 +                robustSession = ShareXModRobustScrollingSession.TryCreate(selectedRectangle, Options);
-@@ -120,9 +123,20 @@ namespace ShareX.ScreenCaptureLib
++                ShareXModV04Settings v04Settings = ShareXModV04Settings.Load();
+@@ -120,9 +124,20 @@ namespace ShareX.ScreenCaptureLib
                      while (!stopRequested)
                      {
                          lastScreenshot = screenshot.CaptureRectangle(selectedRectangle);
@@ -42,7 +42,7 @@ diff --git a/ShareX.ScreenCaptureLib/ScrollingCaptureManager.cs b/ShareX.ScreenC
 +                        {
 +                            robustSession?.OnChangedFrame();
                          }
-@@ -151,7 +165,7 @@ namespace ShareX.ScreenCaptureLib
+@@ -151,7 +166,7 @@ namespace ShareX.ScreenCaptureLib
  
                          Stopwatch timer = Stopwatch.StartNew();
  
@@ -50,7 +50,7 @@ diff --git a/ShareX.ScreenCaptureLib/ScrollingCaptureManager.cs b/ShareX.ScreenC
 +                        if (lastScreenshot != null && !unchangedFrame)
                          {
                              Bitmap newResult = await CombineImagesAsync(Result, lastScreenshot);
-@@ -160,10 +174,28 @@ namespace ShareX.ScreenCaptureLib
+@@ -160,10 +175,28 @@ namespace ShareX.ScreenCaptureLib
                                  Result?.Dispose();
                                  Result = newResult;
 +                                robustSession?.OnPrimaryCombineSuccess();
@@ -76,7 +76,28 @@ diff --git a/ShareX.ScreenCaptureLib/ScrollingCaptureManager.cs b/ShareX.ScreenC
 +                                }
                              }
                          }
-@@ -195,6 +227,10 @@ namespace ShareX.ScreenCaptureLib
+@@ -190,9 +223,18 @@ namespace ShareX.ScreenCaptureLib
+-                        int delay = Options.ScrollDelay - (int)timer.ElapsedMilliseconds;
+-
+-                        if (delay > 0)
++                        if (robustSession != null && v04Settings.AdaptiveSettleEnabled)
+                         {
+-                            await Task.Delay(delay);
++                            await ShareXModAdaptiveSettle.WaitAsync(
++                                () => screenshot.CaptureRectangle(selectedRectangle),
++                                v04Settings,
++                                Options.ScrollDelay);
++                        }
++                        else
++                        {
++                            int delay = Options.ScrollDelay - (int)timer.ElapsedMilliseconds;
++                            if (delay > 0)
++                            {
++                                await Task.Delay(delay);
++                            }
+                         }
+                     }
+@@ -195,6 +237,10 @@ namespace ShareX.ScreenCaptureLib
                  finally
                  {
                      regionWindow?.Close();
@@ -87,7 +108,7 @@ diff --git a/ShareX.ScreenCaptureLib/ScrollingCaptureManager.cs b/ShareX.ScreenC
  
                      Reset(true);
                      IsCapturing = false;
-@@ -295,7 +331,7 @@ namespace ShareX.ScreenCaptureLib
+@@ -295,7 +341,7 @@ namespace ShareX.ScreenCaptureLib
  
              bool bestGuess = false;
  

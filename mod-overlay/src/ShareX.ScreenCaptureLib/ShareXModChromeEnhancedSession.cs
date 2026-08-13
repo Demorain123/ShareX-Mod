@@ -14,12 +14,14 @@ namespace ShareX.ScreenCaptureLib;
 internal sealed class ShareXModChromeEnhancedSession : IAsyncDisposable
 {
     private readonly ShareXModChromeCdpClient client;
+    private readonly ShareXModV04Settings settings;
     public ShareXModChromeTarget Target { get; }
     public string PreparationSummary { get; }
 
-    private ShareXModChromeEnhancedSession(ShareXModChromeCdpClient client, ShareXModChromeTarget target, string preparationSummary)
+    private ShareXModChromeEnhancedSession(ShareXModChromeCdpClient client, ShareXModChromeTarget target, ShareXModV04Settings settings, string preparationSummary)
     {
         this.client = client;
+        this.settings = settings;
         Target = target;
         PreparationSummary = preparationSummary;
     }
@@ -46,11 +48,23 @@ internal sealed class ShareXModChromeEnhancedSession : IAsyncDisposable
             await client.ConnectAsync(target);
             using JsonDocument prepared = await client.PreparePageAsync(settings);
             string summary = ExtractEvaluationValue(prepared);
-            return new ShareXModChromeEnhancedSession(client, target, summary);
+            return new ShareXModChromeEnhancedSession(client, target, settings, summary);
         }
         catch
         {
             await client.DisposeAsync();
+            return null;
+        }
+    }
+
+    public async Task<ShareXModChromeImageAppendixResult?> ExportImageAppendixAsync(string captureDirectory)
+    {
+        try
+        {
+            return await ShareXModChromeImageAppendix.ExportAsync(client, settings, captureDirectory);
+        }
+        catch
+        {
             return null;
         }
     }

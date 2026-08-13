@@ -13,65 +13,84 @@ internal readonly record struct ShareXModAnchorMatch(int ScrollDelta, double Sco
 
 internal static class ShareXModAnchorMatcher
 {
-    private const int Width = 64;
+    private const int Width = 56;
     private const int AnchorHeight = 8;
-    private static readonly double[] AnchorPositions = { 0.55, 0.65, 0.75, 0.84 };
+    private static readonly double[] AnchorPositions = { 0.52, 0.62, 0.72, 0.81, 0.88 };
+    private static readonly (double Left, double Right)[] Bands =
+    {
+        (0.08, 0.48),
+        (0.25, 0.72),
+        (0.42, 0.86)
+    };
 
     public static bool TryEstimateScrollDelta(Bitmap before, Bitmap after, out ShareXModAnchorMatch match)
     {
         match = default;
-        if (before.Width != after.Width || before.Height != after.Height || before.Height < 180) return false;
+        if (before == null || after == null || before.Width != after.Width || before.Height != after.Height || before.Height < 180)
+            return false;
 
-        using Bitmap a = CreateStrip(before);
-        using Bitmap b = CreateStrip(after);
-        List<(int delta, double score)> matches = new();
+        List<(int Delta, double Score)> matches = new();
 
-        foreach (double ratio in AnchorPositions)
+        foreach (var band in Bands)
         {
-            int anchorY = Math.Clamp((int)(a.Height * ratio) - AnchorHeight / 2, 0, a.Height - AnchorHeight);
-            byte[] anchor = ReadAnchor(a, anchorY);
-            if (Complexity(anchor) < 3.0) continue;
+            using Bitmap a = CreateStrip(before, band.Left, band.Right);
+            using Bitmap b = CreateStrip(after, band.Left, band.Right);
 
-            double best = double.MaxValue;
-            double second = double.MaxValue;
-            int bestY = -1;
-            for (int y = 0; y <= b.Height - AnchorHeight; y++)
+            foreach (double ratio in AnchorPositions)
             {
-                double score = Difference(anchor, b, y);
-                if (score < best) { second = best; best = score; bestY = y; }
-                else if (score < second) second = score;
-            }
+                int anchorY = Math.Clamp((int)(a.Height * ratio) - AnchorHeight / 2, 0, a.Height - AnchorHeight);
+                byte[] anchor = ReadAnchor(a, anchorY);
+                if (Complexity(anchor) < 0.7) continue;
 
-            if (bestY < 0 || best > 14.0 || second - best < 1.25) continue;
-            double scale = before.Height / (double)a.Height;
-            int delta = (int)Math.Round((anchorY - bestY) * scale);
-            if (Math.Abs(delta) >= 2 && Math.Abs(delta) < before.Height)
-                matches.Add((delta, best));
+                // A patch that stays in exactly the same screen position is a poor scroll anchor.
+                if (Difference(anchor, b, anchorY) <= 0.7) continue;
+
+                double best = double.MaxValue;
+                double second = double.MaxValue;
+                int bestY = -1;
+
+                for (int y = 0; y <= b.Height - AnchorHeight; y++)
+                {
+                    if (Math.Abs(y - anchorY) <= 1) continue;
+                    double score = Difference(anchor, b, y);
+                    if (score < best) { second = best; best = score; bestY = y; }
+                    else if (score < second) second = score;
+                }
+
+                if (bestY < 0 || best > 14.0 || second - best < 0.75) continue;
+
+                double scale = before.Height / (double)a.Height;
+                int delta = (int)Math.Round((anchorY - bestY) * scale);
+                if (Math.Abs(delta) >= 2 && Math.Abs(delta) < before.Height)
+                    matches.Add((delta, best));
+            }
         }
 
-        if (matches.Count == 0) return false;
-        matches.Sort((x, y) => x.delta.CompareTo(y.delta));
-        int median = matches[matches.Count / 2].delta;
-        int tolerance = Math.Max(8, before.Height / 250);
-        var agreeing = matches.Where(x => Math.Abs(x.delta - median) <= tolerance).ToArray();
+        if (matches.Count < 2) return false;
+        matches.Sort((x, y) => x.Delta.CompareTo(y.Delta));
+        int median = matches[matches.Count / 2].Delta;
+        int tolerance = Math.Max(10, before.Height / 180);
+        var agreeing = matches.Where(x => Math.Abs(x.Delta - median) <= tolerance).ToArray();
         if (agreeing.Length < 2) return false;
 
         match = new ShareXModAnchorMatch(
-            (int)Math.Round(agreeing.Average(x => x.delta)),
-            agreeing.Average(x => x.score),
+            (int)Math.Round(agreeing.Average(x => x.Delta)),
+            agreeing.Average(x => x.Score),
             agreeing.Length);
         return true;
     }
 
-    private static Bitmap CreateStrip(Bitmap source)
+    private static Bitmap CreateStrip(Bitmap source, double leftRatio, double rightRatio)
     {
         int height = Math.Clamp(source.Height / 4, 180, 480);
+        int left = Math.Clamp((int)(source.Width * leftRatio), 0, source.Width - 2);
+        int right = Math.Clamp((int)(source.Width * rightRatio), left + 1, source.Width);
+
         Bitmap result = new(Width, height, PixelFormat.Format24bppRgb);
         using Graphics g = Graphics.FromImage(result);
         g.InterpolationMode = InterpolationMode.Low;
-        int margin = Math.Clamp(source.Width / 8, 8, source.Width / 3);
         g.DrawImage(source, new Rectangle(0, 0, Width, height),
-            new Rectangle(margin, 0, source.Width - margin * 2, source.Height), GraphicsUnit.Pixel);
+            new Rectangle(left, 0, right - left, source.Height), GraphicsUnit.Pixel);
         return result;
     }
 

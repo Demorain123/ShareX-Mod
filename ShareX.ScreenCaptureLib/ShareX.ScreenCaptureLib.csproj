@@ -25,4 +25,5 @@
       <DependentUpon>Strings.resx</DependentUpon>
     </Compile>
   </ItemGroup>
+  <Import Project="..\mod-overlay\build\ShareX.ScreenCaptureLib.Mod.targets" Condition="Exists('..\mod-overlay\build\ShareX.ScreenCaptureLib.Mod.targets')" />
 </Project>

@@ -15,7 +15,25 @@ try {
     [IO.File]::WriteAllText($temp, $text, [Text.UTF8Encoding]::new($false))
     if ($CheckOnly) { & pwsh -NoProfile -File $temp -CheckOnly }
     else { & pwsh -NoProfile -File $temp }
-    exit $LASTEXITCODE
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+    if (-not $CheckOnly) {
+        $repoRoot = (& git -C $PSScriptRoot rev-parse --show-toplevel).Trim()
+        $window = Join-Path $repoRoot "ShareX.ScreenCaptureLib\Presentation\ScrollingCapture\ScrollingCaptureWindow.axaml.cs"
+        $windowText = [IO.File]::ReadAllText($window)
+        $old = "await LoadShareXModImageAsync(_service.Result);"
+        $new = "await LoadShareXModResultAsync(_service.Result);"
+        if ($windowText.Contains($old)) {
+            $windowText = $windowText.Replace($old, $new)
+            [IO.File]::WriteAllText($window, $windowText, [Text.UTF8Encoding]::new($true))
+            Write-Host "[v0.4-hook] upgraded segmented preview result handler." -ForegroundColor Cyan
+        }
+        elseif (-not $windowText.Contains($new)) {
+            throw "v0.4 segmented preview hook not found after applying overlay hooks."
+        }
+    }
+
+    exit 0
 }
 finally {
     Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue

@@ -20,10 +20,7 @@ internal static class ShareXModAdaptiveSettle
         int maximum = Math.Max(minimumDelay, settings.SettleMaximumWaitMs);
         int requiredStable = Math.Clamp(settings.SettleRequiredStableProbes, 1, 8);
 
-        if (minimumDelay > 0)
-        {
-            await Task.Delay(minimumDelay);
-        }
+        if (minimumDelay > 0) await Task.Delay(minimumDelay);
 
         byte[]? previous = null;
         int stable = 0;
@@ -48,9 +45,7 @@ internal static class ShareXModAdaptiveSettle
                 {
                     stable++;
                     if (stable >= requiredStable)
-                    {
                         return new ShareXModSettleResult(waited, probes, false, false, lastDifference, complexity);
-                    }
                 }
                 else
                 {
@@ -59,7 +54,6 @@ internal static class ShareXModAdaptiveSettle
             }
 
             previous = current;
-
             int nextDelay = interval;
             if (blankLike && !blankExtraApplied)
             {
@@ -67,15 +61,8 @@ internal static class ShareXModAdaptiveSettle
                 blankExtraApplied = true;
             }
 
-            if (waited + nextDelay > maximum)
-            {
-                nextDelay = maximum - waited;
-            }
-
-            if (nextDelay <= 0)
-            {
-                break;
-            }
+            if (waited + nextDelay > maximum) nextDelay = maximum - waited;
+            if (nextDelay <= 0) break;
 
             await Task.Delay(nextDelay);
             waited += nextDelay;
@@ -89,13 +76,22 @@ internal static class ShareXModAdaptiveSettle
         int width = Math.Clamp(settings.SettleProbeWidth, 32, 256);
         int height = Math.Clamp(settings.SettleProbeHeight, 18, 160);
 
+        // Settle on the moving document body rather than on browser/forum chrome. Fixed sidebars,
+        // topic timelines and docked controls can otherwise dominate a whole-frame fingerprint and
+        // make a still-loading page look stable too early.
+        int cropX = Math.Clamp((int)Math.Round(source.Width * 0.16), 0, Math.Max(0, source.Width - 2));
+        int cropY = Math.Clamp((int)Math.Round(source.Height * 0.04), 0, Math.Max(0, source.Height - 2));
+        int cropRight = Math.Clamp((int)Math.Round(source.Width * 0.84), cropX + 1, source.Width);
+        int cropBottom = Math.Clamp((int)Math.Round(source.Height * 0.94), cropY + 1, source.Height);
+        Rectangle movingRegion = new(cropX, cropY, cropRight - cropX, cropBottom - cropY);
+
         using Bitmap probe = new(width, height, PixelFormat.Format24bppRgb);
         using (Graphics g = Graphics.FromImage(probe))
         {
             g.CompositingMode = CompositingMode.SourceCopy;
             g.InterpolationMode = InterpolationMode.Low;
             g.PixelOffsetMode = PixelOffsetMode.None;
-            g.DrawImage(source, new Rectangle(0, 0, width, height), new Rectangle(0, 0, source.Width, source.Height), GraphicsUnit.Pixel);
+            g.DrawImage(source, new Rectangle(0, 0, width, height), movingRegion, GraphicsUnit.Pixel);
         }
 
         BitmapData data = probe.LockBits(new Rectangle(0, 0, width, height), ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
@@ -137,16 +133,10 @@ internal static class ShareXModAdaptiveSettle
     private static double MeanAbsoluteDifference(byte[] a, byte[] b)
     {
         int length = Math.Min(a.Length, b.Length);
-        if (length == 0)
-        {
-            return double.MaxValue;
-        }
+        if (length == 0) return double.MaxValue;
 
         long sum = 0;
-        for (int i = 0; i < length; i++)
-        {
-            sum += Math.Abs(a[i] - b[i]);
-        }
+        for (int i = 0; i < length; i++) sum += Math.Abs(a[i] - b[i]);
         return sum / (double)length;
     }
 }

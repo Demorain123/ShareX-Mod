@@ -18,6 +18,6 @@
   </ItemGroup>
 
   <Target Name="ShareXModV04GeneratedHooks" BeforeTargets="CoreCompile">
-    <Exec Command="pwsh -NoProfile -ExecutionPolicy Bypass -Command &quot;if (-not (Select-String -Quiet -SimpleMatch 'ShareXModSegmentStore segmentStore' '$(MSBuildThisFileDirectory)..\..\ShareX.ScreenCaptureLib\ScrollingCaptureManager.cs')) { &amp; '$(MSBuildThisFileDirectory)..\..\scripts\v04-manager-hooks.ps1' }&quot;" />
+    <Exec Command="pwsh -NoProfile -ExecutionPolicy Bypass -Command &quot;if (-not (Select-String -Quiet -SimpleMatch 'ShareXModSegmentStore segmentStore' '$(MSBuildThisFileDirectory)..\..\ShareX.ScreenCaptureLib\ScrollingCaptureManager.cs')) { &amp; '$(MSBuildThisFileDirectory)..\..\scripts\v04-manager-hooks2.ps1' }&quot;" />
   </Target>
 </Project>

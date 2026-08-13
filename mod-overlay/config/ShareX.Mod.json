@@ -12,5 +12,12 @@
   "fallbackMinScrollDelta": 12,
   "fallbackMaxScrollDeltaRatio": 0.9,
   "fallbackCoarseStep": 8,
-  "sessionDirectory": "ShareX-Mod\\ScrollingCaptureSessions"
+  "sessionDirectory": "ShareX-Mod\\ScrollingCaptureSessions",
+  "oversizedCaptureEnabled": true,
+  "oversizedDimensionThreshold": 60000,
+  "oversizedPreviewMaxWidth": 1600,
+  "oversizedPreviewMaxHeight": 16000,
+  "oversizedPreferSinglePng": true,
+  "oversizedFallbackPartHeight": 30000,
+  "oversizedOutputDirectory": "ShareX-Mod\\OversizedCaptures"
 }

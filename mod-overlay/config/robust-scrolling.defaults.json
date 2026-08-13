@@ -1,0 +1,8 @@
+{
+  "enabled": false,
+  "maxConsecutiveCombineFailures": 5,
+  "saveRawFramesOnFailure": true,
+  "diagnosticsEnabled": true,
+  "fallbackMatcherEnabled": true,
+  "manualStopAlwaysWins": true
+}

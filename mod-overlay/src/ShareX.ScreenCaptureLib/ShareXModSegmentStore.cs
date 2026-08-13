@@ -6,6 +6,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 
 namespace ShareX.ScreenCaptureLib;
@@ -58,6 +59,44 @@ internal sealed class ShareXModSegmentStore : IDisposable
         return CreatePreview(tail.Width, completedHeight);
     }
 
+    public Bitmap? AppendTailPartsAndCreatePreview(IEnumerable<string> tailPaths)
+    {
+        if (!finalized || parts.Count == 0 || tailPaths == null)
+        {
+            return null;
+        }
+
+        int expectedWidth = parts[0].Width;
+        int appended = 0;
+
+        foreach (string path in tailPaths.Where(x => !string.IsNullOrWhiteSpace(x) && File.Exists(x)))
+        {
+            try
+            {
+                using Bitmap source = new(path);
+                if (source.Width != expectedWidth || source.Height < 1)
+                {
+                    continue;
+                }
+
+                SavePart(source);
+                completedHeight += source.Height;
+                appended++;
+            }
+            catch
+            {
+            }
+        }
+
+        if (appended == 0)
+        {
+            return null;
+        }
+
+        WriteManifest(true, expectedWidth, completedHeight);
+        return CreatePreview(expectedWidth, completedHeight);
+    }
+
     private void SavePart(Bitmap bitmap)
     {
         string fileName = $"part_{parts.Count + 1:D4}.png";
@@ -97,7 +136,7 @@ internal sealed class ShareXModSegmentStore : IDisposable
             File.WriteAllText(Path.Combine(directory, "manifest.json"), JsonSerializer.Serialize(new
             {
                 format = "ShareX-Mod smart segmented capture",
-                version = "0.4.0-dev",
+                version = "0.4.1-dev",
                 final,
                 width,
                 height,

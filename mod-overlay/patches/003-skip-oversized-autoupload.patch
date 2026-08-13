@@ -1,0 +1,12 @@
+diff --git a/ShareX.ScreenCaptureLib/Presentation/ScrollingCapture/ScrollingCaptureWindow.axaml.cs b/ShareX.ScreenCaptureLib/Presentation/ScrollingCapture/ScrollingCaptureWindow.axaml.cs
+--- a/ShareX.ScreenCaptureLib/Presentation/ScrollingCapture/ScrollingCaptureWindow.axaml.cs
++++ b/ShareX.ScreenCaptureLib/Presentation/ScrollingCapture/ScrollingCaptureWindow.axaml.cs
+@@ -140,7 +140,7 @@ public partial class ScrollingCaptureWindow : Window
+             RestoreAndActivate();
+         }
+ 
+-        if (_service.Options.AutoUpload)
++        if (_service.Options.AutoUpload && !ShareXModOversizedImageSupport.IsOversized(_service.Result))
+         {
+             UploadResult();
+         }

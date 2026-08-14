@@ -47,8 +47,6 @@ internal static class ShareXModChromeRecipeCaptureEntry
 
             await client.ConnectAsync(target);
 
-            // Dynamic feeds are a different capture topology: the end boundary can grow while
-            // the run is in progress. Detect/execute that recipe before the fixed-step runner.
             ShareXModChromeBackgroundCaptureResult? dynamicFeed =
                 await ShareXModCaptureRecipeDynamicFeed.TryRunAsync(
                     client,
@@ -58,14 +56,22 @@ internal static class ShareXModChromeRecipeCaptureEntry
 
             if (dynamicFeed != null)
             {
-                return dynamicFeed;
+                return ShareXModRecipeHorizontalAppendix.TryAppend(dynamicFeed, settings) ?? dynamicFeed;
             }
 
-            return await ShareXModCaptureRecipeRunner.RunAsync(
-                client,
-                target,
-                settings,
-                shouldStop);
+            ShareXModChromeBackgroundCaptureResult? result =
+                await ShareXModCaptureRecipeRunner.RunAsync(
+                    client,
+                    target,
+                    settings,
+                    shouldStop);
+
+            if (result == null)
+            {
+                return null;
+            }
+
+            return ShareXModRecipeHorizontalAppendix.TryAppend(result, settings) ?? result;
         }
         catch
         {

@@ -1,0 +1,82 @@
+name: Validate ShareX-Mod v0.6.0
+
+on:
+  push:
+    branches:
+      - "mod/**"
+    paths:
+      - "mod-overlay/**"
+      - "scripts/apply-v04-hooks.ps1"
+      - "scripts/run-v04-hooks.ps1"
+      - "scripts/apply-v041-post-hooks.ps1"
+      - "scripts/apply-v042-post-hooks.ps1"
+      - "scripts/apply-v043-post-hooks.ps1"
+      - "scripts/apply-v044-post-hooks.ps1"
+      - "scripts/apply-v050-post-hooks.ps1"
+      - "scripts/apply-v051-post-hooks.ps1"
+      - "scripts/apply-v052-post-hooks.ps1"
+      - "ShareX.ScreenCaptureLib/**"
+      - "Directory.build.targets"
+      - ".github/workflows/validate-mod-v060.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Apply complete overlay chain
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File "scripts\run-v04-hooks.ps1"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          pwsh -NoProfile -File "scripts\apply-v041-post-hooks.ps1"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          pwsh -NoProfile -File "scripts\apply-v042-post-hooks.ps1"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          pwsh -NoProfile -File "scripts\apply-v043-post-hooks.ps1"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          pwsh -NoProfile -File "scripts\apply-v044-post-hooks.ps1"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          pwsh -NoProfile -File "scripts\apply-v050-post-hooks.ps1"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          pwsh -NoProfile -File "scripts\apply-v051-post-hooks.ps1"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          pwsh -NoProfile -File "scripts\apply-v052-post-hooks.ps1"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          git diff --check
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Restore Release x64
+        run: dotnet restore --runtime win-x64 ShareX.sln
+
+      - name: Build Release x64
+        run: dotnet build --no-restore --configuration Release -p:Platform=x64 --self-contained true /m:1 ShareX.sln
+
+      - name: Build portable package
+        shell: pwsh
+        run: |
+          & "ShareX.Setup\bin\Release\win-x64\ShareX.Setup.exe" -silent -job "Release" -platform "x64"
+
+      - name: Upload v0.6.0 portable
+        uses: actions/upload-artifact@v7
+        with:
+          name: ShareX-Mod-v0.6.0-dev-portable-x64
+          path: Output\*-portable-x64.zip

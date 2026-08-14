@@ -29,6 +29,14 @@ internal sealed partial class ShareXModV04Settings
     public bool CaptureRecipeAdaptiveTemplateEnabled { get; set; } = true;
     public double CaptureRecipeAdaptiveTemplateMinSimilarity { get; set; } = 0.78;
 
+    // Multi-family router for demonstrations such as A/B/A/C. A family is never selected when
+    // semantic evidence is ambiguous; the runner must stop instead of falling back to coordinates.
+    public bool CaptureRecipeTemplateRouterEnabled { get; set; } = true;
+    public int CaptureRecipeTemplateRouterMaxFamilies { get; set; } = 8;
+    public double CaptureRecipeTemplateRouterMinSimilarity { get; set; } = 0.78;
+    public double CaptureRecipeTemplateRouterMinSelectionScore { get; set; } = 0.55;
+    public double CaptureRecipeTemplateRouterMinUniquenessGap { get; set; } = 0.08;
+
     public double CaptureRecipeHorizontalCaptureOverlapRatio { get; set; } = 0.15;
     public int CaptureRecipeHorizontalMaxPanels { get; set; } = 80;
 

@@ -1,0 +1,150 @@
+name: Apply ShareX-Mod v0.8.1 page-loop image collection once
+
+on:
+  push:
+    branches:
+      - "mod/robust-scrolling-v0.1"
+    paths:
+      - ".github/workflows/apply-v081-page-images.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout overlay branch
+        uses: actions/checkout@v6
+        with:
+          ref: mod/robust-scrolling-v0.1
+          fetch-depth: 0
+
+      - name: Wait for v0.8 Page Loop integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 50); do
+            git fetch origin mod/robust-scrolling-v0.1
+            git reset --hard origin/mod/robust-scrolling-v0.1
+            if grep -q "ShareXModCaptureRecipePageLoopRunner.TryRunAsync" mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModChromeRecipeCaptureEntryV062.cs; then
+              exit 0
+            fi
+            echo "Waiting for v0.8 integration ($i/50)..."
+            sleep 10
+          done
+          exit 1
+
+      - name: Integrate per-page native image collection
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $collector = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipePageImageCollector.cs"
+          $collectorText = [IO.File]::ReadAllText($collector)
+          $collectorText = $collectorText.Replace(', ".webp"', '')
+          [IO.File]::WriteAllText($collector,$collectorText,[Text.UTF8Encoding]::new($true))
+
+          $settingsPath = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModV04Settings.cs"
+          $settings = [IO.File]::ReadAllText($settingsPath)
+          if (-not $settings.Contains("CaptureRecipePageLoopCollectImages")) {
+            $anchor = '    public bool CaptureRecipePageLoopRequireObservedTransition { get; set; } = true;'
+            if (-not $settings.Contains($anchor)) { throw "Page image settings anchor missing." }
+            $block = @'
+    public bool CaptureRecipePageLoopRequireObservedTransition { get; set; } = true;
+    public bool CaptureRecipePageLoopCollectImages { get; set; } = true;
+    public int CaptureRecipePageLoopImageMaxPerPage { get; set; } = 12;
+'@
+            $settings = $settings.Replace($anchor,$block)
+            [IO.File]::WriteAllText($settingsPath,$settings,[Text.UTF8Encoding]::new($true))
+          }
+
+          $configPath = "mod-overlay/config/ShareX.Mod.v04.json"
+          $config = [IO.File]::ReadAllText($configPath)
+          if (-not $config.Contains('"captureRecipePageLoopCollectImages"')) {
+            $anchor = '  "captureRecipePageLoopRequireObservedTransition": true,'
+            if (-not $config.Contains($anchor)) { throw "Page image config anchor missing." }
+            $block = @'
+  "captureRecipePageLoopRequireObservedTransition": true,
+  "captureRecipePageLoopCollectImages": true,
+  "captureRecipePageLoopImageMaxPerPage": 12,
+'@
+            $config = $config.Replace($anchor,$block)
+            [IO.File]::WriteAllText($configPath,$config,[Text.UTF8Encoding]::new($false))
+          }
+
+          $loop = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipePageLoopRunner.cs"
+          $loopText = [IO.File]::ReadAllText($loop)
+          if (-not $loopText.Contains("ShareXModCaptureRecipePageImageCollector.CollectAsync")) {
+            $anchor = @'
+            if (failed)
+            {
+                pages.Add(new PageAudit(
+'@
+            $replacement = @'
+            if (!failed)
+            {
+                await ShareXModCaptureRecipePageImageCollector.CollectAsync(
+                    client,
+                    settings,
+                    directory,
+                    pageNumber);
+            }
+
+            if (failed)
+            {
+                pages.Add(new PageAudit(
+'@
+            if (-not $loopText.Contains($anchor)) { throw "Page Loop image collection anchor missing." }
+            $loopText = $loopText.Replace($anchor,$replacement)
+            [IO.File]::WriteAllText($loop,$loopText,[Text.UTF8Encoding]::new($true))
+          }
+
+          $entry = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModChromeRecipeCaptureEntryV062.cs"
+          $entryText = [IO.File]::ReadAllText($entry)
+          if (-not $entryText.Contains("HasPageLoopCollection")) {
+            $old = @'
+                    await ShareXModChromeImageAppendix.ExportAsync(
+                        client,
+                        settings,
+                        result.DirectoryPath);
+
+                    result = ShareXModRecipeImageAppendix.TryAppend(result, settings) ?? result;
+'@
+            $new = @'
+                    if (!ShareXModCaptureRecipePageImageCollector.HasPageLoopCollection(result.DirectoryPath))
+                    {
+                        await ShareXModChromeImageAppendix.ExportAsync(
+                            client,
+                            settings,
+                            result.DirectoryPath);
+                    }
+
+                    result = ShareXModRecipeImageAppendix.TryAppend(result, settings) ?? result;
+'@
+            if (-not $entryText.Contains($old)) { throw "Recipe V062 final image export anchor missing." }
+            $entryText = $entryText.Replace($old,$new)
+            [IO.File]::WriteAllText($entry,$entryText,[Text.UTF8Encoding]::new($true))
+          }
+
+          [IO.File]::WriteAllText("mod-overlay/VERSION","0.8.1-dev`n",[Text.UTF8Encoding]::new($false))
+          git diff --check
+
+      - name: Commit v0.8.1 image collection
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "sharex-mod-ci"
+          git config user.email "sharex-mod-ci@users.noreply.github.com"
+          git add \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipePageImageCollector.cs \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModV04Settings.cs \
+            mod-overlay/config/ShareX.Mod.v04.json \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipePageLoopRunner.cs \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModChromeRecipeCaptureEntryV062.cs \
+            mod-overlay/VERSION
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "feat(v0.8.1): collect native image assets before each page transition"
+          git push origin HEAD:mod/robust-scrolling-v0.1

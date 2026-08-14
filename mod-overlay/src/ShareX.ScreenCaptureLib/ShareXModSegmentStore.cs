@@ -25,6 +25,7 @@ internal sealed class ShareXModSegmentStore : IDisposable
         string root = ResolveOutputDirectory(settings.SegmentedOutputDirectory);
         directory = Path.Combine(root, $"capture-{DateTime.Now:yyyyMMdd-HHmmss-fff}-p{Environment.ProcessId}");
         Directory.CreateDirectory(directory);
+        ShareXModCaptureSessionContext.RegisterComponent("segments", directory);
     }
 
     public bool HasParts => parts.Count > 0;
@@ -140,7 +141,8 @@ internal sealed class ShareXModSegmentStore : IDisposable
             File.WriteAllText(Path.Combine(directory, "manifest.json"), JsonSerializer.Serialize(new
             {
                 format = "ShareX-Mod smart segmented capture",
-                version = "0.4.1-dev",
+                version = "0.4.4-dev",
+                sessionId = ShareXModCaptureSessionContext.CurrentSessionId,
                 final,
                 width,
                 height,

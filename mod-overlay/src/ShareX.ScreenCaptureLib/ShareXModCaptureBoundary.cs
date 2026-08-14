@@ -51,6 +51,7 @@ internal sealed class ShareXModCaptureBoundarySession : IDisposable
         this.captureRectangle = captureRectangle;
         logicalHeight = Math.Max(0, captureRectangle.Height);
         directory = CreateSessionDirectory();
+        ShareXModCaptureSessionContext.RegisterComponent("boundary", directory);
 
         WriteSnapshot(final: false, status: null, result: null, endReason: null);
     }
@@ -149,7 +150,8 @@ internal sealed class ShareXModCaptureBoundarySession : IDisposable
             string json = JsonSerializer.Serialize(new
             {
                 format = "ShareX-Mod Capture Boundary",
-                version = "0.4.3-dev",
+                version = "0.4.4-dev",
+                sessionId = ShareXModCaptureSessionContext.CurrentSessionId,
                 final,
                 created = DateTimeOffset.Now,
                 elapsedMs = stopwatch.ElapsedMilliseconds,

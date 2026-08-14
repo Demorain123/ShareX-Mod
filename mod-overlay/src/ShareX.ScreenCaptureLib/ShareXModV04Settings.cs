@@ -39,6 +39,8 @@ internal sealed class ShareXModV04Settings
     public int CaptureRecipeMaxRawEvents { get; set; } = 12000;
     public int CaptureRecipeMinimumVerticalRangeCss { get; set; } = 160;
     public bool CaptureRecipeAutomationEnabled { get; set; } = false;
+    public string CaptureRecipeReplayPath { get; set; } = string.Empty;
+    public string CaptureRecipeOutputDirectory { get; set; } = "ShareX-Mod\\CaptureRecipeRuns";
     public int CaptureRecipeReplayScrollStepCss { get; set; } = 900;
     public int CaptureRecipeActionTimeoutMs { get; set; } = 8000;
     public int CaptureRecipeMaxNavigationCount { get; set; } = 100;

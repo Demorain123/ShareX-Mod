@@ -1,0 +1,219 @@
+name: Apply ShareX-Mod v0.10 dynamic-feed rolling guard once
+
+on:
+  push:
+    branches:
+      - "mod/robust-scrolling-v0.1"
+    paths:
+      - ".github/workflows/apply-v100-rolling-guard-integration.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: mod/robust-scrolling-v0.1
+          fetch-depth: 0
+
+      - name: Wait for resume-aware dynamic feed and rolling settings
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 70); do
+            git fetch origin mod/robust-scrolling-v0.1
+            git reset --hard origin/mod/robust-scrolling-v0.1
+            if grep -q "ShareXModCaptureRecipeRunJournal.Open" mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipeDynamicFeed.cs && \
+               grep -q "DynamicFeedRollingGuardEnabled" mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModV04Settings.cs; then
+              exit 0
+            fi
+            echo "Waiting for prerequisites ($i/70)..."
+            sleep 10
+          done
+          exit 1
+
+      - name: Integrate rolling guard
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $path = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipeDynamicFeed.cs"
+          $text = [IO.File]::ReadAllText($path)
+
+          if (-not $text.Contains("ShareXModDynamicFeedRollingGuard.Create")) {
+            $anchor = @'
+            List<GrowthPass> growthPasses = new();
+
+            double y = journal.IsResumed ? Math.Max(startY, journal.CapturedEndY) : startY;
+'@
+            $replacement = @'
+            List<GrowthPass> growthPasses = new();
+            string rollingGuardPageKey = recipe.Steps.FirstOrDefault()?.PageKey ?? string.Empty;
+            ShareXModDynamicFeedRollingGuard.Session rollingGuard =
+                ShareXModDynamicFeedRollingGuard.Create(
+                    client,
+                    settings,
+                    directory,
+                    rollingGuardPageKey);
+
+            async Task ApplyRollingGuardAsync(bool flush)
+            {
+                ShareXModDynamicFeedGuardPassResult guardPass =
+                    await rollingGuard.VerifyDueAsync(
+                        y,
+                        flush,
+                        shouldStop);
+
+                if (guardPass.Replacements.Count == 0)
+                {
+                    return;
+                }
+
+                foreach (ShareXModDynamicFeedGuardReplacement replacement in guardPass.Replacements)
+                {
+                    Part? oldPart = parts.FirstOrDefault(x =>
+                        string.Equals(x.File, replacement.OldFile, StringComparison.OrdinalIgnoreCase));
+
+                    if (oldPart != null)
+                    {
+                        parts.Remove(oldPart);
+                        ShareXModDynamicFeedRollingGuard.ArchiveReplacedPart(
+                            directory,
+                            oldPart.File);
+                    }
+
+                    foreach (ShareXModDynamicFeedGuardReplacementPart item in replacement.NewParts)
+                    {
+                        parts.Add(new Part(
+                            item.File,
+                            item.StartY,
+                            item.EndY,
+                            item.Width,
+                            item.Height));
+                    }
+                }
+
+                parts = parts
+                    .OrderBy(x => x.StartY)
+                    .ThenBy(x => x.EndY)
+                    .ThenBy(x => x.File, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                journal.ReplacePartsForStep(
+                    0,
+                    parts.Select(x => new ShareXModRecipeJournalPart(
+                        x.File,
+                        0,
+                        rollingGuardPageKey,
+                        x.StartY,
+                        x.EndY,
+                        x.Width,
+                        x.Height)));
+            }
+
+            double y = journal.IsResumed ? Math.Max(startY, journal.CapturedEndY) : startY;
+'@
+            if (-not $text.Contains($anchor)) { throw "Dynamic Feed rolling guard creation anchor missing." }
+            $text = $text.Replace($anchor,$replacement)
+          }
+
+          if (-not $text.Contains("rollingGuard.RecordAsync")) {
+            $anchor = @'
+                        journal.RecordPart(
+                            capturedPart.File,
+                            0,
+                            recipe.Steps.FirstOrDefault()?.PageKey ?? string.Empty,
+                            capturedPart.StartY,
+                            capturedPart.EndY,
+                            capturedPart.Width,
+                            capturedPart.Height);
+'@
+            $replacement = @'
+                        journal.RecordPart(
+                            capturedPart.File,
+                            0,
+                            recipe.Steps.FirstOrDefault()?.PageKey ?? string.Empty,
+                            capturedPart.StartY,
+                            capturedPart.EndY,
+                            capturedPart.Width,
+                            capturedPart.Height);
+
+                        await rollingGuard.RecordAsync(
+                            capturedPart.File,
+                            capturedPart.StartY,
+                            capturedPart.EndY);
+'@
+            if (-not $text.Contains($anchor)) { throw "Dynamic Feed RecordPart anchor missing." }
+            $text = $text.Replace($anchor,$replacement)
+          }
+
+          if (-not $text.Contains("ApplyRollingGuardAsync(false)")) {
+            $anchor = @'
+            y = actualEnd;
+'@
+            if (-not $text.Contains($anchor)) { throw "Dynamic Feed y=actualEnd anchor missing." }
+            $text = $text.Replace(
+              $anchor,
+              @'
+            y = actualEnd;
+            await ApplyRollingGuardAsync(false);
+'@)
+          }
+
+          if (-not $text.Contains("ApplyRollingGuardAsync(true)")) {
+            $anchor = @'
+            if (parts.Count == 0)
+            {
+'@
+            if (-not $text.Contains($anchor)) { throw "Dynamic Feed final parts anchor missing." }
+            $text = $text.Replace(
+              $anchor,
+              @'
+            await ApplyRollingGuardAsync(true);
+
+            parts = parts
+                .OrderBy(x => x.StartY)
+                .ThenBy(x => x.EndY)
+                .ThenBy(x => x.File, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (parts.Count == 0)
+            {
+'@)
+          }
+
+          [IO.File]::WriteAllText($path,$text,[Text.UTF8Encoding]::new($true))
+
+          foreach ($workflowPath in @(
+            ".github/workflows/validate-mod-v091.yml"
+          )) {
+            if (-not (Test-Path $workflowPath)) { continue }
+            $wf = [IO.File]::ReadAllText($workflowPath)
+            if ($wf -match '(?ms)^on:\s*\n\s*push:') {
+              $wf = [regex]::Replace(
+                $wf,
+                '(?ms)^on:\s*\n.*?^permissions:',
+                "on:`n  workflow_dispatch:`n`npermissions:",
+                1)
+              [IO.File]::WriteAllText($workflowPath,$wf,[Text.UTF8Encoding]::new($false))
+            }
+          }
+
+          [IO.File]::WriteAllText("mod-overlay/VERSION","0.10.0-dev`n",[Text.UTF8Encoding]::new($false))
+          git diff --check
+
+      - name: Commit v0.10 rolling guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "sharex-mod-ci"
+          git config user.email "sharex-mod-ci@users.noreply.github.com"
+          git add \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipeDynamicFeed.cs \
+            .github/workflows/validate-mod-v091.yml \
+            mod-overlay/VERSION
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "feat(v0.10): seal and locally repair recent dynamic-feed ranges"
+          git push origin HEAD:mod/robust-scrolling-v0.1

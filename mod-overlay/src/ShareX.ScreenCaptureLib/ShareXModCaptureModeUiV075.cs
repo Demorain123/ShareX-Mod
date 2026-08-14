@@ -175,7 +175,7 @@ internal static class ShareXModCaptureModeUiV075
                     return;
                 }
 
-                bool opened = ShareXModCaptureRecipeReviewWindow.TryOpen(window, path);
+                bool opened = ShareXModCaptureRecipeReviewWindowV080.TryOpen(window, path);
                 readiness.Text = opened
                     ? "Review window opened. Save/approve there, then readiness will refresh."
                     : "Could not open Recipe review.";
@@ -261,47 +261,59 @@ internal static class ShareXModCaptureModeUiV075
 
         keep.Click += (_, _) =>
         {
-            bool ok = ShareXModAppendixRetentionInbox.ResolveKeep(pending);
+            bool ok = ShareXModAppendixRetentionInbox.Keep(pending);
             message.Text = ok
-                ? "Original image files kept."
-                : "Could not resolve the request; originals were left untouched.";
-            keep.IsVisible = false;
-            delete.IsVisible = false;
+                ? "Embedded originals kept."
+                : "Could not update retention state.";
+            keep.IsEnabled = false;
+            delete.IsEnabled = false;
         };
 
         delete.Click += (_, _) =>
         {
-            bool ok = ShareXModAppendixRetentionInbox.ResolveDelete(pending, out string result);
+            bool ok = ShareXModAppendixRetentionInbox.Delete(pending);
             message.Text = ok
-                ? result
-                : "Delete refused/failed; originals were left untouched. " + result;
-            keep.IsVisible = false;
-            delete.IsVisible = false;
+                ? "Embedded originals deleted; appended tail pages are unchanged."
+                : "Could not safely delete every embedded original.";
+            keep.IsEnabled = false;
+            delete.IsEnabled = false;
         };
 
         return row;
     }
 
     private static async Task RefreshReadinessAsync(
-        ShareXModCaptureMode selected,
+        ShareXModCaptureMode mode,
         TextBlock readiness,
         TextBlock recipeInfo)
     {
-        readiness.Text = selected == ShareXModCaptureMode.Normal
-            ? "Ready"
-            : "Checking Chrome / Recipe…";
-
-        ShareXModCaptureModeReadinessResult result =
-            await ShareXModCaptureModeReadiness.ProbeAsync(selected);
-
-        readiness.Text = result.Ready
-            ? "Ready · " + result.Message
-            : "Not ready · " + result.Message;
-
-        if (selected == ShareXModCaptureMode.RunRecipe &&
-            !string.IsNullOrWhiteSpace(result.RecipePath))
+        try
         {
-            recipeInfo.Text = result.RecipePath;
+            string path = ShareXModCaptureModeProfile.Current.RecipePath;
+            if (mode == ShareXModCaptureMode.RunRecipe &&
+                (string.IsNullOrWhiteSpace(path) || !System.IO.File.Exists(path)))
+            {
+                path = ShareXModCaptureModeProfile.FindLatestRecipe() ?? string.Empty;
+                if (!string.IsNullOrWhiteSpace(path))
+                {
+                    ShareXModCaptureModeProfile.SetRecipePath(path);
+                    recipeInfo.Text = ShareXModCaptureModeProfile.DescribeRecipe();
+                }
+            }
+
+            ShareXModChromeReadinessResult status =
+                await ShareXModChromeReadiness.ProbeAsync(
+                    ShareXModV04Settings.Load(),
+                    mode,
+                    path);
+
+            readiness.Text = status.Ready
+                ? $"Ready · {status.Detail}"
+                : $"Not ready · {status.Detail}";
+        }
+        catch
+        {
+            readiness.Text = "Readiness check failed.";
         }
     }
 
@@ -314,11 +326,8 @@ internal static class ShareXModCaptureModeUiV075
 
     private static string Hint(ShareXModCaptureMode mode) => mode switch
     {
-        ShareXModCaptureMode.RecordRecipe =>
-            "Demonstrate once; semantic intent is recorded instead of wheel/mouse macro replay.",
-        ShareXModCaptureMode.RunRecipe =>
-            "Review once, then run the semantic Recipe; manual Stop and safety limits remain active.",
-        _ =>
-            "Original ShareX Start/Stop flow; partial-page capture remains the default."
+        ShareXModCaptureMode.RecordRecipe => "Demonstrate what should be captured; actions become a semantic Recipe.",
+        ShareXModCaptureMode.RunRecipe => "Run only after reviewing the selected Recipe; semantic actions are re-resolved before execution.",
+        _ => "Original Start/Stop scrolling capture. No browser automation required."
     };
 }

@@ -18,38 +18,45 @@ internal static class ShareXModCaptureRecipeCompiler
             .OrderBy(x => x.Sequence)
             .ToList();
 
-        List<IGrouping<string, ShareXModRecipeRawEvent>> pageGroups = ordered
-            .GroupBy(x => PageKey(x.Page), StringComparer.Ordinal)
-            .ToList();
+        List<List<ShareXModRecipeRawEvent>> pageSegments =
+            BuildRecordedPageSegments(ordered);
 
-        List<ShareXModRecipePageState> pages = pageGroups
-            .Select(g => g.First().Page)
+        List<ShareXModRecipePageState> pages = pageSegments
+            .Where(x => x.Count > 0)
+            .Select(x => x[0].Page)
             .ToList();
 
         List<ShareXModCaptureRecipeStep> steps = new();
         int stepIndex = 0;
 
-        foreach (IGrouping<string, ShareXModRecipeRawEvent> group in pageGroups)
+        foreach (List<ShareXModRecipeRawEvent> pageEvents in pageSegments)
         {
-            List<ShareXModRecipeRawEvent> pageEvents = group.ToList();
+            if (pageEvents.Count == 0) continue;
+
             ShareXModRecipePageState page = pageEvents[0].Page;
+            string runtimePageKey = PageKey(page);
 
             steps.Add(new ShareXModCaptureRecipeStep(
                 ++stepIndex,
                 ShareXModCaptureRecipeStepKind.PageCheckpoint,
-                group.Key,
+                runtimePageKey,
                 page.ScrollY,
                 page.ScrollY,
                 page.ScrollX,
                 page.ScrollX,
                 null,
                 true,
-                new[] { "page-state", page.Url },
+                new[]
+                {
+                    "page-state",
+                    page.Url,
+                    $"recorded-page-instance={pages.IndexOf(page) + 1}"
+                },
                 "re-resolve-page"));
 
             CompilePageEvents(
                 pageEvents,
-                group.Key,
+                runtimePageKey,
                 settings,
                 steps,
                 ref stepIndex);
@@ -103,6 +110,7 @@ internal static class ShareXModCaptureRecipeCompiler
             "Recipe steps describe capture intent, not raw mouse/keyboard replay.",
             "Every page starts with at least the demonstrated visible viewport as a capture range.",
             "Repeated vertical scrolling is normalized into content coverage ranges.",
+            "Next Page actions form recorded page-instance boundaries even when an SPA keeps the same URL.",
             "Element actions keep semantic locators and geometry only as fallback evidence.",
             "Replay must re-resolve locators and verify post-action page state before continuing."
         };
@@ -114,7 +122,7 @@ internal static class ShareXModCaptureRecipeCompiler
 
         return new ShareXModCaptureRecipe(
             "ShareX-Mod Capture Recipe",
-            "0.6.2-dev",
+            "current-integration",
             ShareXModCaptureSessionContext.CurrentSessionId,
             DateTimeOffset.Now,
             "semantic-user-demonstration",
@@ -126,6 +134,57 @@ internal static class ShareXModCaptureRecipeCompiler
             notes.ToArray());
     }
 
+    private static List<List<ShareXModRecipeRawEvent>> BuildRecordedPageSegments(
+        List<ShareXModRecipeRawEvent> ordered)
+    {
+        List<List<ShareXModRecipeRawEvent>> segments = new();
+        List<ShareXModRecipeRawEvent> current = new();
+
+        foreach (ShareXModRecipeRawEvent item in ordered)
+        {
+            bool newDocumentPage = item.Kind.Equals("page", StringComparison.OrdinalIgnoreCase);
+
+            // A new-document page event starts a new recorded page only when the current segment
+            // already contains meaningful activity. After a Next Page click the segment has already
+            // been closed, so the new page event naturally becomes the first item of the next one.
+            if (newDocumentPage && current.Any(x =>
+                    !x.Kind.Equals("page", StringComparison.OrdinalIgnoreCase)))
+            {
+                Flush();
+            }
+
+            current.Add(item);
+
+            if (item.Kind.Equals("click", StringComparison.OrdinalIgnoreCase) &&
+                item.Trusted &&
+                item.Target != null &&
+                LooksLikeNextPage(item.Target))
+            {
+                // The demonstration itself defines the semantic boundary. This is intentionally
+                // independent of URL so same-URL virtual pagination remains representable.
+                Flush();
+            }
+        }
+
+        Flush();
+
+        // Preserve the old behaviour for malformed/minimal raw data rather than producing an
+        // empty Recipe.
+        if (segments.Count == 0 && ordered.Count > 0)
+        {
+            segments.Add(ordered.ToList());
+        }
+
+        return segments;
+
+        void Flush()
+        {
+            if (current.Count == 0) return;
+            segments.Add(current.ToList());
+            current.Clear();
+        }
+    }
+
     private static void CompilePageEvents(
         List<ShareXModRecipeRawEvent> events,
         string pageKey,
@@ -133,8 +192,6 @@ internal static class ShareXModCaptureRecipeCompiler
         List<ShareXModCaptureRecipeStep> steps,
         ref int stepIndex)
     {
-        // A ref parameter cannot be captured by the local FlushVertical function. Use an ordinary
-        // local counter for the whole method and copy it back once compilation of this page ends.
         int localStepIndex = stepIndex;
 
         ShareXModRecipePageState initial = events[0].Page;
@@ -144,10 +201,7 @@ internal static class ShareXModCaptureRecipeCompiler
 
         void FlushVertical()
         {
-            if (verticalMin == null || verticalMax == null)
-            {
-                return;
-            }
+            if (verticalMin == null || verticalMax == null) return;
 
             double start = Math.Min(verticalMin.Value, verticalMax.Value);
             double end = Math.Max(verticalMin.Value, verticalMax.Value);
@@ -214,13 +268,11 @@ internal static class ShareXModCaptureRecipeCompiler
                         new[] { "nested-horizontal-scroll", $"observed-x={item.ScrollX:0.##}" },
                         "append-horizontal-panel-or-ask"));
                 }
-
                 continue;
             }
 
             if (item.Kind.Equals("click", StringComparison.OrdinalIgnoreCase) &&
-                item.Target != null &&
-                item.Trusted)
+                item.Target != null && item.Trusted)
             {
                 ShareXModCaptureRecipeStepKind kind = LooksLikeNextPage(item.Target)
                     ? ShareXModCaptureRecipeStepKind.NextPage
@@ -247,9 +299,14 @@ internal static class ShareXModCaptureRecipeCompiler
                         ? "stop-and-ask-if-navigation-unverified"
                         : "skip-and-report-if-locator-missing"));
 
-                verticalMin = item.Page.ScrollY;
-                verticalMax = item.Page.ScrollY + Math.Max(1, item.Page.ViewportHeight);
-                verticalEvidence.Add("post-action-viewport");
+                // Do not seed a post-action viewport after Next Page: that viewport belongs to the
+                // next recorded page segment. Non-navigation actions still expand the current page.
+                if (kind != ShareXModCaptureRecipeStepKind.NextPage)
+                {
+                    verticalMin = item.Page.ScrollY;
+                    verticalMax = item.Page.ScrollY + Math.Max(1, item.Page.ViewportHeight);
+                    verticalEvidence.Add("post-action-viewport");
+                }
             }
         }
 
@@ -261,10 +318,7 @@ internal static class ShareXModCaptureRecipeCompiler
         List<ShareXModRecipeRawEvent> events,
         ShareXModV04Settings settings)
     {
-        if (!settings.CaptureRecipeInferDynamicFeed)
-        {
-            return false;
-        }
+        if (!settings.CaptureRecipeInferDynamicFeed) return false;
 
         if (events.Select(x => PageKey(x.Page)).Distinct(StringComparer.Ordinal).Count() != 1)
         {
@@ -273,8 +327,7 @@ internal static class ShareXModCaptureRecipeCompiler
 
         if (events.Any(x =>
                 x.Kind.Equals("click", StringComparison.OrdinalIgnoreCase) &&
-                x.Target != null &&
-                LooksLikeNextPage(x.Target)))
+                x.Target != null && LooksLikeNextPage(x.Target)))
         {
             return false;
         }
@@ -283,10 +336,7 @@ internal static class ShareXModCaptureRecipeCompiler
             .Where(x => x.Kind.Equals("scroll", StringComparison.OrdinalIgnoreCase) && x.IsDocumentScroller)
             .ToList();
 
-        if (scrolls.Count < 3)
-        {
-            return false;
-        }
+        if (scrolls.Count < 3) return false;
 
         double minHeight = scrolls.Min(x => Math.Max(x.ScrollHeight, x.Page.DocumentHeight));
         double maxHeight = scrolls.Max(x => Math.Max(x.ScrollHeight, x.Page.DocumentHeight));
@@ -305,7 +355,7 @@ internal static class ShareXModCaptureRecipeCompiler
         return remaining <= Math.Max(96, viewport * 0.35);
     }
 
-    private static bool LooksLikeNextPage(ShareXModRecipeLocator locator)
+    internal static bool LooksLikeNextPage(ShareXModRecipeLocator locator)
     {
         string text = string.Join(
             " ",

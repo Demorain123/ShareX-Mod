@@ -23,50 +23,40 @@ internal static class ShareXModAdaptivePageTemplatePlanner
         ShareXModV04Settings settings)
     {
         if (!settings.CaptureRecipeAdaptiveTemplateEnabled)
-        {
             return Reject("adaptive-template-disabled");
-        }
 
-        List<IGrouping<string, ShareXModCaptureRecipeStep>> pages = recipe.Steps
-            .Where(x => !string.IsNullOrWhiteSpace(x.PageKey))
-            .OrderBy(x => x.Index)
-            .GroupBy(x => x.PageKey)
-            .ToList();
-
-        List<PagePattern> repeatable = pages
-            .Select(group => BuildPattern(group.Key, group.OrderBy(x => x.Index).ToList()))
+        List<PagePattern> repeatable = ShareXModRecipeRecordedPages.Split(recipe)
+            .Select(page => BuildPattern(
+                page.RuntimePageKey,
+                page.Steps.OrderBy(x => x.Index).ToList()))
             .Where(x => x.NextPage != null && x.CaptureRanges.Count > 0)
             .ToList();
 
         if (repeatable.Count < 2)
-        {
             return Reject("need-two-demonstrated-pages-with-next-page");
-        }
 
         PagePattern first = repeatable[0];
         PagePattern second = repeatable[1];
         double similarity = PatternSimilarity(first, second);
+        double threshold = Math.Clamp(
+            settings.CaptureRecipeAdaptiveTemplateMinSimilarity,
+            0.5,
+            1.0);
 
-        if (similarity < Math.Clamp(settings.CaptureRecipeAdaptiveTemplateMinSimilarity, 0.5, 1.0))
-        {
+        if (similarity < threshold)
             return Reject($"demonstrated-pages-differ:{similarity:0.00}");
-        }
 
-        // Additional demonstrated pages, when present, must also resemble the recurrent template.
         int consistent = 2;
         for (int i = 2; i < repeatable.Count; i++)
         {
             double score = PatternSimilarity(second, repeatable[i]);
-            if (score < Math.Clamp(settings.CaptureRecipeAdaptiveTemplateMinSimilarity, 0.5, 1.0))
-            {
-                break;
-            }
+            if (score < threshold) break;
             consistent++;
         }
 
         return new ShareXModAdaptivePageTemplatePlan(
             true,
-            "two-page-semantic-template",
+            "recorded-page-instance-semantic-template",
             first.PageKey,
             second.PageKey,
             first.Steps,
@@ -91,39 +81,36 @@ internal static class ShareXModAdaptivePageTemplatePlanner
             meaningful.FirstOrDefault(x => x.Kind == ShareXModCaptureRecipeStepKind.NextPage));
     }
 
+    internal static double PatternSimilarityForRouter(
+        IReadOnlyList<ShareXModCaptureRecipeStep> a,
+        IReadOnlyList<ShareXModCaptureRecipeStep> b) =>
+        PatternSimilarity(
+            BuildPattern(string.Empty, a.ToList()),
+            BuildPattern(string.Empty, b.ToList()));
+
     private static double PatternSimilarity(PagePattern a, PagePattern b)
     {
-        if (a.Steps.Count == 0 || b.Steps.Count == 0)
-        {
-            return 0;
-        }
+        if (a.Steps.Count == 0 || b.Steps.Count == 0) return 0;
 
         int max = Math.Max(a.Steps.Count, b.Steps.Count);
         int min = Math.Min(a.Steps.Count, b.Steps.Count);
         double countScore = min / (double)max;
-
         double sum = 0;
+
         for (int i = 0; i < min; i++)
         {
             ShareXModCaptureRecipeStep left = a.Steps[i];
             ShareXModCaptureRecipeStep right = b.Steps[i];
+            if (left.Kind != right.Kind) continue;
 
-            if (left.Kind != right.Kind)
-            {
-                continue;
-            }
-
-            double kind = 0.55;
             double locator = LocatorSimilarity(left.Locator, right.Locator);
             double range = left.Kind == ShareXModCaptureRecipeStepKind.CaptureVerticalRange
                 ? RangeShapeSimilarity(left, right)
                 : 1;
-
-            sum += kind + locator * 0.30 + range * 0.15;
+            sum += 0.55 + locator * 0.30 + range * 0.15;
         }
 
-        double aligned = sum / max;
-        return Math.Clamp(aligned * 0.85 + countScore * 0.15, 0, 1);
+        return Math.Clamp((sum / max) * 0.85 + countScore * 0.15, 0, 1);
     }
 
     private static double LocatorSimilarity(
@@ -135,7 +122,6 @@ internal static class ShareXModAdaptivePageTemplatePlanner
 
         double score = 0;
         double weight = 0;
-
         Compare(a.Id, b.Id, 5, ref score, ref weight);
         Compare(a.TestId, b.TestId, 5, ref score, ref weight);
         Compare(a.AriaLabel, b.AriaLabel, 4, ref score, ref weight);
@@ -144,7 +130,6 @@ internal static class ShareXModAdaptivePageTemplatePlanner
         Compare(a.Tag, b.Tag, 2, ref score, ref weight);
         Compare(a.Href, b.Href, 1, ref score, ref weight, allowPathDifference: true);
         Compare(a.Text, b.Text, 3, ref score, ref weight, fuzzy: true);
-
         return weight <= 0 ? 0.5 : Math.Clamp(score / weight, 0, 1);
     }
 
@@ -154,11 +139,7 @@ internal static class ShareXModAdaptivePageTemplatePlanner
     {
         double ah = Math.Max(1, a.EndY - a.StartY);
         double bh = Math.Max(1, b.EndY - b.StartY);
-        double ratio = Math.Min(ah, bh) / Math.Max(ah, bh);
-
-        // Semantic anchors make exact absolute positions unimportant; only reject wildly
-        // different demonstrated range shapes.
-        return Math.Clamp(ratio, 0, 1);
+        return Math.Clamp(Math.Min(ah, bh) / Math.Max(ah, bh), 0, 1);
     }
 
     private static void Compare(
@@ -173,7 +154,6 @@ internal static class ShareXModAdaptivePageTemplatePlanner
         string left = Normalize(a);
         string right = Normalize(b);
         if (left.Length == 0 && right.Length == 0) return;
-
         weight += w;
         if (left.Length == 0 || right.Length == 0) return;
 
@@ -183,7 +163,8 @@ internal static class ShareXModAdaptivePageTemplatePlanner
             return;
         }
 
-        if (allowPathDifference && Uri.TryCreate(left, UriKind.Absolute, out Uri? lu) &&
+        if (allowPathDifference &&
+            Uri.TryCreate(left, UriKind.Absolute, out Uri? lu) &&
             Uri.TryCreate(right, UriKind.Absolute, out Uri? ru) &&
             string.Equals(lu.Host, ru.Host, StringComparison.OrdinalIgnoreCase))
         {
@@ -205,15 +186,9 @@ internal static class ShareXModAdaptivePageTemplatePlanner
             : string.Join(" ", value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).Trim();
 
     private static ShareXModAdaptivePageTemplatePlan Reject(string reason) =>
-        new(
-            false,
-            reason,
-            string.Empty,
-            string.Empty,
+        new(false, reason, string.Empty, string.Empty,
             Array.Empty<ShareXModCaptureRecipeStep>(),
-            Array.Empty<ShareXModCaptureRecipeStep>(),
-            0,
-            0);
+            Array.Empty<ShareXModCaptureRecipeStep>(), 0, 0);
 
     private sealed record PagePattern(
         string PageKey,

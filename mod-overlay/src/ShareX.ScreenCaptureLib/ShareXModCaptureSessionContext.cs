@@ -26,6 +26,7 @@ internal sealed class ShareXModCaptureSessionContext : IDisposable
     public Rectangle CaptureRectangle { get; }
 
     public static string? CurrentSessionId => CurrentSlot.Value?.SessionId;
+    public static string? CurrentRootDirectory => CurrentSlot.Value?.RootDirectory;
 
     private ShareXModCaptureSessionContext(Rectangle captureRectangle)
     {
@@ -122,7 +123,7 @@ internal sealed class ShareXModCaptureSessionContext : IDisposable
             string json = JsonSerializer.Serialize(new
             {
                 format = "ShareX-Mod Capture Session",
-                version = "0.4.4-dev",
+                version = "0.5.2-dev",
                 sessionId = SessionId,
                 final,
                 created,

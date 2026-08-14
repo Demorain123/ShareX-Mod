@@ -133,6 +133,10 @@ internal static class ShareXModCaptureRecipeCompiler
         List<ShareXModCaptureRecipeStep> steps,
         ref int stepIndex)
     {
+        // A ref parameter cannot be captured by the local FlushVertical function. Use an ordinary
+        // local counter for the whole method and copy it back once compilation of this page ends.
+        int localStepIndex = stepIndex;
+
         ShareXModRecipePageState initial = events[0].Page;
         double? verticalMin = initial.ScrollY;
         double? verticalMax = initial.ScrollY + Math.Max(1, initial.ViewportHeight);
@@ -151,7 +155,7 @@ internal static class ShareXModCaptureRecipeCompiler
             if (end - start >= Math.Clamp(settings.CaptureRecipeMinimumVerticalRangeCss, 32, 2000))
             {
                 steps.Add(new ShareXModCaptureRecipeStep(
-                    ++stepIndex,
+                    ++localStepIndex,
                     ShareXModCaptureRecipeStepKind.CaptureVerticalRange,
                     pageKey,
                     start,
@@ -198,7 +202,7 @@ internal static class ShareXModCaptureRecipeCompiler
                 if (horizontal)
                 {
                     steps.Add(new ShareXModCaptureRecipeStep(
-                        ++stepIndex,
+                        ++localStepIndex,
                         ShareXModCaptureRecipeStepKind.HorizontalSweep,
                         pageKey,
                         item.Target.DocumentY,
@@ -223,7 +227,7 @@ internal static class ShareXModCaptureRecipeCompiler
                     : ShareXModCaptureRecipeStepKind.ExpandOrActivate;
 
                 steps.Add(new ShareXModCaptureRecipeStep(
-                    ++stepIndex,
+                    ++localStepIndex,
                     kind,
                     pageKey,
                     item.Target.DocumentY,
@@ -250,6 +254,7 @@ internal static class ShareXModCaptureRecipeCompiler
         }
 
         FlushVertical();
+        stepIndex = localStepIndex;
     }
 
     private static bool DetectDynamicFeed(

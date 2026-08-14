@@ -1,0 +1,179 @@
+name: Apply ShareX-Mod v0.7.2 Chrome connection broker once
+
+on:
+  push:
+    branches:
+      - "mod/robust-scrolling-v0.1"
+    paths:
+      - ".github/workflows/apply-v072-connection-broker.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout overlay branch
+        uses: actions/checkout@v6
+        with:
+          ref: mod/robust-scrolling-v0.1
+          fetch-depth: 0
+
+      - name: Route Chrome Enhanced callers through broker
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          function Patch-ListTargets {
+            param([string]$Path,[string]$Marker)
+            $text = [IO.File]::ReadAllText($Path)
+            if ($text.Contains($Marker)) { return }
+
+            $old = @'
+            IReadOnlyList<ShareXModChromeTarget> targets =
+                await client.ListTargetsAsync(settings.ChromeCdpEndpoint);
+'@
+            $new = @'
+            ShareXModChromeConnectionResolution connection =
+                await ShareXModChromeConnectionBroker.ResolveAsync(client, settings);
+            IReadOnlyList<ShareXModChromeTarget> targets = connection.Targets;
+'@
+            if (-not $text.Contains($old)) {
+              $old = '            IReadOnlyList<ShareXModChromeTarget> targets = await client.ListTargetsAsync(settings.ChromeCdpEndpoint);'
+              $new = @'
+            ShareXModChromeConnectionResolution connection =
+                await ShareXModChromeConnectionBroker.ResolveAsync(client, settings);
+            IReadOnlyList<ShareXModChromeTarget> targets = connection.Targets;
+'@
+            }
+            if (-not $text.Contains($old)) { throw "ListTargets anchor missing in $Path" }
+            $text = $text.Replace($old,$new)
+            [IO.File]::WriteAllText($Path,$text,[Text.UTF8Encoding]::new($true))
+          }
+
+          foreach ($path in @(
+            "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModChromeEnhancedSession.cs",
+            "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModChromeBackgroundCaptureEntry.cs",
+            "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModChromeRecipeCaptureEntry.cs",
+            "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModChromeRecipeCaptureEntryV062.cs"
+          )) {
+            if (Test-Path $path) { Patch-ListTargets $path "ShareXModChromeConnectionBroker.ResolveAsync" }
+          }
+
+          $readiness = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureModeReadiness.cs"
+          $r = [IO.File]::ReadAllText($readiness)
+          if (-not $r.Contains("ShareXModChromeConnectionBroker.ResolveAsync")) {
+            $old = @'
+            var targets = await client.ListTargetsAsync(settings.ChromeCdpEndpoint, timeout.Token);
+            int pages = targets.Count;
+
+            if (pages == 0)
+            {
+                return new ShareXModCaptureModeReadinessResult(
+                    false,
+                    "chrome-no-page-target",
+                    "Chrome Enhanced endpoint is reachable, but no page target is available.",
+                    recipe,
+                    0);
+            }
+
+            return new ShareXModCaptureModeReadinessResult(
+                true,
+                "ready",
+                mode == ShareXModCaptureMode.RecordRecipe
+                    ? $"Chrome connected · {pages} page target(s) · ready to record."
+                    : $"Chrome connected · Recipe ready · {pages} page target(s).",
+                recipe,
+                pages);
+'@
+            $new = @'
+            ShareXModChromeConnectionResolution connection =
+                await ShareXModChromeConnectionBroker.ResolveAsync(
+                    client,
+                    settings,
+                    timeout.Token);
+            int pages = connection.Targets.Count;
+
+            if (!connection.Connected || pages == 0)
+            {
+                return new ShareXModCaptureModeReadinessResult(
+                    false,
+                    "chrome-unavailable",
+                    connection.Detail,
+                    recipe,
+                    0);
+            }
+
+            return new ShareXModCaptureModeReadinessResult(
+                true,
+                "ready",
+                mode == ShareXModCaptureMode.RecordRecipe
+                    ? $"Chrome connected via {connection.Provider} · {pages} page target(s) · ready to record."
+                    : $"Chrome connected via {connection.Provider} · Recipe ready · {pages} page target(s).",
+                recipe,
+                pages);
+'@
+            if (-not $r.Contains($old)) { throw "Readiness ListTargets anchor missing." }
+            $r = $r.Replace($old,$new)
+            [IO.File]::WriteAllText($readiness,$r,[Text.UTF8Encoding]::new($true))
+          }
+
+          $settingsPath = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModV04Settings.cs"
+          $settings = [IO.File]::ReadAllText($settingsPath)
+          if (-not $settings.Contains("ChromeAutoDiscoverLocalCdp")) {
+            $anchor = '    public string ChromeCdpEndpoint { get; set; } = "http://127.0.0.1:9222";'
+            if (-not $settings.Contains($anchor)) { throw "Chrome endpoint settings anchor missing." }
+            $block = @'
+    public string ChromeCdpEndpoint { get; set; } = "http://127.0.0.1:9222";
+    public bool ChromeAutoDiscoverLocalCdp { get; set; } = true;
+    public int ChromeAutoDiscoverPortStart { get; set; } = 9222;
+    public int ChromeAutoDiscoverPortCount { get; set; } = 4;
+    public int ChromeConnectionProbeTimeoutMs { get; set; } = 900;
+    public bool ChromeAllowNonLoopbackCdp { get; set; } = false;
+'@
+            $settings = $settings.Replace($anchor,$block)
+            [IO.File]::WriteAllText($settingsPath,$settings,[Text.UTF8Encoding]::new($true))
+          }
+
+          $configPath = "mod-overlay/config/ShareX.Mod.v04.json"
+          $config = [IO.File]::ReadAllText($configPath)
+          if (-not $config.Contains('"chromeAutoDiscoverLocalCdp"')) {
+            $anchor = '  "chromeCdpEndpoint": "http://127.0.0.1:9222",'
+            if (-not $config.Contains($anchor)) { throw "Chrome endpoint config anchor missing." }
+            $block = @'
+  "chromeCdpEndpoint": "http://127.0.0.1:9222",
+  "chromeAutoDiscoverLocalCdp": true,
+  "chromeAutoDiscoverPortStart": 9222,
+  "chromeAutoDiscoverPortCount": 4,
+  "chromeConnectionProbeTimeoutMs": 900,
+  "chromeAllowNonLoopbackCdp": false,
+'@
+            $config = $config.Replace($anchor,$block)
+            [IO.File]::WriteAllText($configPath,$config,[Text.UTF8Encoding]::new($false))
+          }
+
+          [IO.File]::WriteAllText("mod-overlay/VERSION","0.7.2-dev`n",[Text.UTF8Encoding]::new($false))
+          git diff --check
+
+      - name: Commit v0.7.2 broker integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "sharex-mod-ci"
+          git config user.email "sharex-mod-ci@users.noreply.github.com"
+          git add \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModChromeEnhancedSession.cs \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModChromeBackgroundCaptureEntry.cs \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModChromeRecipeCaptureEntry.cs \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModChromeRecipeCaptureEntryV062.cs \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureModeReadiness.cs \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModV04Settings.cs \
+            mod-overlay/config/ShareX.Mod.v04.json \
+            mod-overlay/VERSION
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+            exit 0
+          fi
+          git commit -m "feat(v0.7.2): route Chrome Enhanced through secure connection broker"
+          git push origin HEAD:mod/robust-scrolling-v0.1

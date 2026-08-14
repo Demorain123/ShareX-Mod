@@ -33,6 +33,16 @@ internal sealed class ShareXModV04Settings
     public long CaptureBoundaryMaxLogicalHeight { get; set; } = 0;
     public int CaptureBoundaryMaxUnchangedPasses { get; set; } = 0;
 
+    public bool CaptureRecipeRecordingEnabled { get; set; } = false;
+    public int CaptureRecipePollIntervalMs { get; set; } = 400;
+    public int CaptureRecipeScrollDebounceMs { get; set; } = 220;
+    public int CaptureRecipeMaxRawEvents { get; set; } = 12000;
+    public int CaptureRecipeMinimumVerticalRangeCss { get; set; } = 160;
+    public bool CaptureRecipeAutomationEnabled { get; set; } = false;
+    public int CaptureRecipeReplayScrollStepCss { get; set; } = 900;
+    public int CaptureRecipeActionTimeoutMs { get; set; } = 8000;
+    public int CaptureRecipeMaxNavigationCount { get; set; } = 100;
+
     public bool RepairPlanEnabled { get; set; } = true;
     public int RepairPlanMarginPx { get; set; } = 256;
     public int RepairPlanMergeGapPx { get; set; } = 96;

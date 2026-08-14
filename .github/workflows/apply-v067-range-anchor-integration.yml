@@ -1,0 +1,252 @@
+name: Apply ShareX-Mod v0.6.7 range-anchor integration once
+
+on:
+  push:
+    branches:
+      - "mod/robust-scrolling-v0.1"
+    paths:
+      - ".github/workflows/apply-v067-range-anchor-integration.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout overlay branch
+        uses: actions/checkout@v6
+        with:
+          ref: mod/robust-scrolling-v0.1
+          fetch-depth: 0
+
+      - name: Integrate semantic range anchors
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          function Replace-Required {
+            param([string]$Path,[string]$Old,[string]$New,[string]$Marker)
+            $text = [IO.File]::ReadAllText($Path)
+            if ($text.Contains($Marker)) { return }
+            if (-not $text.Contains($Old)) { throw "Anchor '$Marker' missing in $Path" }
+            $text = $text.Replace($Old,$New)
+            [IO.File]::WriteAllText($Path,$text,[Text.UTF8Encoding]::new($true))
+          }
+
+          $recorder = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipeRecorder.cs"
+
+          Replace-Required $recorder @'
+  const push = event => {
+'@ @'
+  const semanticViewportAnchor = (ratio = 0.16) => {
+    const x = Math.max(1, Math.min(innerWidth - 2, innerWidth * 0.5));
+    const y = Math.max(1, Math.min(innerHeight - 2, innerHeight * ratio));
+    let el = document.elementFromPoint(x, y);
+    if (!(el instanceof Element)) return null;
+    const semantic = el.closest('article,section,h1,h2,h3,h4,p,li,figure,figcaption,table,blockquote,pre,[role="article"],[data-post-number]');
+    return targetInfo(semantic || el);
+  };
+
+  const push = event => {
+'@ 'const semanticViewportAnchor = (ratio = 0.16)'
+
+          Replace-Required $recorder @'
+  push({ kind: 'page', trusted: true, isDocumentScroller: true });
+'@ @'
+  push({
+    kind: 'page',
+    trusted: true,
+    isDocumentScroller: true,
+    target: semanticViewportAnchor(0.16)
+  });
+'@ 'target: semanticViewportAnchor(0.16)'
+
+          Replace-Required $recorder @'
+        target: targetInfo(el),
+        isDocumentScroller,
+'@ @'
+        target: isDocumentScroller ? semanticViewportAnchor(0.16) : targetInfo(el),
+        isDocumentScroller,
+'@ 'isDocumentScroller ? semanticViewportAnchor(0.16)'
+
+          $compiler = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipeCompiler.cs"
+
+          Replace-Required $compiler @'
+        ShareXModRecipePageState initial = events[0].Page;
+        double? verticalMin = initial.ScrollY;
+        double? verticalMax = initial.ScrollY + Math.Max(1, initial.ViewportHeight);
+        List<string> verticalEvidence = new() { "recorded-visible-viewport" };
+'@ @'
+        ShareXModRecipePageState initial = events[0].Page;
+        double? verticalMin = initial.ScrollY;
+        double? verticalMax = initial.ScrollY + Math.Max(1, initial.ViewportHeight);
+        ShareXModRecipeLocator? verticalStartAnchor = events[0].Target;
+        ShareXModRecipeLocator? verticalEndAnchor = events[0].Target;
+        List<string> verticalEvidence = new() { "recorded-visible-viewport" };
+'@ 'verticalStartAnchor = events[0].Target'
+
+          Replace-Required $compiler @'
+            if (end - start >= Math.Clamp(settings.CaptureRecipeMinimumVerticalRangeCss, 32, 2000))
+            {
+                steps.Add(new ShareXModCaptureRecipeStep(
+                    ++stepIndex,
+                    ShareXModCaptureRecipeStepKind.CaptureVerticalRange,
+                    pageKey,
+                    start,
+                    end,
+                    0,
+                    0,
+                    null,
+                    true,
+                    verticalEvidence.Distinct(StringComparer.Ordinal).ToArray(),
+                    "retry-range-or-mark-suspect"));
+            }
+
+            verticalMin = null;
+            verticalMax = null;
+            verticalEvidence.Clear();
+'@ @'
+            if (end - start >= Math.Clamp(settings.CaptureRecipeMinimumVerticalRangeCss, 32, 2000))
+            {
+                List<string> rangeEvidence = verticalEvidence
+                    .Distinct(StringComparer.Ordinal)
+                    .ToList();
+
+                if (verticalStartAnchor != null)
+                {
+                    rangeEvidence.Add("semantic-start-anchor");
+                    rangeEvidence.Add(
+                        ShareXModRecipeAnchorEvidence.EncodeStartOffset(
+                            start - verticalStartAnchor.DocumentY));
+                }
+
+                if (verticalEndAnchor != null)
+                {
+                    rangeEvidence.Add("semantic-end-anchor");
+                    rangeEvidence.Add(
+                        ShareXModRecipeAnchorEvidence.EncodeEndAnchor(verticalEndAnchor));
+                    rangeEvidence.Add(
+                        ShareXModRecipeAnchorEvidence.EncodeEndOffset(
+                            end - verticalEndAnchor.DocumentY));
+                }
+
+                steps.Add(new ShareXModCaptureRecipeStep(
+                    ++stepIndex,
+                    ShareXModCaptureRecipeStepKind.CaptureVerticalRange,
+                    pageKey,
+                    start,
+                    end,
+                    0,
+                    0,
+                    verticalStartAnchor,
+                    true,
+                    rangeEvidence.ToArray(),
+                    "retry-range-or-mark-suspect"));
+            }
+
+            verticalMin = null;
+            verticalMax = null;
+            verticalStartAnchor = null;
+            verticalEndAnchor = null;
+            verticalEvidence.Clear();
+'@ 'ShareXModRecipeAnchorEvidence.EncodeEndAnchor'
+
+          Replace-Required $compiler @'
+                double top = item.ScrollY;
+                double viewport = item.ClientHeight > 0 ? item.ClientHeight : item.Page.ViewportHeight;
+                double bottom = item.ScrollY + Math.Max(1, viewport);
+
+                verticalMin = verticalMin == null ? top : Math.Min(verticalMin.Value, top);
+                verticalMax = verticalMax == null ? bottom : Math.Max(verticalMax.Value, bottom);
+'@ @'
+                double top = item.ScrollY;
+                double viewport = item.ClientHeight > 0 ? item.ClientHeight : item.Page.ViewportHeight;
+                double bottom = item.ScrollY + Math.Max(1, viewport);
+
+                if (item.Target != null && (verticalMin == null || top < verticalMin.Value))
+                {
+                    verticalStartAnchor = item.Target;
+                }
+
+                if (item.Target != null && (verticalMax == null || bottom > verticalMax.Value))
+                {
+                    verticalEndAnchor = item.Target;
+                }
+
+                verticalMin = verticalMin == null ? top : Math.Min(verticalMin.Value, top);
+                verticalMax = verticalMax == null ? bottom : Math.Max(verticalMax.Value, bottom);
+'@ 'verticalEndAnchor = item.Target;'
+
+          Replace-Required $compiler @'
+                verticalMin = item.Page.ScrollY;
+                verticalMax = item.Page.ScrollY + Math.Max(1, item.Page.ViewportHeight);
+                verticalEvidence.Add("post-action-viewport");
+'@ @'
+                verticalMin = item.Page.ScrollY;
+                verticalMax = item.Page.ScrollY + Math.Max(1, item.Page.ViewportHeight);
+                verticalStartAnchor = null;
+                verticalEndAnchor = null;
+                verticalEvidence.Add("post-action-viewport");
+'@ 'verticalStartAnchor = null;'
+
+          $runner = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipeRunner.cs"
+          Replace-Required $runner @'
+                        int before = parts.Count;
+                        await CaptureVerticalRangeAsync(
+                            client,
+                            step,
+'@ @'
+                        ShareXModCaptureRecipeStep effectiveStep =
+                            await ShareXModRecipeRangeAnchorResolver.ResolveStepAsync(client, step);
+
+                        int before = parts.Count;
+                        await CaptureVerticalRangeAsync(
+                            client,
+                            effectiveStep,
+'@ 'ShareXModRecipeRangeAnchorResolver.ResolveStepAsync(client, step)'
+
+          $feed = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipeDynamicFeed.cs"
+          Replace-Required $feed @'
+            double startY = Math.Clamp(
+                recipe.StartBoundary.DocumentY ??
+                recipe.Steps.FirstOrDefault(x => x.Kind == ShareXModCaptureRecipeStepKind.CaptureVerticalRange)?.StartY ??
+                0,
+                0,
+                Math.Max(0, initial.CssHeight - 1));
+'@ @'
+            ShareXModCaptureRecipeStep? seedRange =
+                recipe.Steps.FirstOrDefault(x => x.Kind == ShareXModCaptureRecipeStepKind.CaptureVerticalRange);
+
+            if (seedRange != null)
+            {
+                seedRange = await ShareXModRecipeRangeAnchorResolver.ResolveStepAsync(client, seedRange);
+            }
+
+            double startY = Math.Clamp(
+                seedRange?.StartY ?? recipe.StartBoundary.DocumentY ?? 0,
+                0,
+                Math.Max(0, initial.CssHeight - 1));
+'@ 'seedRange = await ShareXModRecipeRangeAnchorResolver.ResolveStepAsync'
+
+          [IO.File]::WriteAllText("mod-overlay/VERSION","0.6.7-dev`n",[Text.UTF8Encoding]::new($false))
+          git diff --check
+
+      - name: Commit v0.6.7 anchors
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "sharex-mod-ci"
+          git config user.email "sharex-mod-ci@users.noreply.github.com"
+          git add \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipeRecorder.cs \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipeCompiler.cs \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipeRunner.cs \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipeDynamicFeed.cs \
+            mod-overlay/VERSION
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+            exit 0
+          fi
+          git commit -m "feat(v0.6.7): anchor vertical Recipe ranges to semantic content"
+          git push origin HEAD:mod/robust-scrolling-v0.1

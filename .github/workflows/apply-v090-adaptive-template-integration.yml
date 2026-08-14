@@ -1,0 +1,186 @@
+name: Apply ShareX-Mod v0.9 adaptive template integration once
+
+on:
+  push:
+    branches:
+      - "mod/robust-scrolling-v0.1"
+    paths:
+      - ".github/workflows/apply-v090-adaptive-template-integration.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: mod/robust-scrolling-v0.1
+          fetch-depth: 0
+
+      - name: Wait for v0.8.2 integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 60); do
+            git fetch origin mod/robust-scrolling-v0.1
+            git reset --hard origin/mod/robust-scrolling-v0.1
+            version=$(tr -d '\r\n' < mod-overlay/VERSION)
+            if [ "$version" = "0.8.2-dev" ] && \
+               grep -q "ShareXModCaptureRecipePageLoopRunner.TryRunAsync" mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModChromeRecipeCaptureEntryV062.cs; then
+              exit 0
+            fi
+            echo "Waiting for v0.8.2 ($i/60), current=$version"
+            sleep 10
+          done
+          exit 1
+
+      - name: Integrate adaptive review and runner
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $review = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipePageLoopReview.cs"
+          $reviewText = [IO.File]::ReadAllText($review)
+          if (-not $reviewText.Contains("adaptivePlan")) {
+            $old = @'
+            ShareXModCaptureRecipePageLoopPlan plan =
+                ShareXModCaptureRecipePageLoopPlanner.Build(recipe, settings);
+
+            bool approved = ShareXModCaptureRecipePageLoopApproval.IsApproved(
+                recipePath,
+                settings,
+                out int maxPages);
+
+            return new ShareXModPageLoopReviewInfo(
+                plan.Candidate,
+                plan.Reason,
+                approved,
+                maxPages,
+                plan.CaptureRanges.Count);
+'@
+            $new = @'
+            ShareXModCaptureRecipePageLoopPlan plan =
+                ShareXModCaptureRecipePageLoopPlanner.Build(recipe, settings);
+
+            ShareXModAdaptivePageTemplatePlan adaptivePlan =
+                ShareXModAdaptivePageTemplatePlanner.Build(recipe, settings);
+
+            bool approved = ShareXModCaptureRecipePageLoopApproval.IsApproved(
+                recipePath,
+                settings,
+                out int maxPages);
+
+            if (plan.Candidate)
+            {
+                return new ShareXModPageLoopReviewInfo(
+                    true,
+                    "simple:" + plan.Reason,
+                    approved,
+                    maxPages,
+                    plan.CaptureRanges.Count);
+            }
+
+            if (adaptivePlan.Candidate)
+            {
+                return new ShareXModPageLoopReviewInfo(
+                    true,
+                    $"adaptive:{adaptivePlan.Reason}; similarity={adaptivePlan.Similarity:0.00}",
+                    approved,
+                    maxPages,
+                    adaptivePlan.TemplateSteps.Count(x => x.Kind == ShareXModCaptureRecipeStepKind.CaptureVerticalRange));
+            }
+
+            return new ShareXModPageLoopReviewInfo(
+                false,
+                $"simple={plan.Reason}; adaptive={adaptivePlan.Reason}",
+                false,
+                maxPages,
+                0);
+'@
+            if (-not $reviewText.Contains($old)) { throw "Loop review adaptive anchor missing." }
+            $reviewText = $reviewText.Replace($old,$new)
+            [IO.File]::WriteAllText($review,$reviewText,[Text.UTF8Encoding]::new($true))
+          }
+
+          $window = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipeReviewWindowV080.cs"
+          $windowText = [IO.File]::ReadAllText($window)
+          $windowText = $windowText.Replace(
+            "Repeat this simple page template until Next Page disappears / stops changing",
+            "Repeat this reviewed page template until Next Page disappears / stops changing")
+          $windowText = $windowText.Replace(
+            '$"Loop candidate: {loopInfo.CaptureRangeCount} vertical range(s) + semantic Next Page. This is separately approved and still obeys manual Stop, transition verification, Page Guard and cycle detection."',
+            '$"Loop candidate: {loopInfo.Reason} · {loopInfo.CaptureRangeCount} vertical range(s). This is separately approved and still obeys manual Stop, transition verification, Page Guard and cycle detection."')
+          [IO.File]::WriteAllText($window,$windowText,[Text.UTF8Encoding]::new($true))
+
+          $entry = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModChromeRecipeCaptureEntryV062.cs"
+          $entryText = [IO.File]::ReadAllText($entry)
+          if (-not $entryText.Contains("ShareXModAdaptivePageTemplateRunner.TryRunAsync")) {
+            $old = @'
+            if (result == null)
+            {
+                result = await ShareXModCaptureRecipeDynamicFeed.TryRunAsync(
+                    client,
+                    target,
+                    settings,
+                    shouldStop);
+            }
+'@
+            $new = @'
+            if (result == null)
+            {
+                result = await ShareXModAdaptivePageTemplateRunner.TryRunAsync(
+                    client,
+                    target,
+                    settings,
+                    shouldStop);
+            }
+
+            if (result == null)
+            {
+                result = await ShareXModCaptureRecipeDynamicFeed.TryRunAsync(
+                    client,
+                    target,
+                    settings,
+                    shouldStop);
+            }
+'@
+            if (-not $entryText.Contains($old)) { throw "Adaptive runner insertion anchor missing." }
+            $entryText = $entryText.Replace($old,$new)
+            [IO.File]::WriteAllText($entry,$entryText,[Text.UTF8Encoding]::new($true))
+          }
+
+          foreach ($workflowPath in @(
+            ".github/workflows/validate-mod-v082.yml"
+          )) {
+            if (-not (Test-Path $workflowPath)) { continue }
+            $wf = [IO.File]::ReadAllText($workflowPath)
+            if ($wf -match '(?ms)^on:\s*\n\s*push:') {
+              $wf = [regex]::Replace(
+                $wf,
+                '(?ms)^on:\s*\n.*?^permissions:',
+                "on:`n  workflow_dispatch:`n`npermissions:",
+                1)
+              [IO.File]::WriteAllText($workflowPath,$wf,[Text.UTF8Encoding]::new($false))
+            }
+          }
+
+          [IO.File]::WriteAllText("mod-overlay/VERSION","0.9.0-dev`n",[Text.UTF8Encoding]::new($false))
+          git diff --check
+
+      - name: Commit v0.9 adaptive template
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "sharex-mod-ci"
+          git config user.email "sharex-mod-ci@users.noreply.github.com"
+          git add \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipePageLoopReview.cs \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipeReviewWindowV080.cs \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModChromeRecipeCaptureEntryV062.cs \
+            .github/workflows/validate-mod-v082.yml \
+            mod-overlay/VERSION
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "feat(v0.9): enable explicitly reviewed adaptive two-page templates"
+          git push origin HEAD:mod/robust-scrolling-v0.1

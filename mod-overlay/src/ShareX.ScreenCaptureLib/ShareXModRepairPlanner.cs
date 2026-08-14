@@ -19,7 +19,7 @@ internal static class ShareXModRepairPlanner
 
         try
         {
-            string? captureMap = FindLatestCaptureMap();
+            string? captureMap = FindCurrentOrLatestCaptureMap();
             if (captureMap == null) return;
 
             using JsonDocument document = JsonDocument.Parse(File.ReadAllText(captureMap));
@@ -110,7 +110,8 @@ internal static class ShareXModRepairPlanner
             string json = JsonSerializer.Serialize(new
             {
                 format = "ShareX-Mod Local Repair Plan",
-                version = "0.4.3-dev",
+                version = "0.4.4-dev",
+                sessionId = ShareXModCaptureSessionContext.CurrentSessionId,
                 created = DateTimeOffset.Now,
                 sourceCaptureMap = Path.GetFileName(captureMap),
                 status = merged.Count == 0 ? "clean" : "repair-recommended",
@@ -124,6 +125,9 @@ internal static class ShareXModRepairPlanner
             }, new JsonSerializerOptions { WriteIndented = true });
 
             File.WriteAllText(output, json, new UTF8Encoding(false));
+            ShareXModCaptureSessionContext.RegisterComponent(
+                "repair",
+                Path.GetDirectoryName(output)!);
         }
         catch
         {
@@ -131,8 +135,20 @@ internal static class ShareXModRepairPlanner
         }
     }
 
-    private static string? FindLatestCaptureMap()
+    private static string? FindCurrentOrLatestCaptureMap()
     {
+        string? currentQualityDirectory =
+            ShareXModCaptureSessionContext.TryGetComponentDirectory("quality");
+
+        if (!string.IsNullOrWhiteSpace(currentQualityDirectory))
+        {
+            string currentMap = Path.Combine(currentQualityDirectory, "capture-map.json");
+            if (File.Exists(currentMap))
+            {
+                return currentMap;
+            }
+        }
+
         int pid = Environment.ProcessId;
         IEnumerable<string> roots = new[]
         {

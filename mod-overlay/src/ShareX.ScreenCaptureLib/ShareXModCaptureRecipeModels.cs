@@ -56,7 +56,27 @@ internal sealed record ShareXModCaptureRecipeStep(
     ShareXModRecipeLocator? Locator,
     bool RequiresStableAfter,
     string[] Evidence,
-    string FailurePolicy);
+    string FailurePolicy)
+{
+    // Keep Required out of the positional constructor so old recorded recipes and every existing
+    // constructor remain compatible. Requiredness is derived from semantic intent/failure policy.
+    // Page checkpoints/ranges/navigation are safety-critical. User-demonstrated expansions can be
+    // optional when their policy explicitly says to skip; horizontal content is retained unless a
+    // future recipe explicitly marks it skippable.
+    [JsonIgnore]
+    public bool Required => Kind switch
+    {
+        ShareXModCaptureRecipeStepKind.PageCheckpoint => true,
+        ShareXModCaptureRecipeStepKind.CaptureVerticalRange => true,
+        ShareXModCaptureRecipeStepKind.NextPage => true,
+        ShareXModCaptureRecipeStepKind.HorizontalSweep =>
+            !FailurePolicy.Contains("skip", StringComparison.OrdinalIgnoreCase),
+        ShareXModCaptureRecipeStepKind.ExpandOrActivate =>
+            !FailurePolicy.Contains("skip", StringComparison.OrdinalIgnoreCase),
+        ShareXModCaptureRecipeStepKind.WaitStable => false,
+        _ => false
+    };
+}
 
 internal sealed record ShareXModCaptureRecipeBoundary(
     string Kind,

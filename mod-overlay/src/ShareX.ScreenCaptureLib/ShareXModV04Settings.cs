@@ -6,7 +6,7 @@ using System.Text.Json;
 
 namespace ShareX.ScreenCaptureLib;
 
-internal sealed class ShareXModV04Settings
+internal sealed partial class ShareXModV04Settings
 {
     public bool SmartSegmentationEnabled { get; set; } = true;
     public int SegmentTargetHeight { get; set; } = 32000;

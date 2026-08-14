@@ -24,10 +24,10 @@ internal sealed class ShareXModCaptureRecipeReviewWindowV080 : Window
         recipePath = snapshot.RecipePath;
 
         Title = "Review Capture Recipe";
-        Width = 800;
-        Height = 720;
-        MinWidth = 580;
-        MinHeight = 440;
+        Width = 820;
+        Height = 740;
+        MinWidth = 600;
+        MinHeight = 460;
 
         TextBlock summary = new()
         {
@@ -38,7 +38,7 @@ internal sealed class ShareXModCaptureRecipeReviewWindowV080 : Window
 
         TextBlock explanation = new()
         {
-            Text = "Uncheck steps you do not want unattended automation to execute. Page checks are required. A disabled Next Page step safely stops before that transition. Approval is invalidated when the Recipe changes.",
+            Text = "Uncheck optional steps you do not want unattended automation to execute. Page checks are required. A disabled Next Page step safely stops before that transition. Approval is invalidated whenever the Recipe changes.",
             TextWrapping = Avalonia.Media.TextWrapping.Wrap,
             Margin = new Thickness(12, 0, 12, 8)
         };
@@ -80,17 +80,25 @@ internal sealed class ShareXModCaptureRecipeReviewWindowV080 : Window
 
         if (loopInfo.Candidate)
         {
+            bool router = loopInfo.Reason.StartsWith("router:", StringComparison.OrdinalIgnoreCase);
+            bool adaptive = loopInfo.Reason.StartsWith("adaptive:", StringComparison.OrdinalIgnoreCase);
+            string modeLabel = router
+                ? "semantic template families"
+                : adaptive
+                    ? "adaptive semantic template"
+                    : "verified simple page template";
+
             pageLoopCheck = new CheckBox
             {
                 IsChecked = loopInfo.Approved,
-                Content = "Repeat this simple page template until Next Page disappears / stops changing"
+                Content = $"Repeat using the reviewed {modeLabel} until the verified stop condition"
             };
 
             pageLoopMaxPages = new TextBox
             {
                 Text = loopInfo.MaxPages.ToString(),
                 Width = 90,
-                Watermark = "Max pages"
+                PlaceholderText = "Max pages"
             };
 
             StackPanel loopRow = new()
@@ -107,9 +115,13 @@ internal sealed class ShareXModCaptureRecipeReviewWindowV080 : Window
             });
             loopRow.Children.Add(pageLoopMaxPages);
 
+            string safety = router
+                ? "Each page is re-classified from live semantic DOM evidence. If no family is uniquely selected, automation stops and marks the resume boundary for review."
+                : "Every page still re-resolves semantic locators, verifies transition, runs Page Guard and detects cycles.";
+
             TextBlock loopDetail = new()
             {
-                Text = $"Loop candidate: {loopInfo.CaptureRangeCount} vertical range(s) + semantic Next Page. This is separately approved and still obeys manual Stop, transition verification, Page Guard and cycle detection.",
+                Text = $"Automation candidate: {loopInfo.Reason} · {loopInfo.CaptureRangeCount} demonstrated vertical range(s). This approval is separate from the Recipe approval. {safety}",
                 TextWrapping = Avalonia.Media.TextWrapping.Wrap,
                 Margin = new Thickness(28, 0, 8, 8)
             };
@@ -121,7 +133,7 @@ internal sealed class ShareXModCaptureRecipeReviewWindowV080 : Window
         {
             TextBlock loopUnavailable = new()
             {
-                Text = "Page template loop: not offered for this Recipe · " + loopInfo.Reason,
+                Text = "Multi-page automation: not offered for this Recipe · " + loopInfo.Reason,
                 TextWrapping = Avalonia.Media.TextWrapping.Wrap,
                 Margin = new Thickness(8, 12, 8, 4)
             };

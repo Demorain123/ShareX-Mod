@@ -1,0 +1,329 @@
+name: Apply ShareX-Mod v0.6.6 resume integration v2 once
+
+on:
+  push:
+    branches:
+      - "mod/robust-scrolling-v0.1"
+    paths:
+      - ".github/workflows/apply-v066-resume-integration-v2.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout overlay branch
+        uses: actions/checkout@v6
+        with:
+          ref: mod/robust-scrolling-v0.1
+          fetch-depth: 0
+
+      - name: Integrate resume journal safely
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          function Replace-Required {
+            param([string]$Path,[string]$Old,[string]$New,[string]$Marker)
+            $text = [IO.File]::ReadAllText($Path)
+            if ($text.Contains($Marker)) { return }
+            if (-not $text.Contains($Old)) { throw "Anchor '$Marker' missing in $Path" }
+            $text = $text.Replace($Old,$New)
+            [IO.File]::WriteAllText($Path,$text,[Text.UTF8Encoding]::new($true))
+          }
+
+          $settingsPath = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModV04Settings.cs"
+          $settings = [IO.File]::ReadAllText($settingsPath)
+          if (-not $settings.Contains("CaptureRecipeResumeEnabled")) {
+            $anchor = '    public bool CaptureRecipeAutomationEnabled { get; set; } = false;'
+            if (-not $settings.Contains($anchor)) { throw "Resume settings anchor missing." }
+            $settings = $settings.Replace(
+              $anchor,
+              @'
+    public bool CaptureRecipeAutomationEnabled { get; set; } = false;
+    public bool CaptureRecipeResumeEnabled { get; set; } = false;
+    public string CaptureRecipeResumeJournalPath { get; set; } = string.Empty;
+'@)
+            [IO.File]::WriteAllText($settingsPath,$settings,[Text.UTF8Encoding]::new($true))
+          }
+
+          $configPath = "mod-overlay/config/ShareX.Mod.v04.json"
+          $config = [IO.File]::ReadAllText($configPath)
+          if (-not $config.Contains('"captureRecipeResumeEnabled"')) {
+            $anchor = '  "captureRecipeAutomationEnabled": false,'
+            if (-not $config.Contains($anchor)) { throw "Resume config anchor missing." }
+            $config = $config.Replace(
+              $anchor,
+              @'
+  "captureRecipeAutomationEnabled": false,
+  "captureRecipeResumeEnabled": false,
+  "captureRecipeResumeJournalPath": "",
+'@)
+            [IO.File]::WriteAllText($configPath,$config,[Text.UTF8Encoding]::new($false))
+          }
+
+          $runner = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipeRunner.cs"
+
+          Replace-Required $runner @'
+            string directory = ResolveDirectory(settings);
+            Directory.CreateDirectory(directory);
+            ShareXModCaptureSessionContext.RegisterComponent("capture-recipe-run", directory);
+
+            List<Part> parts = new();
+            List<ActionAudit> actions = new();
+'@ @'
+            string suggestedDirectory = ResolveDirectory(settings);
+            ShareXModCaptureRecipeRunJournal journal =
+                ShareXModCaptureRecipeRunJournal.Open(
+                    settings,
+                    settings.CaptureRecipeReplayPath,
+                    "fixed-recipe",
+                    suggestedDirectory);
+
+            string directory = journal.OutputDirectory;
+            Directory.CreateDirectory(directory);
+            ShareXModCaptureSessionContext.RegisterComponent("capture-recipe-run", directory);
+            ShareXModCaptureSessionContext.RegisterComponent("capture-recipe-journal", directory);
+
+            if (journal.IsResumed && journal.HasInFlightOperation)
+            {
+                journal.MarkWaitingForReview("previous run ended during an in-flight action/navigation; automatic replay is intentionally blocked");
+                return null;
+            }
+
+            List<Part> parts = journal.Parts
+                .OrderBy(x => x.Step)
+                .ThenBy(x => x.StartY)
+                .Select(x => new Part(x.File, x.Step, x.PageKey, x.StartY, x.EndY, x.Width, x.Height))
+                .ToList();
+
+            List<ActionAudit> actions = journal.Actions
+                .Select(x => new ActionAudit(x.Step, x.Kind, x.Status, x.Detail, 0, 0))
+                .ToList();
+
+            int resumeStep = journal.IsResumed ? Math.Max(1, journal.NextStep) : 1;
+'@ 'ShareXModCaptureRecipeRunJournal.Open('
+
+          Replace-Required $runner @'
+            foreach (ShareXModCaptureRecipeStep step in recipe.Steps.OrderBy(x => x.Index))
+            {
+                if (shouldStop?.Invoke() == true)
+'@ @'
+            foreach (ShareXModCaptureRecipeStep step in recipe.Steps.OrderBy(x => x.Index))
+            {
+                if (step.Index < resumeStep)
+                {
+                    continue;
+                }
+
+                string journalUrl = await GetUrlAsync(client);
+                string journalPageKey = await GetPageKeyAsync(client);
+                journal.BeginStep(step.Index, step.Kind.ToString(), journalPageKey, journalUrl);
+
+                if (shouldStop?.Invoke() == true)
+'@ 'journal.BeginStep(step.Index'
+
+          Replace-Required $runner @'
+                        int added = parts.Count - before;
+                        actions.Add(new ActionAudit(step.Index, "vertical-range", added > 0 ? "captured" : "empty", $"parts={added}", 0, 0));
+'@ @'
+                        int added = parts.Count - before;
+                        foreach (Part item in parts.Skip(before))
+                        {
+                            journal.RecordPart(
+                                item.File,
+                                item.Step,
+                                item.PageKey,
+                                item.StartY,
+                                item.EndY,
+                                item.Width,
+                                item.Height);
+                        }
+                        actions.Add(new ActionAudit(step.Index, "vertical-range", added > 0 ? "captured" : "empty", $"parts={added}", 0, 0));
+'@ 'journal.RecordPart('
+
+          Replace-Required $runner @'
+                if (failed)
+                {
+                    break;
+                }
+            }
+'@ @'
+                if (failed)
+                {
+                    journal.MarkWaitingForReview(stopReason);
+                    break;
+                }
+
+                string completedUrl = await GetUrlAsync(client);
+                string completedPageKey = await GetPageKeyAsync(client);
+                journal.CompleteStep(step.Index, completedPageKey, completedUrl);
+            }
+'@ 'journal.CompleteStep(step.Index'
+
+          Replace-Required $runner @'
+            if (parts.Count == 0)
+            {
+                await WriteManifestAsync(directory, recipe, target, parts, actions, stopped, failed, stopReason, null, 0, 0);
+                return null;
+            }
+'@ @'
+            if (parts.Count == 0)
+            {
+                await WriteManifestAsync(directory, recipe, target, parts, actions, stopped, failed, stopReason, null, 0, 0);
+                journal.Complete(
+                    failed ? "failed" : stopped ? "stopped" : "empty",
+                    await GetPageKeyAsync(client),
+                    await GetUrlAsync(client));
+                return null;
+            }
+'@ 'failed ? "failed" : stopped ? "stopped" : "empty"'
+
+          Replace-Required $runner @'
+            Bitmap preview = CreatePreview(directory, parts, sourceWidth, sourceHeight, settings.SegmentPreviewMaxHeight);
+            ShareXModSegmentedOutputRegistry.Register(preview, manifestPath, finalPng ?? string.Empty, sourceWidth, sourceHeight);
+
+            return new ShareXModChromeBackgroundCaptureResult
+'@ @'
+            Bitmap preview = CreatePreview(directory, parts, sourceWidth, sourceHeight, settings.SegmentPreviewMaxHeight);
+            ShareXModSegmentedOutputRegistry.Register(preview, manifestPath, finalPng ?? string.Empty, sourceWidth, sourceHeight);
+            journal.Complete(
+                failed ? "failed" : stopped ? "stopped" : "complete",
+                await GetPageKeyAsync(client),
+                await GetUrlAsync(client));
+
+            return new ShareXModChromeBackgroundCaptureResult
+'@ 'failed ? "failed" : stopped ? "stopped" : "complete"'
+
+          $feed = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipeDynamicFeed.cs"
+
+          Replace-Required $feed @'
+            string directory = ResolveDirectory(settings);
+            Directory.CreateDirectory(directory);
+            ShareXModCaptureSessionContext.RegisterComponent("capture-recipe-dynamic-feed", directory);
+
+            Metrics initial = await GetMetricsAsync(client);
+'@ @'
+            string suggestedDirectory = ResolveDirectory(settings);
+            ShareXModCaptureRecipeRunJournal journal =
+                ShareXModCaptureRecipeRunJournal.Open(
+                    settings,
+                    settings.CaptureRecipeReplayPath,
+                    "dynamic-feed",
+                    suggestedDirectory);
+
+            string directory = journal.OutputDirectory;
+            Directory.CreateDirectory(directory);
+            ShareXModCaptureSessionContext.RegisterComponent("capture-recipe-dynamic-feed", directory);
+            ShareXModCaptureSessionContext.RegisterComponent("capture-recipe-journal", directory);
+
+            if (journal.IsResumed && journal.HasInFlightOperation)
+            {
+                journal.MarkWaitingForReview("previous dynamic-feed run ended during an in-flight operation");
+                return null;
+            }
+
+            Metrics initial = await GetMetricsAsync(client);
+'@ '"dynamic-feed",'
+
+          Replace-Required $feed @'
+            List<Part> parts = new();
+            List<GrowthPass> growthPasses = new();
+
+            double y = startY;
+            double knownEnd = Math.Min(initial.CssHeight, maxCssHeight);
+            int steps = 0;
+            int unchangedPasses = 0;
+'@ @'
+            List<Part> parts = journal.Parts
+                .OrderBy(x => x.StartY)
+                .Select(x => new Part(x.File, x.StartY, x.EndY, x.Width, x.Height))
+                .ToList();
+            List<GrowthPass> growthPasses = new();
+
+            double y = journal.IsResumed ? Math.Max(startY, journal.CapturedEndY) : startY;
+            double knownEnd = Math.Min(
+                Math.Max(initial.CssHeight, journal.IsResumed ? journal.KnownDocumentEndY : 0),
+                maxCssHeight);
+            int steps = journal.IsResumed ? journal.StepsExecuted : 0;
+            int unchangedPasses = journal.IsResumed ? journal.UnchangedPasses : 0;
+'@ 'journal.IsResumed ? journal.StepsExecuted : 0'
+
+          Replace-Required $feed @'
+                        parts.Add(new Part(file, y, actualEnd, bitmap.Width, bitmap.Height));
+'@ @'
+                        Part capturedPart = new(file, y, actualEnd, bitmap.Width, bitmap.Height);
+                        parts.Add(capturedPart);
+                        journal.RecordPart(
+                            capturedPart.File,
+                            0,
+                            recipe.Steps.FirstOrDefault()?.PageKey ?? string.Empty,
+                            capturedPart.StartY,
+                            capturedPart.EndY,
+                            capturedPart.Width,
+                            capturedPart.Height);
+'@ 'capturedPart = new(file, y, actualEnd'
+
+          Replace-Required $feed @'
+                steps++;
+
+                if (grew)
+'@ @'
+                steps++;
+                journal.RecordFeedProgress(
+                    y,
+                    Math.Max(knownEnd, afterHeight),
+                    steps,
+                    unchangedPasses);
+
+                if (grew)
+'@ 'journal.RecordFeedProgress('
+
+          Replace-Required $feed @'
+            ShareXModSegmentedOutputRegistry.Register(
+                preview,
+                manifestPath,
+                finalPng ?? string.Empty,
+                sourceWidth,
+                sourceHeight);
+
+            return new ShareXModChromeBackgroundCaptureResult
+'@ @'
+            ShareXModSegmentedOutputRegistry.Register(
+                preview,
+                manifestPath,
+                finalPng ?? string.Empty,
+                sourceWidth,
+                sourceHeight);
+
+            journal.Complete(
+                truncated ? "bounded-stop" : stoppedByUser ? "stopped" : "complete",
+                recipe.Steps.FirstOrDefault()?.PageKey ?? string.Empty,
+                target.Url);
+
+            return new ShareXModChromeBackgroundCaptureResult
+'@ 'truncated ? "bounded-stop" : stoppedByUser ? "stopped" : "complete"'
+
+          [IO.File]::WriteAllText("mod-overlay/VERSION","0.6.6-dev`n",[Text.UTF8Encoding]::new($false))
+          git diff --check
+
+      - name: Commit v0.6.6 integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "sharex-mod-ci"
+          git config user.email "sharex-mod-ci@users.noreply.github.com"
+          git add \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModV04Settings.cs \
+            mod-overlay/config/ShareX.Mod.v04.json \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipeRunner.cs \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipeDynamicFeed.cs \
+            mod-overlay/VERSION
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+            exit 0
+          fi
+          git commit -m "feat(v0.6.6): resume fixed and dynamic Capture Recipe runs"
+          git push origin HEAD:mod/robust-scrolling-v0.1

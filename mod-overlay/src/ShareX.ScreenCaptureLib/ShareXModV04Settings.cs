@@ -27,13 +27,12 @@ internal sealed class ShareXModV04Settings
     public double SettleBlankComplexityThreshold { get; set; } = 2.0;
     public int SettleBlankExtraWaitMs { get; set; } = 500;
 
-    // Capture Boundary keeps the existing manual Start/Stop workflow as the default.
-    // Any numeric limit <= 0 is disabled.
     public bool CaptureBoundaryEnabled { get; set; } = true;
     public int CaptureBoundaryMaxSteps { get; set; } = 0;
     public int CaptureBoundaryMaxDurationSeconds { get; set; } = 0;
     public long CaptureBoundaryMaxLogicalHeight { get; set; } = 0;
     public int CaptureBoundaryMaxUnchangedPasses { get; set; } = 0;
+
     public bool RepairPlanEnabled { get; set; } = true;
     public int RepairPlanMarginPx { get; set; } = 256;
     public int RepairPlanMergeGapPx { get; set; } = 96;
@@ -45,6 +44,49 @@ internal sealed class ShareXModV04Settings
     public bool ChromeExpandNestedScrollContainers { get; set; } = true;
     public bool ChromeBackgroundCapture { get; set; } = false;
     public bool ChromeGenericAriaExpansion { get; set; } = false;
+
+    public bool ChromeSemanticMapEnabled { get; set; } = true;
+    public int ChromeSemanticMapMaxAnchors { get; set; } = 3500;
+    public double ChromeSemanticMapMinWidthCss { get; set; } = 2;
+    public double ChromeSemanticMapMinHeightCss { get; set; } = 2;
+    public int ChromeSemanticMapTextPreviewChars { get; set; } = 180;
+
+    public bool ChromeLayoutShiftTrackingEnabled { get; set; } = true;
+    public int ChromeLayoutShiftMaxEntries { get; set; } = 512;
+
+    public bool ChromeExactRepairCaptureEnabled { get; set; } = true;
+    public int ChromeRepairMaxClipHeightCss { get; set; } = 6000;
+    public int ChromeRepairSettleMs { get; set; } = 500;
+    public int ChromeRepairImageWaitMs { get; set; } = 2200;
+    public int ChromeRepairHorizontalMarginCss { get; set; } = 96;
+
+    public int ChromeRepairStabilityQuietMs { get; set; } = 350;
+    public int ChromeRepairStabilityMaxWaitMs { get; set; } = 6500;
+    public int ChromeRepairStabilityProbeMs { get; set; } = 120;
+    public int ChromeRepairImageDecodeBudgetMs { get; set; } = 1200;
+    public bool ChromeRepairRequireStableRegion { get; set; } = true;
+
+    public bool ChromeRepairAlignmentEnabled { get; set; } = true;
+    public bool ChromeRepairAutoApplyEnabled { get; set; } = false;
+    public int ChromeRepairAlignmentSearchRadiusPx { get; set; } = 128;
+    public int ChromeRepairAlignmentHorizontalSearchPx { get; set; } = 160;
+    public int ChromeRepairAlignmentBandHeightPx { get; set; } = 160;
+    public int ChromeRepairAlignmentCoarseSampleStep { get; set; } = 12;
+    public int ChromeRepairAlignmentFineSampleStep { get; set; } = 5;
+    public double ChromeRepairAlignmentMaxScore { get; set; } = 18.0;
+    public double ChromeRepairAlignmentMinUniquenessGap { get; set; } = 1.2;
+    public int ChromeRepairMinimumReplaceHeightPx { get; set; } = 64;
+    public int ChromeRepairSeamBlendPx { get; set; } = 12;
+
+    public bool ChromeSemanticRepairAugmentEnabled { get; set; } = true;
+    public bool ChromeSemanticRepairIncludeLayoutShifts { get; set; } = true;
+    public bool ChromeSemanticRepairIncludeAnchorMovement { get; set; } = true;
+    public bool ChromeSemanticRepairIgnoreRecentInputLayoutShifts { get; set; } = true;
+    public double ChromeSemanticRepairMinShiftCss { get; set; } = 12.0;
+    public int ChromeSemanticRepairMaxAdditionalRanges { get; set; } = 64;
+
+    public bool FinalQualitySummaryEnabled { get; set; } = true;
+    public double FinalQualityResolvedCoverageRatio { get; set; } = 0.60;
 
     public double ChromeBackgroundStartY { get; set; } = 0;
     public double ChromeBackgroundEndY { get; set; } = 0;

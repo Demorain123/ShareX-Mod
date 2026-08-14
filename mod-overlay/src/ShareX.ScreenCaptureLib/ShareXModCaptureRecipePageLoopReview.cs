@@ -1,6 +1,7 @@
 #nullable enable
 
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -45,20 +46,44 @@ internal static class ShareXModCaptureRecipePageLoopReview
                 throw new InvalidDataException();
             }
 
-            ShareXModCaptureRecipePageLoopPlan plan =
+            ShareXModCaptureRecipePageLoopPlan simple =
                 ShareXModCaptureRecipePageLoopPlanner.Build(recipe, settings);
+
+            ShareXModAdaptivePageTemplatePlan adaptive =
+                ShareXModAdaptivePageTemplatePlanner.Build(recipe, settings);
 
             bool approved = ShareXModCaptureRecipePageLoopApproval.IsApproved(
                 recipePath,
                 settings,
                 out int maxPages);
 
+            if (simple.Candidate)
+            {
+                return new ShareXModPageLoopReviewInfo(
+                    true,
+                    "simple:" + simple.Reason,
+                    approved,
+                    maxPages,
+                    simple.CaptureRanges.Count);
+            }
+
+            if (adaptive.Candidate)
+            {
+                return new ShareXModPageLoopReviewInfo(
+                    true,
+                    $"adaptive:{adaptive.Reason}; similarity={adaptive.Similarity:0.00}",
+                    approved,
+                    maxPages,
+                    adaptive.TemplateSteps.Count(x =>
+                        x.Kind == ShareXModCaptureRecipeStepKind.CaptureVerticalRange));
+            }
+
             return new ShareXModPageLoopReviewInfo(
-                plan.Candidate,
-                plan.Reason,
-                approved,
+                false,
+                $"simple={simple.Reason}; adaptive={adaptive.Reason}",
+                false,
                 maxPages,
-                plan.CaptureRanges.Count);
+                0);
         }
         catch
         {

@@ -1,0 +1,264 @@
+name: Apply ShareX-Mod v0.7.4 page guard integration once
+
+on:
+  push:
+    branches:
+      - "mod/robust-scrolling-v0.1"
+    paths:
+      - ".github/workflows/apply-v074-page-guard-integration.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout overlay branch
+        uses: actions/checkout@v6
+        with:
+          ref: mod/robust-scrolling-v0.1
+          fetch-depth: 0
+
+      - name: Wait for v0.6.7+ Recipe prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 40); do
+            git fetch origin mod/robust-scrolling-v0.1
+            git reset --hard origin/mod/robust-scrolling-v0.1
+            if grep -q "ShareXModRecipeRangeAnchorResolver.ResolveStepAsync" mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipeRunner.cs && \
+               grep -q "ShareXModCaptureRecipeRunJournal" mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipeRunner.cs; then
+              echo "Prerequisites ready."
+              exit 0
+            fi
+            echo "Waiting for earlier one-shot source integrations ($i/40)..."
+            sleep 10
+          done
+          echo "Required v0.6.7+/resume markers did not appear in time."
+          exit 1
+
+      - name: Integrate page guard
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          function Replace-Required {
+            param([string]$Path,[string]$Old,[string]$New,[string]$Marker)
+            $text = [IO.File]::ReadAllText($Path)
+            if ($text.Contains($Marker)) { return }
+            if (-not $text.Contains($Old)) { throw "Anchor '$Marker' missing in $Path" }
+            $text = $text.Replace($Old,$New)
+            [IO.File]::WriteAllText($Path,$text,[Text.UTF8Encoding]::new($true))
+          }
+
+          $settingsPath = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModV04Settings.cs"
+          $settings = [IO.File]::ReadAllText($settingsPath)
+          if (-not $settings.Contains("CaptureRecipePageGuardEnabled")) {
+            $anchor = '    public int CaptureRecipeMaxNavigationCount { get; set; } = 100;'
+            if (-not $settings.Contains($anchor)) { throw "Page Guard settings anchor missing." }
+            $block = @'
+    public int CaptureRecipeMaxNavigationCount { get; set; } = 100;
+    public bool CaptureRecipePageGuardEnabled { get; set; } = true;
+    public double CaptureRecipePageGuardBoundaryShiftCss { get; set; } = 8.0;
+    public int CaptureRecipePageGuardSemanticCountDelta { get; set; } = 2;
+    public int CaptureRecipePageGuardImageCountDelta { get; set; } = 1;
+'@
+            $settings = $settings.Replace($anchor,$block)
+            [IO.File]::WriteAllText($settingsPath,$settings,[Text.UTF8Encoding]::new($true))
+          }
+
+          $configPath = "mod-overlay/config/ShareX.Mod.v04.json"
+          $config = [IO.File]::ReadAllText($configPath)
+          if (-not $config.Contains('"captureRecipePageGuardEnabled"')) {
+            $anchor = '  "captureRecipeMaxNavigationCount": 100,'
+            if (-not $config.Contains($anchor)) { throw "Page Guard config anchor missing." }
+            $block = @'
+  "captureRecipeMaxNavigationCount": 100,
+  "captureRecipePageGuardEnabled": true,
+  "captureRecipePageGuardBoundaryShiftCss": 8.0,
+  "captureRecipePageGuardSemanticCountDelta": 2,
+  "captureRecipePageGuardImageCountDelta": 1,
+'@
+            $config = $config.Replace($anchor,$block)
+            [IO.File]::WriteAllText($configPath,$config,[Text.UTF8Encoding]::new($false))
+          }
+
+          $runner = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipeRunner.cs"
+
+          $text = [IO.File]::ReadAllText($runner)
+          if (-not $text.Contains("ShareXModCaptureRecipePageGuard.Create(client, settings)")) {
+            $anchor = '            foreach (ShareXModCaptureRecipeStep step in recipe.Steps.OrderBy(x => x.Index))'
+            if (-not $text.Contains($anchor)) { throw "Runner foreach anchor missing." }
+            $insert = @'
+            ShareXModCaptureRecipePageGuard.Session pageGuard =
+                ShareXModCaptureRecipePageGuard.Create(client, settings);
+
+            foreach (ShareXModCaptureRecipeStep step in recipe.Steps.OrderBy(x => x.Index))
+'@
+            $text = $text.Replace($anchor,$insert)
+            [IO.File]::WriteAllText($runner,$text,[Text.UTF8Encoding]::new($true))
+          }
+
+          $text = [IO.File]::ReadAllText($runner)
+          if (-not $text.Contains("pageGuard.RecordAsync(step, effectiveStep)")) {
+            $anchor = '                        actions.Add(new ActionAudit(step.Index, "vertical-range", added > 0 ? "captured" : "empty", $"parts={added}", 0, 0));'
+            if (-not $text.Contains($anchor)) { throw "Runner vertical audit anchor missing." }
+            $replacement = @'
+                        if (added > 0)
+                        {
+                            await pageGuard.RecordAsync(step, effectiveStep);
+                        }
+
+                        actions.Add(new ActionAudit(step.Index, "vertical-range", added > 0 ? "captured" : "empty", $"parts={added}", 0, 0));
+'@
+            $text = $text.Replace($anchor,$replacement)
+            [IO.File]::WriteAllText($runner,$text,[Text.UTF8Encoding]::new($true))
+          }
+
+          $text = [IO.File]::ReadAllText($runner)
+          if (-not $text.Contains("page-guard-before-navigation")) {
+            $caseAnchor = '                    case ShareXModCaptureRecipeStepKind.NextPage:'
+            if (-not $text.Contains($caseAnchor)) { throw "Runner NextPage case anchor missing." }
+
+            $guardBlock = @'
+                    case ShareXModCaptureRecipeStepKind.NextPage:
+                    {
+                        // page-guard-before-navigation
+                        string guardPageKey = await GetPageKeyAsync(client);
+                        IReadOnlyList<ShareXModRecipeStaleRange> staleRanges =
+                            await pageGuard.RevalidateAsync(guardPageKey);
+
+                        foreach (ShareXModRecipeStaleRange stale in staleRanges)
+                        {
+                            ShareXModRecipeGuardRepairResult repaired =
+                                await ShareXModCaptureRecipePageGuardRepair.RecaptureAsync(
+                                    client,
+                                    settings,
+                                    stale,
+                                    directory,
+                                    shouldStop);
+
+                            actions.Add(new ActionAudit(
+                                stale.OriginalStep.Index,
+                                "page-guard",
+                                repaired.Success ? "recaptured" : "failed",
+                                $"{repaired.Detail}; reasons={string.Join(',', stale.Reasons)}",
+                                0,
+                                0));
+
+                            if (!repaired.Success)
+                            {
+                                failed = true;
+                                stopReason = "page-guard-repair-failed:" + repaired.Detail;
+                                journal.MarkWaitingForReview(stopReason);
+                                break;
+                            }
+
+                            List<Part> oldParts = parts
+                                .Where(x => x.Step == stale.OriginalStep.Index)
+                                .ToList();
+
+                            List<Part> replacementParts = repaired.Parts
+                                .Select(x => new Part(
+                                    x.File,
+                                    x.Step,
+                                    x.PageKey,
+                                    x.StartY,
+                                    x.EndY,
+                                    x.Width,
+                                    x.Height))
+                                .ToList();
+
+                            parts.AddRange(replacementParts);
+                            foreach (Part oldPart in oldParts)
+                            {
+                                parts.Remove(oldPart);
+                                ShareXModCaptureRecipePageGuardRepair.ArchiveOldPart(
+                                    directory,
+                                    oldPart.File);
+                            }
+
+                            journal.ReplacePartsForStep(
+                                stale.OriginalStep.Index,
+                                replacementParts.Select(x => new ShareXModRecipeJournalPart(
+                                    x.File,
+                                    x.Step,
+                                    x.PageKey,
+                                    x.StartY,
+                                    x.EndY,
+                                    x.Width,
+                                    x.Height)));
+
+                            await pageGuard.RecordAsync(
+                                stale.OriginalStep,
+                                stale.EffectiveStep);
+                        }
+
+                        if (failed)
+                        {
+                            break;
+                        }
+
+                        if (staleRanges.Count > 0)
+                        {
+                            IReadOnlyList<ShareXModRecipeStaleRange> stillStale =
+                                await pageGuard.RevalidateAsync(guardPageKey);
+
+                            if (stillStale.Count > 0)
+                            {
+                                failed = true;
+                                stopReason = $"page-guard-still-stale:{stillStale.Count}";
+                                actions.Add(new ActionAudit(
+                                    step.Index,
+                                    "page-guard",
+                                    "failed",
+                                    stopReason,
+                                    0,
+                                    0));
+                                journal.MarkWaitingForReview(stopReason);
+                                break;
+                            }
+                        }
+'@
+            $text = $text.Replace($caseAnchor,$guardBlock)
+            [IO.File]::WriteAllText($runner,$text,[Text.UTF8Encoding]::new($true))
+          }
+
+          $text = [IO.File]::ReadAllText($runner)
+          if (-not $text.Contains("parts = parts.OrderBy(x => x.Step)")) {
+            $anchor = '            int sourceWidth = parts[0].Width;'
+            if (-not $text.Contains($anchor)) { throw "Runner final part ordering anchor missing." }
+            $replacement = @'
+            parts = parts
+                .OrderBy(x => x.Step)
+                .ThenBy(x => x.StartY)
+                .ThenBy(x => x.File, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            int sourceWidth = parts[0].Width;
+'@
+            $text = $text.Replace($anchor,$replacement)
+            [IO.File]::WriteAllText($runner,$text,[Text.UTF8Encoding]::new($true))
+          }
+
+          [IO.File]::WriteAllText("mod-overlay/VERSION","0.7.4-dev`n",[Text.UTF8Encoding]::new($false))
+          git diff --check
+
+      - name: Commit v0.7.4 page guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "sharex-mod-ci"
+          git config user.email "sharex-mod-ci@users.noreply.github.com"
+          git add \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModV04Settings.cs \
+            mod-overlay/config/ShareX.Mod.v04.json \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipeRunner.cs \
+            mod-overlay/VERSION
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+            exit 0
+          fi
+          git commit -m "feat(v0.7.4): revalidate and locally repair page ranges before pagination"
+          git push origin HEAD:mod/robust-scrolling-v0.1

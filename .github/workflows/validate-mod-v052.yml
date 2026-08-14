@@ -1,23 +1,6 @@
-name: Validate ShareX-Mod v0.5.2
+name: Validate ShareX-Mod v0.5.2 (manual regression)
 
 on:
-  push:
-    branches:
-      - "mod/**"
-    paths:
-      - "mod-overlay/**"
-      - "scripts/apply-v04-hooks.ps1"
-      - "scripts/run-v04-hooks.ps1"
-      - "scripts/apply-v041-post-hooks.ps1"
-      - "scripts/apply-v042-post-hooks.ps1"
-      - "scripts/apply-v043-post-hooks.ps1"
-      - "scripts/apply-v044-post-hooks.ps1"
-      - "scripts/apply-v050-post-hooks.ps1"
-      - "scripts/apply-v051-post-hooks.ps1"
-      - "scripts/apply-v052-post-hooks.ps1"
-      - "ShareX.ScreenCaptureLib/**"
-      - "Directory.build.targets"
-      - ".github/workflows/validate-mod-v052.yml"
   workflow_dispatch:
 
 permissions:

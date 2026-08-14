@@ -1,0 +1,135 @@
+name: Diagnose ShareX-Mod v0.8.2 once
+
+on:
+  push:
+    branches:
+      - "mod/robust-scrolling-v0.1"
+    paths:
+      - ".github/workflows/diagnose-v082-once.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  diagnose:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: mod/robust-scrolling-v0.1
+          fetch-depth: 0
+
+      - name: Wait for integrated v0.8.2 source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          for ($i = 1; $i -le 60; $i++) {
+            git fetch origin mod/robust-scrolling-v0.1
+            git reset --hard origin/mod/robust-scrolling-v0.1
+            $version = (Get-Content "mod-overlay\VERSION" -Raw).Trim()
+            if ($version -eq "0.8.2-dev") {
+              Write-Host "v0.8.2 integrated."
+              exit 0
+            }
+            Write-Host "Waiting for v0.8.2 ($i/60), current=$version"
+            Start-Sleep -Seconds 10
+          }
+          throw "v0.8.2 did not integrate before diagnostic timeout."
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Run hooks and compile with captured diagnostics
+        id: compile
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          New-Item -ItemType Directory -Force "ci-diagnostics" | Out-Null
+          $log = "ci-diagnostics\v082-full.log"
+          $summary = "ci-diagnostics\v082.txt"
+          "ShareX-Mod v0.8.2 diagnostic`nGenerated: $(Get-Date -Format o)`n" | Set-Content $log
+
+          $hooks = @(
+            "scripts\run-v04-hooks.ps1",
+            "scripts\apply-v041-post-hooks.ps1",
+            "scripts\apply-v042-post-hooks.ps1",
+            "scripts\apply-v043-post-hooks.ps1",
+            "scripts\apply-v044-post-hooks.ps1",
+            "scripts\apply-v050-post-hooks.ps1",
+            "scripts\apply-v051-post-hooks.ps1",
+            "scripts\apply-v052-post-hooks.ps1",
+            "scripts\apply-v061-post-hooks.ps1",
+            "scripts\apply-v062-post-hooks.ps1",
+            "scripts\apply-v064-post-hooks.ps1"
+          )
+
+          $failed = $false
+          foreach ($hook in $hooks) {
+            "`n=== $hook ===" | Tee-Object -FilePath $log -Append
+            & pwsh -NoProfile -File $hook 2>&1 | Tee-Object -FilePath $log -Append
+            if ($LASTEXITCODE -ne 0) {
+              $failed = $true
+              break
+            }
+          }
+
+          if (-not $failed) {
+            "`n=== restore ===" | Tee-Object -FilePath $log -Append
+            dotnet restore --runtime win-x64 ShareX.sln 2>&1 | Tee-Object -FilePath $log -Append
+            if ($LASTEXITCODE -ne 0) { $failed = $true }
+          }
+
+          if (-not $failed) {
+            "`n=== build ===" | Tee-Object -FilePath $log -Append
+            dotnet build --no-restore --configuration Release -p:Platform=x64 --self-contained true /m:1 ShareX.sln 2>&1 | Tee-Object -FilePath $log -Append
+            if ($LASTEXITCODE -ne 0) { $failed = $true }
+          }
+
+          $lines = Get-Content $log
+          $important = $lines | Where-Object {
+            $_ -match 'error CS\d+' -or
+            $_ -match 'error MSB\d+' -or
+            $_ -match 'compatibility check failed' -or
+            $_ -match 'anchor not found' -or
+            $_ -match 'Hook target not found' -or
+            $_ -match 'Build FAILED'
+          }
+
+          if ($failed) {
+            @(
+              "STATUS: FAIL",
+              "",
+              "Key errors:",
+              ($important | Select-Object -First 120),
+              "",
+              "Full log intentionally not committed; this file contains the actionable subset."
+            ) | Set-Content $summary
+          }
+          else {
+            @(
+              "STATUS: PASS",
+              "",
+              "Overlay replay + Release x64 compilation succeeded."
+            ) | Set-Content $summary
+          }
+
+          Remove-Item $log -Force -ErrorAction SilentlyContinue
+          if ($failed) { exit 1 }
+
+      - name: Commit diagnostic summary
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f ci-diagnostics/v082.txt ]; then
+            mkdir -p ci-diagnostics
+            printf 'STATUS: DIAGNOSTIC_WORKFLOW_FAILED\n' > ci-diagnostics/v082.txt
+          fi
+          git config user.name "sharex-mod-ci"
+          git config user.email "sharex-mod-ci@users.noreply.github.com"
+          git add ci-diagnostics/v082.txt
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "ci: record v0.8.2 compile diagnostic"
+          git push origin HEAD:mod/robust-scrolling-v0.1

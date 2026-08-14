@@ -30,6 +30,8 @@
   "captureRecipeMaxRawEvents": 12000,
   "captureRecipeMinimumVerticalRangeCss": 160,
   "captureRecipeAutomationEnabled": false,
+  "captureRecipeReplayPath": "",
+  "captureRecipeOutputDirectory": "ShareX-Mod\\CaptureRecipeRuns",
   "captureRecipeReplayScrollStepCss": 900,
   "captureRecipeActionTimeoutMs": 8000,
   "captureRecipeMaxNavigationCount": 100,

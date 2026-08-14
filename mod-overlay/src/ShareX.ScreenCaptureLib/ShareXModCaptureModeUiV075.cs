@@ -261,7 +261,7 @@ internal static class ShareXModCaptureModeUiV075
 
         keep.Click += (_, _) =>
         {
-            bool ok = ShareXModAppendixRetentionInbox.Keep(pending);
+            bool ok = ShareXModAppendixRetentionInbox.ResolveKeep(pending);
             message.Text = ok
                 ? "Embedded originals kept."
                 : "Could not update retention state.";
@@ -271,10 +271,12 @@ internal static class ShareXModCaptureModeUiV075
 
         delete.Click += (_, _) =>
         {
-            bool ok = ShareXModAppendixRetentionInbox.Delete(pending);
+            bool ok = ShareXModAppendixRetentionInbox.ResolveDelete(pending, out string result);
             message.Text = ok
-                ? "Embedded originals deleted; appended tail pages are unchanged."
-                : "Could not safely delete every embedded original.";
+                ? result
+                : string.IsNullOrWhiteSpace(result)
+                    ? "Could not safely delete every embedded original."
+                    : result;
             keep.IsEnabled = false;
             delete.IsEnabled = false;
         };

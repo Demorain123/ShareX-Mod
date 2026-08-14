@@ -1,3 +1,4 @@
+# Active integration gate. Historical ShareX-Mod workflows are preserved under .github/workflows-archive/.
 name: Validate ShareX-Mod current integration
 
 on:

@@ -40,6 +40,11 @@
   "captureRecipeDynamicFeedMaxSteps": 400,
   "captureRecipeDynamicFeedMaxDurationSeconds": 1200,
   "captureRecipeDynamicFeedMaxUnchangedPasses": 4,
+  "captureRecipeHorizontalAppendixEnabled": true,
+  "captureRecipeHorizontalAppendixMinOverlapRatio": 0.05,
+  "captureRecipeHorizontalAppendixMaxOverlapRatio": 0.45,
+  "captureRecipeHorizontalAppendixMaxScore": 18.0,
+  "captureRecipeHorizontalAppendixMinGap": 0.8,
 
   "repairPlanEnabled": true,
   "repairPlanMarginPx": 256,

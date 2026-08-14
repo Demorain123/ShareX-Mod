@@ -14,6 +14,8 @@ namespace ShareX.ScreenCaptureLib;
 
 internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
 {
+    private const string BindingName = "__sharexModRecipeEmitV06";
+
     private readonly ShareXModChromeCdpClient client;
     private readonly ShareXModV04Settings settings;
     private readonly string directory;
@@ -51,6 +53,7 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
             ShareXModCaptureSessionContext.RegisterComponent("capture-recipe", directory);
 
             ShareXModCaptureRecipeRecorder recorder = new(client, settings, directory);
+            recorder.client.CdpEventReceived += recorder.OnCdpEvent;
             await recorder.InstallAsync();
             recorder.pollTask = recorder.PollLoopAsync(recorder.pollCts.Token);
             return recorder;
@@ -73,22 +76,12 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
 
         if (pollTask != null)
         {
-            try
-            {
-                await pollTask;
-            }
-            catch
-            {
-            }
+            try { await pollTask; } catch { }
         }
 
-        try
-        {
-            await DrainOnceAsync(CancellationToken.None);
-        }
-        catch
-        {
-        }
+        try { await DrainOnceAsync(CancellationToken.None); } catch { }
+
+        client.CdpEventReceived -= OnCdpEvent;
 
         try
         {
@@ -100,16 +93,21 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
                     CancellationToken.None);
             }
         }
-        catch
+        catch { }
+
+        try
         {
+            using JsonDocument _ = await client.SendCdpCommandAsync(
+                "Runtime.removeBinding",
+                new { name = BindingName },
+                CancellationToken.None);
         }
+        catch { }
 
         List<ShareXModRecipeRawEvent> snapshot;
         lock (sync)
         {
-            snapshot = events
-                .OrderBy(x => x.Sequence)
-                .ToList();
+            snapshot = events.OrderBy(x => x.Sequence).ToList();
         }
 
         try
@@ -126,9 +124,10 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
                 JsonSerializer.Serialize(new
                 {
                     format = "ShareX-Mod Capture Recipe Raw Events",
-                    version = "0.6.0-dev",
+                    version = "0.6.1-dev",
                     sessionId = ShareXModCaptureSessionContext.CurrentSessionId,
                     created = DateTimeOffset.Now,
+                    delivery = "Runtime.bindingCalled with polling fallback",
                     eventCount = snapshot.Count,
                     events = snapshot
                 }, jsonOptions),
@@ -143,6 +142,15 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
                 JsonSerializer.Serialize(recipe, jsonOptions),
                 new UTF8Encoding(false));
 
+            try
+            {
+                await ShareXModCaptureRecipePreflight.ValidateAsync(
+                    client,
+                    recipe,
+                    directory);
+            }
+            catch { }
+
             return recipePath;
         }
         catch
@@ -153,6 +161,12 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
 
     private async Task InstallAsync()
     {
+        using (JsonDocument _ = await client.SendCdpCommandAsync(
+                   "Runtime.addBinding",
+                   new { name = BindingName }))
+        {
+        }
+
         string source = BuildRecorderScript(
             Math.Clamp(settings.CaptureRecipeMaxRawEvents, 500, 100000),
             Math.Clamp(settings.CaptureRecipeScrollDebounceMs, 80, 1500));
@@ -168,7 +182,59 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
             }
         }
 
-        using JsonDocument _ = await client.EvaluateAsync(source, false);
+        using JsonDocument current = await client.EvaluateAsync(source, false);
+    }
+
+    private void OnCdpEvent(string method, JsonElement root)
+    {
+        if (!method.Equals("Runtime.bindingCalled", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        try
+        {
+            JsonElement parameters = root.GetProperty("params");
+            if (!parameters.TryGetProperty("name", out JsonElement nameElement) ||
+                !string.Equals(nameElement.GetString(), BindingName, StringComparison.Ordinal) ||
+                !parameters.TryGetProperty("payload", out JsonElement payloadElement))
+            {
+                return;
+            }
+
+            string? payload = payloadElement.GetString();
+            if (string.IsNullOrWhiteSpace(payload))
+            {
+                return;
+            }
+
+            using JsonDocument json = JsonDocument.Parse(payload);
+            ShareXModRecipeRawEvent? parsed = ParseRaw(json.RootElement);
+            if (parsed != null)
+            {
+                AddEvent(parsed);
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private void AddEvent(ShareXModRecipeRawEvent item)
+    {
+        ShareXModRecipeRawEvent sequenced = item with
+        {
+            Sequence = Interlocked.Increment(ref sequence)
+        };
+
+        lock (sync)
+        {
+            int limit = Math.Clamp(settings.CaptureRecipeMaxRawEvents, 500, 100000);
+            if (events.Count < limit)
+            {
+                events.Add(sequenced);
+            }
+        }
     }
 
     private async Task PollLoopAsync(CancellationToken cancellationToken)
@@ -177,13 +243,7 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
 
         while (!cancellationToken.IsCancellationRequested)
         {
-            try
-            {
-                await DrainOnceAsync(cancellationToken);
-            }
-            catch
-            {
-            }
+            try { await DrainOnceAsync(cancellationToken); } catch { }
 
             try
             {
@@ -202,13 +262,14 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
 (() => {
   const state = window.__sharexModRecipeRecorderV06;
   if (!state) return [];
-  const out = state.events.splice(0, state.events.length);
-  return out;
+  return state.events.splice(0, state.events.length);
 })()
 """;
 
-        using JsonDocument response =
-            await client.EvaluateAsync(expression, false, cancellationToken);
+        using JsonDocument response = await client.EvaluateAsync(
+            expression,
+            false,
+            cancellationToken);
 
         JsonElement result = response.RootElement
             .GetProperty("result")
@@ -220,32 +281,12 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
             return;
         }
 
-        List<ShareXModRecipeRawEvent> batch = new();
         foreach (JsonElement item in value.EnumerateArray())
         {
             ShareXModRecipeRawEvent? parsed = ParseRaw(item);
             if (parsed != null)
             {
-                batch.Add(parsed with { Sequence = Interlocked.Increment(ref sequence) });
-            }
-        }
-
-        if (batch.Count == 0)
-        {
-            return;
-        }
-
-        lock (sync)
-        {
-            int limit = Math.Clamp(settings.CaptureRecipeMaxRawEvents, 500, 100000);
-            foreach (ShareXModRecipeRawEvent item in batch)
-            {
-                if (events.Count >= limit)
-                {
-                    break;
-                }
-
-                events.Add(item);
+                AddEvent(parsed);
             }
         }
     }
@@ -255,18 +296,14 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
         try
         {
             string kind = GetString(item, "kind");
-            if (kind.Length == 0)
+            if (kind.Length == 0 ||
+                !item.TryGetProperty("page", out JsonElement pageElement) ||
+                pageElement.ValueKind != JsonValueKind.Object)
             {
                 return null;
             }
 
-            double timestamp = GetDouble(item, "time");
-            bool trusted = GetBool(item, "trusted");
-            bool isDocument = GetBool(item, "isDocumentScroller");
-
-            ShareXModRecipePageState page = ParsePage(item.GetProperty("page"));
             ShareXModRecipeLocator? target = null;
-
             if (item.TryGetProperty("target", out JsonElement targetElement) &&
                 targetElement.ValueKind == JsonValueKind.Object)
             {
@@ -276,8 +313,8 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
             return new ShareXModRecipeRawEvent(
                 0,
                 kind,
-                timestamp,
-                page,
+                GetDouble(item, "time"),
+                ParsePage(pageElement),
                 target,
                 GetDouble(item, "scrollX"),
                 GetDouble(item, "scrollY"),
@@ -285,8 +322,8 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
                 GetDouble(item, "scrollHeight"),
                 GetDouble(item, "clientWidth"),
                 GetDouble(item, "clientHeight"),
-                isDocument,
-                trusted);
+                GetBool(item, "isDocumentScroller"),
+                GetBool(item, "trusted"));
         }
         catch
         {
@@ -337,14 +374,7 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
             GetDouble(item, "width"),
             GetDouble(item, "height"),
             ShareXModCaptureRecipeCompiler.LocatorFingerprint(
-                tag,
-                id,
-                testId,
-                role,
-                aria,
-                name,
-                text,
-                href));
+                tag, id, testId, role, aria, name, text, href));
     }
 
     private static string BuildRecorderScript(int maxEvents, int scrollDebounceMs)
@@ -357,6 +387,7 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
   const state = {
     events: [],
     maxEvents: {{maxEvents}},
+    fallbackCount: 0,
     scrollTimers: new Map(),
     startedAt: performance.now()
   };
@@ -364,36 +395,35 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
   const cleanText = (value, limit = 180) =>
     String(value || '').replace(/\s+/g, ' ').trim().slice(0, limit);
 
+  const rootElement = () =>
+    document.scrollingElement || document.documentElement || document.body || null;
+
   const pageState = () => {
-    const root = document.scrollingElement || document.documentElement;
+    const root = rootElement();
     return {
       url: location.href,
       title: document.title || '',
-      scrollX: window.scrollX || root.scrollLeft || 0,
-      scrollY: window.scrollY || root.scrollTop || 0,
-      documentWidth: root.scrollWidth || 0,
-      documentHeight: root.scrollHeight || 0,
-      viewportWidth: innerWidth || document.documentElement.clientWidth || 0,
-      viewportHeight: innerHeight || document.documentElement.clientHeight || 0
+      scrollX: window.scrollX || root?.scrollLeft || 0,
+      scrollY: window.scrollY || root?.scrollTop || 0,
+      documentWidth: root?.scrollWidth || 0,
+      documentHeight: root?.scrollHeight || 0,
+      viewportWidth: innerWidth || document.documentElement?.clientWidth || 0,
+      viewportHeight: innerHeight || document.documentElement?.clientHeight || 0
     };
   };
 
-  const targetInfo = (input) => {
+  const targetInfo = input => {
     let el = input;
-    if (el === document || el === window) el = document.scrollingElement || document.documentElement;
+    if (el === document || el === window) el = rootElement();
     if (!(el instanceof Element)) return null;
 
     const rect = el.getBoundingClientRect();
-    const role = el.getAttribute('role') || '';
-    const ariaLabel = el.getAttribute('aria-label') || '';
-    const testId = el.getAttribute('data-testid') || el.getAttribute('data-test-id') || el.getAttribute('data-test') || '';
-
     return {
       tag: (el.tagName || '').toUpperCase(),
       id: el.id || '',
-      testId,
-      role,
-      ariaLabel,
+      testId: el.getAttribute('data-testid') || el.getAttribute('data-test-id') || el.getAttribute('data-test') || '',
+      role: el.getAttribute('role') || '',
+      ariaLabel: el.getAttribute('aria-label') || '',
       name: el.getAttribute('name') || '',
       text: cleanText(el.innerText || el.textContent || ''),
       href: el.href || el.getAttribute('href') || '',
@@ -406,15 +436,28 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
     };
   };
 
-  const push = (event) => {
-    if (state.events.length >= state.maxEvents) return;
-    state.events.push({
+  const push = event => {
+    const full = {
       ...event,
       time: performance.now(),
       page: pageState()
-    });
+    };
+
+    let delivered = false;
+    try {
+      if (typeof window.{{BindingName}} === 'function') {
+        window.{{BindingName}}(JSON.stringify(full));
+        delivered = true;
+      }
+    } catch {}
+
+    if (!delivered && state.events.length < state.maxEvents) {
+      state.events.push(full);
+      state.fallbackCount++;
+    }
   };
 
+  window[key] = state;
   push({ kind: 'page', trusted: true, isDocumentScroller: true });
 
   document.addEventListener('click', event => {
@@ -431,11 +474,9 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
   }, true);
 
   document.addEventListener('scroll', event => {
-    const rawTarget = event.target === document
-      ? (document.scrollingElement || document.documentElement)
-      : event.target;
-
-    const isDocumentScroller = rawTarget === document.scrollingElement ||
+    const root = rootElement();
+    const rawTarget = event.target === document ? root : event.target;
+    const isDocumentScroller = rawTarget === root ||
                                rawTarget === document.documentElement ||
                                rawTarget === document.body;
 
@@ -446,25 +487,24 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
     const timer = setTimeout(() => {
       state.scrollTimers.delete(rawTarget);
       const el = rawTarget instanceof Element ? rawTarget : null;
-      const root = document.scrollingElement || document.documentElement;
+      const currentRoot = rootElement();
       push({
         kind: 'scroll',
         trusted: true,
         target: targetInfo(el),
         isDocumentScroller,
-        scrollX: isDocumentScroller ? (window.scrollX || root.scrollLeft || 0) : (el?.scrollLeft || 0),
-        scrollY: isDocumentScroller ? (window.scrollY || root.scrollTop || 0) : (el?.scrollTop || 0),
-        scrollWidth: isDocumentScroller ? root.scrollWidth : (el?.scrollWidth || 0),
-        scrollHeight: isDocumentScroller ? root.scrollHeight : (el?.scrollHeight || 0),
-        clientWidth: isDocumentScroller ? root.clientWidth : (el?.clientWidth || 0),
-        clientHeight: isDocumentScroller ? root.clientHeight : (el?.clientHeight || 0)
+        scrollX: isDocumentScroller ? (window.scrollX || currentRoot?.scrollLeft || 0) : (el?.scrollLeft || 0),
+        scrollY: isDocumentScroller ? (window.scrollY || currentRoot?.scrollTop || 0) : (el?.scrollTop || 0),
+        scrollWidth: isDocumentScroller ? (currentRoot?.scrollWidth || 0) : (el?.scrollWidth || 0),
+        scrollHeight: isDocumentScroller ? (currentRoot?.scrollHeight || 0) : (el?.scrollHeight || 0),
+        clientWidth: isDocumentScroller ? (currentRoot?.clientWidth || 0) : (el?.clientWidth || 0),
+        clientHeight: isDocumentScroller ? (currentRoot?.clientHeight || 0) : (el?.clientHeight || 0)
       });
     }, {{scrollDebounceMs}});
 
     state.scrollTimers.set(rawTarget, timer);
   }, true);
 
-  window[key] = state;
   return { installed: true, maxEvents: state.maxEvents };
 })()
 """;
@@ -491,24 +531,18 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
             $"recipe-{DateTime.Now:yyyyMMdd-HHmmss-fff}-p{Environment.ProcessId}");
     }
 
-    private static string GetString(JsonElement item, string name)
-    {
-        return item.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.String
+    private static string GetString(JsonElement item, string name) =>
+        item.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.String
             ? value.GetString() ?? string.Empty
             : string.Empty;
-    }
 
-    private static double GetDouble(JsonElement item, string name)
-    {
-        return item.TryGetProperty(name, out JsonElement value) && value.TryGetDouble(out double parsed)
+    private static double GetDouble(JsonElement item, string name) =>
+        item.TryGetProperty(name, out JsonElement value) && value.TryGetDouble(out double parsed)
             ? parsed
             : 0;
-    }
 
-    private static bool GetBool(JsonElement item, string name)
-    {
-        return item.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.True;
-    }
+    private static bool GetBool(JsonElement item, string name) =>
+        item.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.True;
 
     public async ValueTask DisposeAsync()
     {
@@ -517,6 +551,7 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
             await StopAndWriteAsync();
         }
 
+        client.CdpEventReceived -= OnCdpEvent;
         pollCts.Dispose();
     }
 }

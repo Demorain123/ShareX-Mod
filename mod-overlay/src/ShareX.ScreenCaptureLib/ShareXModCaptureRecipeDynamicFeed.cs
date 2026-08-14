@@ -17,6 +17,8 @@ namespace ShareX.ScreenCaptureLib;
 
 internal static class ShareXModCaptureRecipeDynamicFeed
 {
+    private const int ImageSnapshotEveryCapturedRanges = 2;
+
     private sealed record Metrics(double CssWidth, double CssHeight, double ViewportHeight, double DipPerCss);
     private sealed record Part(string File, double StartY, double EndY, int Width, int Height);
     private sealed record GrowthPass(int Pass, double BeforeHeight, double AfterHeight, bool Grew, int StableWaitMs);
@@ -104,10 +106,23 @@ internal static class ShareXModCaptureRecipeDynamicFeed
             List<Part> parts = new();
             List<GrowthPass> growthPasses = new();
 
+            string pageKey = recipe.Steps
+                .FirstOrDefault(x => x.Kind == ShareXModCaptureRecipeStepKind.PageCheckpoint)?.PageKey ??
+                recipe.Steps.FirstOrDefault()?.PageKey ??
+                "dynamic-feed";
+
+            ShareXModDynamicFeedRollingGuard.Session rollingGuard =
+                ShareXModDynamicFeedRollingGuard.Create(
+                    client,
+                    settings,
+                    directory,
+                    pageKey);
+
             double y = startY;
             double knownEnd = Math.Min(initial.CssHeight, maxCssHeight);
             int steps = 0;
             int unchangedPasses = 0;
+            int imageSnapshotIndex = 0;
             bool stoppedByUser = false;
             bool truncated = false;
             string stopReason = "dynamic-feed-complete";
@@ -126,6 +141,7 @@ internal static class ShareXModCaptureRecipeDynamicFeed
 
                 if (y < knownEnd - 1)
                 {
+                    double rangeStart = y;
                     double cut = Math.Min(knownEnd, y + tileHeight);
                     double height = cut - y;
                     if (height <= 1)
@@ -194,11 +210,32 @@ internal static class ShareXModCaptureRecipeDynamicFeed
                     using (MemoryStream stream = new(png, writable: false))
                     using (Bitmap bitmap = new(stream))
                     {
-                        parts.Add(new Part(file, y, actualEnd, bitmap.Width, bitmap.Height));
+                        parts.Add(new Part(file, rangeStart, actualEnd, bitmap.Width, bitmap.Height));
                     }
+
+                    await rollingGuard.RecordAsync(file, rangeStart, actualEnd);
 
                     y = actualEnd;
                     steps++;
+
+                    ShareXModDynamicFeedGuardPassResult guardPass =
+                        await rollingGuard.VerifyDueAsync(
+                            y,
+                            flush: false,
+                            shouldStop);
+                    ApplyGuardReplacements(directory, parts, guardPass.Replacements);
+
+                    if (settings.DynamicFeedCollectImages &&
+                        parts.Count > 0 &&
+                        parts.Count % ImageSnapshotEveryCapturedRanges == 0)
+                    {
+                        await ShareXModDynamicFeedImageCollector.CollectAsync(
+                            client,
+                            settings,
+                            directory,
+                            $"range_{++imageSnapshotIndex:D5}_y_{Math.Round(y):0}");
+                    }
+
                     continue;
                 }
 
@@ -234,6 +271,13 @@ internal static class ShareXModCaptureRecipeDynamicFeed
 
                 steps++;
 
+                ShareXModDynamicFeedGuardPassResult bottomGuardPass =
+                    await rollingGuard.VerifyDueAsync(
+                        y,
+                        flush: false,
+                        shouldStop);
+                ApplyGuardReplacements(directory, parts, bottomGuardPass.Replacements);
+
                 if (grew)
                 {
                     knownEnd = Math.Min(Math.Max(knownEnd, afterHeight), maxCssHeight);
@@ -264,6 +308,37 @@ internal static class ShareXModCaptureRecipeDynamicFeed
                 stopReason = "dynamic-feed-max-css-height";
                 truncated = true;
             }
+
+            // Before the DOM can be released, verify/repair every unsealed recent range and take one
+            // last native-image snapshot. A manual Stop still performs this quality flush.
+            ShareXModDynamicFeedGuardPassResult finalGuardPass =
+                await rollingGuard.VerifyDueAsync(
+                    y,
+                    flush: true,
+                    shouldStop: null);
+            ApplyGuardReplacements(directory, parts, finalGuardPass.Replacements);
+
+            if (settings.DynamicFeedCollectImages)
+            {
+                await ShareXModDynamicFeedImageCollector.CollectAsync(
+                    client,
+                    settings,
+                    directory,
+                    $"final_y_{Math.Round(y):0}");
+            }
+
+            if (finalGuardPass.UnresolvedCount > 0)
+            {
+                truncated = true;
+                stopReason = stopReason == "manual-stop"
+                    ? "manual-stop-with-unresolved-ranges"
+                    : "dynamic-feed-guard-unresolved";
+            }
+
+            parts = parts
+                .OrderBy(x => x.StartY)
+                .ThenBy(x => x.EndY)
+                .ToList();
 
             if (parts.Count == 0)
             {
@@ -359,6 +434,41 @@ internal static class ShareXModCaptureRecipeDynamicFeed
         catch
         {
             return null;
+        }
+    }
+
+    private static void ApplyGuardReplacements(
+        string directory,
+        List<Part> parts,
+        IReadOnlyList<ShareXModDynamicFeedGuardReplacement> replacements)
+    {
+        foreach (ShareXModDynamicFeedGuardReplacement replacement in replacements)
+        {
+            int index = parts.FindIndex(x =>
+                string.Equals(x.File, replacement.OldFile, StringComparison.OrdinalIgnoreCase));
+            if (index < 0)
+            {
+                continue;
+            }
+
+            ShareXModDynamicFeedRollingGuard.ArchiveReplacedPart(
+                directory,
+                replacement.OldFile);
+
+            parts.RemoveAt(index);
+            foreach (ShareXModDynamicFeedGuardReplacementPart item in replacement.NewParts
+                         .OrderBy(x => x.StartY)
+                         .ThenBy(x => x.EndY))
+            {
+                parts.Insert(
+                    index++,
+                    new Part(
+                        item.File,
+                        item.StartY,
+                        item.EndY,
+                        item.Width,
+                        item.Height));
+            }
         }
     }
 

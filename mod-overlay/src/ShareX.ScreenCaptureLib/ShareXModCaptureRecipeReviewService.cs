@@ -1,4 +1,4 @@
-#nullable enable
+﻿#nullable enable
 
 using System;
 using System.Collections.Generic;
@@ -79,7 +79,7 @@ internal static class ShareXModCaptureRecipeReviewService
                           ShareXModCaptureRecipeStepKind.HorizontalSweep);
 
             int pages = recipe.Pages
-                .Select(ShareXModCaptureRecipeCompiler.PageKey)
+                .Select(ShareXModRecipePageIdentity.FromState)
                 .Distinct(StringComparer.Ordinal)
                 .Count();
 

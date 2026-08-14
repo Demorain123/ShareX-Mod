@@ -1,4 +1,4 @@
-#nullable enable
+﻿#nullable enable
 
 using System;
 using System.Collections.Generic;
@@ -62,7 +62,7 @@ internal static class ShareXModCaptureRecipePageLoopPlanner
         }
 
         int distinctPages = recipe.Pages
-            .Select(ShareXModCaptureRecipeCompiler.PageKey)
+            .Select(ShareXModRecipePageIdentity.FromState)
             .Distinct(StringComparer.Ordinal)
             .Count();
 

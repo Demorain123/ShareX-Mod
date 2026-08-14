@@ -44,11 +44,13 @@ internal sealed class ShareXModCaptureQualitySession : IDisposable
     {
         this.captureRectangle = captureRectangle;
         directory = CreateSessionDirectory();
+        ShareXModCaptureSessionContext.RegisterComponent("quality", directory);
 
         WriteJson(Path.Combine(directory, "capture-map.json"), new
         {
             format = "ShareX-Mod Capture Map",
-            version = "0.4.2-dev",
+            version = "0.4.4-dev",
+            sessionId = ShareXModCaptureSessionContext.CurrentSessionId,
             final = false,
             created = DateTimeOffset.Now,
             captureRectangle = new
@@ -210,7 +212,8 @@ internal sealed class ShareXModCaptureQualitySession : IDisposable
         WriteJson(Path.Combine(directory, "capture-map.json"), new
         {
             format = "ShareX-Mod Capture Map",
-            version = "0.4.2-dev",
+            version = "0.4.4-dev",
+            sessionId = ShareXModCaptureSessionContext.CurrentSessionId,
             final = true,
             created = DateTimeOffset.Now,
             completed = DateTimeOffset.Now,

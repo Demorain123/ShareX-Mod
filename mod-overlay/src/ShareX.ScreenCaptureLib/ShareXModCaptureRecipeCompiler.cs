@@ -18,17 +18,18 @@ internal static class ShareXModCaptureRecipeCompiler
             .OrderBy(x => x.Sequence)
             .ToList();
 
-        List<ShareXModRecipePageState> pages = ordered
-            .Where(x => x.Page != null)
+        List<IGrouping<string, ShareXModRecipeRawEvent>> pageGroups = ordered
             .GroupBy(x => PageKey(x.Page), StringComparer.Ordinal)
+            .ToList();
+
+        List<ShareXModRecipePageState> pages = pageGroups
             .Select(g => g.First().Page)
             .ToList();
 
         List<ShareXModCaptureRecipeStep> steps = new();
         int stepIndex = 0;
 
-        foreach (IGrouping<string, ShareXModRecipeRawEvent> group in ordered
-                     .GroupBy(x => PageKey(x.Page), StringComparer.Ordinal))
+        foreach (IGrouping<string, ShareXModRecipeRawEvent> group in pageGroups)
         {
             List<ShareXModRecipeRawEvent> pageEvents = group.ToList();
             ShareXModRecipePageState page = pageEvents[0].Page;
@@ -54,11 +55,10 @@ internal static class ShareXModCaptureRecipeCompiler
                 ref stepIndex);
         }
 
+        bool dynamicFeed = DetectDynamicFeed(ordered, settings);
         ShareXModRecipePageState? firstPage = pages.FirstOrDefault();
-        ShareXModRecipePageState? lastPage = pages.LastOrDefault();
-
         double startY = firstPage?.ScrollY ?? 0;
-        double stopY = ordered.LastOrDefault()?.ScrollY ?? lastPage?.ScrollY ?? startY;
+        double stopY = ordered.LastOrDefault()?.ScrollY ?? pages.LastOrDefault()?.ScrollY ?? startY;
 
         ShareXModCaptureRecipeBoundary startBoundary = new(
             "recorded-start-position",
@@ -67,26 +67,54 @@ internal static class ShareXModCaptureRecipeCompiler
             null,
             null,
             null,
-            "Begin from the document position where recipe recording started.");
+            "Begin from the document position where recipe recording started; full-page capture is not implied.");
+
+        int? maxSteps = settings.CaptureBoundaryMaxSteps > 0
+            ? settings.CaptureBoundaryMaxSteps
+            : dynamicFeed
+                ? Math.Clamp(settings.CaptureRecipeDynamicFeedMaxSteps, 1, 100000)
+                : null;
+
+        int? maxDuration = settings.CaptureBoundaryMaxDurationSeconds > 0
+            ? settings.CaptureBoundaryMaxDurationSeconds
+            : dynamicFeed
+                ? Math.Clamp(settings.CaptureRecipeDynamicFeedMaxDurationSeconds, 1, 86400)
+                : null;
+
+        int? maxUnchanged = settings.CaptureBoundaryMaxUnchangedPasses > 0
+            ? settings.CaptureBoundaryMaxUnchangedPasses
+            : dynamicFeed
+                ? Math.Clamp(settings.CaptureRecipeDynamicFeedMaxUnchangedPasses, 1, 100)
+                : null;
 
         ShareXModCaptureRecipeBoundary stopBoundary = new(
-            "manual-or-configured-condition",
+            dynamicFeed ? "dynamic-feed" : "manual-or-configured-condition",
             stopY,
             null,
-            settings.CaptureBoundaryMaxSteps > 0
-                ? settings.CaptureBoundaryMaxSteps
-                : null,
-            settings.CaptureBoundaryMaxDurationSeconds > 0
-                ? settings.CaptureBoundaryMaxDurationSeconds
-                : null,
-            settings.CaptureBoundaryMaxUnchangedPasses > 0
-                ? settings.CaptureBoundaryMaxUnchangedPasses
-                : null,
-            "Manual Start/Stop remains authoritative; optional configured limits are preserved as safety conditions.");
+            maxSteps,
+            maxDuration,
+            maxUnchanged,
+            dynamicFeed
+                ? "Continue the same growing feed until manual Stop or a bounded no-new-content/time/step condition is reached."
+                : "Manual Start/Stop remains authoritative; optional configured limits are safety conditions.");
+
+        List<string> notes = new()
+        {
+            "Recipe steps describe capture intent, not raw mouse/keyboard replay.",
+            "Every page starts with at least the demonstrated visible viewport as a capture range.",
+            "Repeated vertical scrolling is normalized into content coverage ranges.",
+            "Element actions keep semantic locators and geometry only as fallback evidence.",
+            "Replay must re-resolve locators and verify post-action page state before continuing."
+        };
+
+        if (dynamicFeed)
+        {
+            notes.Add("The demonstration looked like a growing infinite feed; the recipe uses bounded dynamic-feed continuation rather than inventing page numbers.");
+        }
 
         return new ShareXModCaptureRecipe(
             "ShareX-Mod Capture Recipe",
-            "0.6.0-dev",
+            "0.6.2-dev",
             ShareXModCaptureSessionContext.CurrentSessionId,
             DateTimeOffset.Now,
             "semantic-user-demonstration",
@@ -95,13 +123,7 @@ internal static class ShareXModCaptureRecipeCompiler
             pages,
             steps,
             ordered.Count,
-            new[]
-            {
-                "Recipe steps describe capture intent, not raw mouse/keyboard replay.",
-                "Repeated vertical scrolling is normalized into content coverage ranges.",
-                "Element actions keep semantic locators and geometry only as fallback evidence.",
-                "Replay must re-resolve locators and verify post-action page state before continuing."
-            });
+            notes.ToArray());
     }
 
     private static void CompilePageEvents(
@@ -111,9 +133,10 @@ internal static class ShareXModCaptureRecipeCompiler
         List<ShareXModCaptureRecipeStep> steps,
         ref int stepIndex)
     {
-        double? verticalMin = null;
-        double? verticalMax = null;
-        List<string> verticalEvidence = new();
+        ShareXModRecipePageState initial = events[0].Page;
+        double? verticalMin = initial.ScrollY;
+        double? verticalMax = initial.ScrollY + Math.Max(1, initial.ViewportHeight);
+        List<string> verticalEvidence = new() { "recorded-visible-viewport" };
 
         void FlushVertical()
         {
@@ -148,11 +171,11 @@ internal static class ShareXModCaptureRecipeCompiler
 
         foreach (ShareXModRecipeRawEvent item in events)
         {
-            if (item.Kind.Equals("scroll", StringComparison.OrdinalIgnoreCase) &&
-                item.IsDocumentScroller)
+            if (item.Kind.Equals("scroll", StringComparison.OrdinalIgnoreCase) && item.IsDocumentScroller)
             {
                 double top = item.ScrollY;
-                double bottom = item.ScrollY + Math.Max(1, item.ClientHeight);
+                double viewport = item.ClientHeight > 0 ? item.ClientHeight : item.Page.ViewportHeight;
+                double bottom = item.ScrollY + Math.Max(1, viewport);
 
                 verticalMin = verticalMin == null ? top : Math.Min(verticalMin.Value, top);
                 verticalMax = verticalMax == null ? bottom : Math.Max(verticalMax.Value, bottom);
@@ -219,10 +242,62 @@ internal static class ShareXModCaptureRecipeCompiler
                     kind == ShareXModCaptureRecipeStepKind.NextPage
                         ? "stop-and-ask-if-navigation-unverified"
                         : "skip-and-report-if-locator-missing"));
+
+                verticalMin = item.Page.ScrollY;
+                verticalMax = item.Page.ScrollY + Math.Max(1, item.Page.ViewportHeight);
+                verticalEvidence.Add("post-action-viewport");
             }
         }
 
         FlushVertical();
+    }
+
+    private static bool DetectDynamicFeed(
+        List<ShareXModRecipeRawEvent> events,
+        ShareXModV04Settings settings)
+    {
+        if (!settings.CaptureRecipeInferDynamicFeed)
+        {
+            return false;
+        }
+
+        if (events.Select(x => PageKey(x.Page)).Distinct(StringComparer.Ordinal).Count() != 1)
+        {
+            return false;
+        }
+
+        if (events.Any(x =>
+                x.Kind.Equals("click", StringComparison.OrdinalIgnoreCase) &&
+                x.Target != null &&
+                LooksLikeNextPage(x.Target)))
+        {
+            return false;
+        }
+
+        List<ShareXModRecipeRawEvent> scrolls = events
+            .Where(x => x.Kind.Equals("scroll", StringComparison.OrdinalIgnoreCase) && x.IsDocumentScroller)
+            .ToList();
+
+        if (scrolls.Count < 3)
+        {
+            return false;
+        }
+
+        double minHeight = scrolls.Min(x => Math.Max(x.ScrollHeight, x.Page.DocumentHeight));
+        double maxHeight = scrolls.Max(x => Math.Max(x.ScrollHeight, x.Page.DocumentHeight));
+        double growth = maxHeight - minHeight;
+
+        if (growth < Math.Clamp(settings.CaptureRecipeDynamicFeedGrowthThresholdCss, 32, 10000))
+        {
+            return false;
+        }
+
+        ShareXModRecipeRawEvent last = scrolls[^1];
+        double viewport = last.ClientHeight > 0 ? last.ClientHeight : last.Page.ViewportHeight;
+        double documentHeight = Math.Max(last.ScrollHeight, last.Page.DocumentHeight);
+        double remaining = documentHeight - (last.ScrollY + viewport);
+
+        return remaining <= Math.Max(96, viewport * 0.35);
     }
 
     private static bool LooksLikeNextPage(ShareXModRecipeLocator locator)
@@ -267,7 +342,7 @@ internal static class ShareXModCaptureRecipeCompiler
         return Convert.ToHexString(hash.AsSpan(0, 12)).ToLowerInvariant();
     }
 
-    private static string PageKey(ShareXModRecipePageState page)
+    internal static string PageKey(ShareXModRecipePageState page)
     {
         string basis = page.Url.Split('#')[0];
         byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(basis));

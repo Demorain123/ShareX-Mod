@@ -45,6 +45,12 @@ internal sealed class ShareXModV04Settings
     public int CaptureRecipeActionTimeoutMs { get; set; } = 8000;
     public int CaptureRecipeMaxNavigationCount { get; set; } = 100;
 
+    public bool CaptureRecipeInferDynamicFeed { get; set; } = true;
+    public double CaptureRecipeDynamicFeedGrowthThresholdCss { get; set; } = 120;
+    public int CaptureRecipeDynamicFeedMaxSteps { get; set; } = 400;
+    public int CaptureRecipeDynamicFeedMaxDurationSeconds { get; set; } = 1200;
+    public int CaptureRecipeDynamicFeedMaxUnchangedPasses { get; set; } = 4;
+
     public bool RepairPlanEnabled { get; set; } = true;
     public int RepairPlanMarginPx { get; set; } = 256;
     public int RepairPlanMergeGapPx { get; set; } = 96;

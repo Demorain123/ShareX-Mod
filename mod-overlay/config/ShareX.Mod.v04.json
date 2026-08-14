@@ -50,6 +50,11 @@
   "captureRecipePageLoopImageMaxPerPage": 40,
   "captureRecipeAdaptiveTemplateEnabled": true,
   "captureRecipeAdaptiveTemplateMinSimilarity": 0.78,
+  "captureRecipeTemplateRouterEnabled": true,
+  "captureRecipeTemplateRouterMaxFamilies": 8,
+  "captureRecipeTemplateRouterMinSimilarity": 0.78,
+  "captureRecipeTemplateRouterMinSelectionScore": 0.55,
+  "captureRecipeTemplateRouterMinUniquenessGap": 0.08,
 
   "captureRecipeInferDynamicFeed": true,
   "captureRecipeDynamicFeedGrowthThresholdCss": 120,

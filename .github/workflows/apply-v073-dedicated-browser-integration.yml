@@ -1,0 +1,159 @@
+name: Apply ShareX-Mod v0.7.3 dedicated browser integration once
+
+on:
+  push:
+    branches:
+      - "mod/robust-scrolling-v0.1"
+    paths:
+      - ".github/workflows/apply-v073-dedicated-browser-integration.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout overlay branch
+        uses: actions/checkout@v6
+        with:
+          ref: mod/robust-scrolling-v0.1
+          fetch-depth: 0
+
+      - name: Integrate dedicated Capture Browser provider
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          function Replace-Required {
+            param([string]$Path,[string]$Old,[string]$New,[string]$Marker)
+            $text = [IO.File]::ReadAllText($Path)
+            if ($text.Contains($Marker)) { return }
+            if (-not $text.Contains($Old)) { throw "Anchor '$Marker' missing in $Path" }
+            $text = $text.Replace($Old,$New)
+            [IO.File]::WriteAllText($Path,$text,[Text.UTF8Encoding]::new($true))
+          }
+
+          $brokerPath = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModChromeConnectionBroker.cs"
+
+          Replace-Required $brokerPath @'
+internal enum ShareXModChromeConnectionProviderKind
+{
+    ConfiguredEndpoint,
+    EnvironmentEndpoint,
+    LocalDiscovery
+}
+'@ @'
+internal enum ShareXModChromeConnectionProviderKind
+{
+    DedicatedProfile,
+    ConfiguredEndpoint,
+    EnvironmentEndpoint,
+    LocalDiscovery
+}
+'@ 'DedicatedProfile,'
+
+          Replace-Required $brokerPath @'
+        Add(ShareXModChromeConnectionProviderKind.ConfiguredEndpoint, settings.ChromeCdpEndpoint);
+        Add(
+            ShareXModChromeConnectionProviderKind.EnvironmentEndpoint,
+            Environment.GetEnvironmentVariable("SHAREX_MOD_CDP_ENDPOINT"));
+'@ @'
+        Add(
+            ShareXModChromeConnectionProviderKind.DedicatedProfile,
+            ShareXModChromeDedicatedProfileLauncher.TryGetActiveEndpoint(settings));
+
+        Add(ShareXModChromeConnectionProviderKind.ConfiguredEndpoint, settings.ChromeCdpEndpoint);
+        Add(
+            ShareXModChromeConnectionProviderKind.EnvironmentEndpoint,
+            Environment.GetEnvironmentVariable("SHAREX_MOD_CDP_ENDPOINT"));
+'@ 'TryGetActiveEndpoint(settings)'
+
+          $settingsPath = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModV04Settings.cs"
+          $settings = [IO.File]::ReadAllText($settingsPath)
+          if (-not $settings.Contains("ChromeDedicatedProfileDirectory")) {
+            $anchor = '    public bool ChromeAllowNonLoopbackCdp { get; set; } = false;'
+            if (-not $settings.Contains($anchor)) { throw "Dedicated browser settings anchor missing." }
+            $block = @'
+    public bool ChromeAllowNonLoopbackCdp { get; set; } = false;
+    public string ChromeDedicatedProfileDirectory { get; set; } = "ShareX-Mod\\ChromeCaptureProfile";
+    public string ChromeExecutablePath { get; set; } = string.Empty;
+    public int ChromeDedicatedProfileLaunchTimeoutMs { get; set; } = 8000;
+'@
+            $settings = $settings.Replace($anchor,$block)
+            [IO.File]::WriteAllText($settingsPath,$settings,[Text.UTF8Encoding]::new($true))
+          }
+
+          $configPath = "mod-overlay/config/ShareX.Mod.v04.json"
+          $config = [IO.File]::ReadAllText($configPath)
+          if (-not $config.Contains('"chromeDedicatedProfileDirectory"')) {
+            $anchor = '  "chromeAllowNonLoopbackCdp": false,'
+            if (-not $config.Contains($anchor)) { throw "Dedicated browser config anchor missing." }
+            $block = @'
+  "chromeAllowNonLoopbackCdp": false,
+  "chromeDedicatedProfileDirectory": "ShareX-Mod\\ChromeCaptureProfile",
+  "chromeExecutablePath": "",
+  "chromeDedicatedProfileLaunchTimeoutMs": 8000,
+'@
+            $config = $config.Replace($anchor,$block)
+            [IO.File]::WriteAllText($configPath,$config,[Text.UTF8Encoding]::new($false))
+          }
+
+          $window = "ShareX.ScreenCaptureLib/Presentation/ScrollingCapture/ScrollingCaptureWindow.axaml.cs"
+          $windowText = [IO.File]::ReadAllText($window)
+          if ($windowText.Contains("ShareXModCaptureModeUiV071.Attach(this);")) {
+            $windowText = $windowText.Replace(
+              "ShareXModCaptureModeUiV071.Attach(this);",
+              "ShareXModCaptureModeUiV073.Attach(this);")
+          }
+          elseif ($windowText.Contains("ShareXModCaptureModeUi.Attach(this);")) {
+            $windowText = $windowText.Replace(
+              "ShareXModCaptureModeUi.Attach(this);",
+              "ShareXModCaptureModeUiV073.Attach(this);")
+          }
+          elseif (-not $windowText.Contains("ShareXModCaptureModeUiV073.Attach(this);")) {
+            $anchor = "        InitializeComponent();"
+            if (-not $windowText.Contains($anchor)) { throw "ScrollingCaptureWindow UI anchor missing." }
+            $windowText = $windowText.Replace(
+              $anchor,
+              $anchor + "`n        ShareXModCaptureModeUiV073.Attach(this);")
+          }
+          [IO.File]::WriteAllText($window,$windowText,[Text.UTF8Encoding]::new($true))
+
+          foreach ($workflowPath in @(
+            ".github/workflows/validate-mod-v071.yml"
+          )) {
+            if (-not (Test-Path $workflowPath)) { continue }
+            $wf = [IO.File]::ReadAllText($workflowPath)
+            if ($wf -match '(?ms)^on:\s*\n\s*push:') {
+              $wf = [regex]::Replace(
+                $wf,
+                '(?ms)^on:\s*\n.*?^permissions:',
+                "on:`n  workflow_dispatch:`n`npermissions:",
+                1)
+              [IO.File]::WriteAllText($workflowPath,$wf,[Text.UTF8Encoding]::new($false))
+            }
+          }
+
+          [IO.File]::WriteAllText("mod-overlay/VERSION","0.7.3-dev`n",[Text.UTF8Encoding]::new($false))
+          git diff --check
+
+      - name: Commit v0.7.3 integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "sharex-mod-ci"
+          git config user.email "sharex-mod-ci@users.noreply.github.com"
+          git add \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModChromeConnectionBroker.cs \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModV04Settings.cs \
+            mod-overlay/config/ShareX.Mod.v04.json \
+            ShareX.ScreenCaptureLib/Presentation/ScrollingCapture/ScrollingCaptureWindow.axaml.cs \
+            .github/workflows/validate-mod-v071.yml \
+            mod-overlay/VERSION
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+            exit 0
+          fi
+          git commit -m "feat(v0.7.3): integrate extensionless dedicated Capture Browser provider"
+          git push origin HEAD:mod/robust-scrolling-v0.1

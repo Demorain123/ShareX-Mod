@@ -19,6 +19,8 @@ internal sealed class ShareXModChromeEnhancedSession : IAsyncDisposable
     private readonly Rectangle selectedRectangle;
     private ShareXModChromeSemanticMapResult? startSemanticMap;
     private ShareXModChromeRepairCaptureResult? repairCapture;
+    private ShareXModCaptureRecipeRecorder? recipeRecorder;
+    private bool recipeFinalized;
 
     public ShareXModChromeTarget Target { get; }
     public string PreparationSummary { get; }
@@ -90,6 +92,11 @@ internal sealed class ShareXModChromeEnhancedSession : IAsyncDisposable
                     selectedRectangle,
                     "start");
 
+            session.recipeRecorder =
+                await ShareXModCaptureRecipeRecorder.StartAsync(
+                    client,
+                    settings);
+
             return session;
         }
         catch
@@ -101,6 +108,18 @@ internal sealed class ShareXModChromeEnhancedSession : IAsyncDisposable
 
     public async Task FinalizeSemanticCaptureAsync()
     {
+        if (recipeRecorder != null && !recipeFinalized)
+        {
+            try
+            {
+                await recipeRecorder.StopAndWriteAsync();
+                recipeFinalized = true;
+            }
+            catch
+            {
+            }
+        }
+
         ShareXModChromeSemanticMapResult? endSemanticMap = null;
         string? layoutShiftPath = null;
 
@@ -320,6 +339,17 @@ internal sealed class ShareXModChromeEnhancedSession : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        if (recipeRecorder != null)
+        {
+            try
+            {
+                await recipeRecorder.DisposeAsync();
+            }
+            catch
+            {
+            }
+        }
+
         try
         {
             await client.RestorePageAsync();

@@ -22,6 +22,11 @@ internal sealed class ShareXModChromeCdpClient : IAsyncDisposable
 
     public ShareXModChromeTarget? Target { get; private set; }
 
+    // CDP events can arrive between a command and its response. The original client safely
+    // ignored them; Capture Recipe needs a small event tap so Runtime.bindingCalled is not
+    // lost when a demonstrated click immediately navigates away from the old document.
+    public event Action<string, JsonElement>? CdpEventReceived;
+
     public async Task<IReadOnlyList<ShareXModChromeTarget>> ListTargetsAsync(string endpoint, CancellationToken cancellationToken = default)
     {
         using HttpResponseMessage response = await http.GetAsync(endpoint.TrimEnd('/') + "/json/list", cancellationToken);
@@ -185,11 +190,22 @@ internal sealed class ShareXModChromeCdpClient : IAsyncDisposable
 
                 JsonDocument json = JsonDocument.Parse(message.ToArray());
                 message.SetLength(0);
-                if (!json.RootElement.TryGetProperty("id", out JsonElement responseId) || responseId.GetInt32() != id)
+
+                if (!json.RootElement.TryGetProperty("id", out JsonElement responseId))
                 {
+                    DispatchEvent(json.RootElement);
                     json.Dispose();
                     continue;
                 }
+
+                if (responseId.GetInt32() != id)
+                {
+                    // sendLock guarantees one outstanding command from this client, but preserve
+                    // fail-safe behavior if a browser/proxy ever returns an unexpected response.
+                    json.Dispose();
+                    continue;
+                }
+
                 if (json.RootElement.TryGetProperty("error", out JsonElement error))
                 {
                     string text = error.ToString();
@@ -205,8 +221,39 @@ internal sealed class ShareXModChromeCdpClient : IAsyncDisposable
         }
     }
 
+    private void DispatchEvent(JsonElement root)
+    {
+        if (!root.TryGetProperty("method", out JsonElement methodElement))
+        {
+            return;
+        }
+
+        string? method = methodElement.GetString();
+        if (string.IsNullOrWhiteSpace(method))
+        {
+            return;
+        }
+
+        Action<string, JsonElement>? handler = CdpEventReceived;
+        if (handler == null)
+        {
+            return;
+        }
+
+        try
+        {
+            // Clone detaches the event payload from the JsonDocument that the receive loop owns.
+            handler(method, root.Clone());
+        }
+        catch
+        {
+            // Event observers are advisory and must never break command/response delivery.
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
+        CdpEventReceived = null;
         try
         {
             if (socket.State == WebSocketState.Open) await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "ShareX-Mod finished", CancellationToken.None);

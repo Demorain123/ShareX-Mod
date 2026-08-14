@@ -40,14 +40,24 @@ internal static class ShareXModChromeRecipeCaptureEntryV062
 
             await client.ConnectAsync(target);
 
-            // Most constrained topology first. Every multi-page path is separately reviewed and
-            // approved before this entry is reached; null means the topology did not match.
+            // Runner order is deliberate. A strict repeated simple template is cheapest to prove.
+            // Multi-family routing is next and fails closed when no unique family resolves. The
+            // single-family adaptive runner follows, then dynamic feed and finite Recipe fallback.
             ShareXModChromeBackgroundCaptureResult? result =
                 await ShareXModCaptureRecipePageLoopRunnerCurrent.TryRunAsync(
                     client,
                     target,
                     settings,
                     shouldStop);
+
+            if (result == null)
+            {
+                result = await ShareXModCaptureRecipeTemplateRouterRunner.TryRunAsync(
+                    client,
+                    target,
+                    settings,
+                    shouldStop);
+            }
 
             if (result == null)
             {
@@ -84,8 +94,6 @@ internal static class ShareXModChromeRecipeCaptureEntryV062
             {
                 try
                 {
-                    // Page-loop runners preserve resources before each navigation. Do not export
-                    // only the final page again when that per-page collection already exists.
                     if (!ShareXModCaptureRecipePageImageCollector.HasPageLoopCollection(
                             result.DirectoryPath))
                     {
@@ -207,15 +215,10 @@ internal static class ShareXModChromeRecipeCaptureEntryV062
     }
 
     [DllImport("user32.dll", SetLastError = true)]
-    private static extern uint GetWindowThreadProcessId(
-        IntPtr hWnd,
-        out uint lpdwProcessId);
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern int GetWindowText(
-        IntPtr hWnd,
-        StringBuilder lpString,
-        int nMaxCount);
+    private static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern int GetWindowTextLength(IntPtr hWnd);

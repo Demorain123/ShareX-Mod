@@ -41,14 +41,12 @@ internal static class ShareXModCaptureRecipePageLoopReview
                         Converters = { new JsonStringEnumConverter() }
                     });
 
-            if (recipe == null)
-            {
-                throw new InvalidDataException();
-            }
+            if (recipe == null) throw new InvalidDataException();
 
             ShareXModCaptureRecipePageLoopPlan simple =
                 ShareXModCaptureRecipePageLoopPlanner.Build(recipe, settings);
-
+            ShareXModRecipeTemplateRouterPlan router =
+                ShareXModCaptureRecipeTemplateRouter.Build(recipe, settings);
             ShareXModAdaptivePageTemplatePlan adaptive =
                 ShareXModAdaptivePageTemplatePlanner.Build(recipe, settings);
 
@@ -67,6 +65,18 @@ internal static class ShareXModCaptureRecipePageLoopReview
                     simple.CaptureRanges.Count);
             }
 
+            if (router.Candidate)
+            {
+                return new ShareXModPageLoopReviewInfo(
+                    true,
+                    $"router:{router.Reason}; families={router.Families.Count}; demonstrated-pages={router.DemonstratedRepeatablePages}",
+                    approved,
+                    maxPages,
+                    router.Families
+                        .SelectMany(x => x.Steps)
+                        .Count(x => x.Kind == ShareXModCaptureRecipeStepKind.CaptureVerticalRange));
+            }
+
             if (adaptive.Candidate)
             {
                 return new ShareXModPageLoopReviewInfo(
@@ -80,7 +90,7 @@ internal static class ShareXModCaptureRecipePageLoopReview
 
             return new ShareXModPageLoopReviewInfo(
                 false,
-                $"simple={simple.Reason}; adaptive={adaptive.Reason}",
+                $"simple={simple.Reason}; router={router.Reason}; adaptive={adaptive.Reason}",
                 false,
                 maxPages,
                 0);

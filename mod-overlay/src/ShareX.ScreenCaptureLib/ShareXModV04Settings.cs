@@ -27,6 +27,17 @@ internal sealed class ShareXModV04Settings
     public double SettleBlankComplexityThreshold { get; set; } = 2.0;
     public int SettleBlankExtraWaitMs { get; set; } = 500;
 
+    // Capture Boundary keeps the existing manual Start/Stop workflow as the default.
+    // Any numeric limit <= 0 is disabled.
+    public bool CaptureBoundaryEnabled { get; set; } = true;
+    public int CaptureBoundaryMaxSteps { get; set; } = 0;
+    public int CaptureBoundaryMaxDurationSeconds { get; set; } = 0;
+    public long CaptureBoundaryMaxLogicalHeight { get; set; } = 0;
+    public int CaptureBoundaryMaxUnchangedPasses { get; set; } = 0;
+    public bool RepairPlanEnabled { get; set; } = true;
+    public int RepairPlanMarginPx { get; set; } = 256;
+    public int RepairPlanMergeGapPx { get; set; } = 96;
+
     public bool ChromeEnhancedEnabled { get; set; } = false;
     public string ChromeCdpEndpoint { get; set; } = "http://127.0.0.1:9222";
     public bool ChromeExpandDetails { get; set; } = true;

@@ -35,6 +35,11 @@
   "captureRecipeReplayScrollStepCss": 900,
   "captureRecipeActionTimeoutMs": 8000,
   "captureRecipeMaxNavigationCount": 100,
+  "captureRecipeInferDynamicFeed": true,
+  "captureRecipeDynamicFeedGrowthThresholdCss": 120,
+  "captureRecipeDynamicFeedMaxSteps": 400,
+  "captureRecipeDynamicFeedMaxDurationSeconds": 1200,
+  "captureRecipeDynamicFeedMaxUnchangedPasses": 4,
 
   "repairPlanEnabled": true,
   "repairPlanMarginPx": 256,

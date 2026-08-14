@@ -15,5 +15,9 @@
           Link="ShareX.Mod.v04.json"
           CopyToOutputDirectory="PreserveNewest"
           CopyToPublishDirectory="PreserveNewest" />
+    <None Include="$(ShareXModOverlayRoot)VERSION"
+          Link="ShareX.Mod.VERSION.txt"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

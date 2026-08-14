@@ -23,7 +23,7 @@ internal sealed class ShareXModCaptureRecipeReviewWindowV080 : Window
     {
         recipePath = snapshot.RecipePath;
 
-        Title = "Review Capture Recipe";
+        Title = $"Review Capture Recipe · {ShareXModBuildInfo.DisplayName}";
         Width = 820;
         Height = 740;
         MinWidth = 600;
@@ -220,8 +220,7 @@ internal sealed class ShareXModCaptureRecipeReviewWindowV080 : Window
                     snapshot.RecipePath,
                     ShareXModV04Settings.Load());
 
-            ShareXModCaptureRecipeReviewWindowV080 window =
-                new(snapshot, loopInfo);
+            ShareXModCaptureRecipeReviewWindowV080 window = new(snapshot, loopInfo);
             window.Show(owner);
             return true;
         }

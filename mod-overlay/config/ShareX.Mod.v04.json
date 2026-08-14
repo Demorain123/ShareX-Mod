@@ -23,6 +23,17 @@
   "captureBoundaryMaxDurationSeconds": 0,
   "captureBoundaryMaxLogicalHeight": 0,
   "captureBoundaryMaxUnchangedPasses": 0,
+
+  "captureRecipeRecordingEnabled": false,
+  "captureRecipePollIntervalMs": 400,
+  "captureRecipeScrollDebounceMs": 220,
+  "captureRecipeMaxRawEvents": 12000,
+  "captureRecipeMinimumVerticalRangeCss": 160,
+  "captureRecipeAutomationEnabled": false,
+  "captureRecipeReplayScrollStepCss": 900,
+  "captureRecipeActionTimeoutMs": 8000,
+  "captureRecipeMaxNavigationCount": 100,
+
   "repairPlanEnabled": true,
   "repairPlanMarginPx": 256,
   "repairPlanMergeGapPx": 96,

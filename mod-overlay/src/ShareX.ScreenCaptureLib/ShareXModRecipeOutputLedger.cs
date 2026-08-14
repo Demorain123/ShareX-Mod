@@ -21,6 +21,7 @@ internal static class ShareXModRecipeOutputLedger
         int Width,
         int Height,
         int? RecipeStep,
+        int? PageNumber,
         string PageKey,
         double? DocumentStartCss,
         double? DocumentEndCss,
@@ -28,6 +29,7 @@ internal static class ShareXModRecipeOutputLedger
 
     private sealed record CoverageCheck(
         int Step,
+        int? PageNumber,
         string PageKey,
         double RequestedStartCss,
         double RequestedEndCss,
@@ -55,28 +57,38 @@ internal static class ShareXModRecipeOutputLedger
             bool runFailed = false;
             bool runTruncated = result.TruncatedBySafetyLimit;
             string stopReason = result.StoppedByUser ? "manual-stop" : "unknown";
+            string manifestFormat = string.Empty;
 
             if (File.Exists(result.ManifestPath))
             {
                 using JsonDocument manifest = JsonDocument.Parse(File.ReadAllText(result.ManifestPath));
                 JsonElement root = manifest.RootElement;
 
-                if (root.TryGetProperty("failed", out JsonElement failed) && failed.ValueKind == JsonValueKind.True)
+                manifestFormat = root.TryGetProperty("format", out JsonElement formatElement) &&
+                                 formatElement.ValueKind == JsonValueKind.String
+                    ? formatElement.GetString() ?? string.Empty
+                    : string.Empty;
+
+                if (root.TryGetProperty("failed", out JsonElement failed) &&
+                    failed.ValueKind == JsonValueKind.True)
                 {
                     runFailed = true;
                 }
 
-                if (root.TryGetProperty("truncated", out JsonElement truncated) && truncated.ValueKind == JsonValueKind.True)
+                if (root.TryGetProperty("truncated", out JsonElement truncated) &&
+                    truncated.ValueKind == JsonValueKind.True)
                 {
                     runTruncated = true;
                 }
 
-                if (root.TryGetProperty("stopReason", out JsonElement reason) && reason.ValueKind == JsonValueKind.String)
+                if (root.TryGetProperty("stopReason", out JsonElement reason) &&
+                    reason.ValueKind == JsonValueKind.String)
                 {
                     stopReason = reason.GetString() ?? stopReason;
                 }
 
-                if (root.TryGetProperty("parts", out JsonElement parts) && parts.ValueKind == JsonValueKind.Array)
+                if (root.TryGetProperty("parts", out JsonElement parts) &&
+                    parts.ValueKind == JsonValueKind.Array)
                 {
                     int partIndex = 0;
                     foreach (JsonElement item in parts.EnumerateArray())
@@ -84,9 +96,15 @@ internal static class ShareXModRecipeOutputLedger
                         string file = GetString(item, "File", "file");
                         int width = GetInt(item, "Width", "width");
                         int height = GetInt(item, "Height", "height");
-                        if (file.Length == 0 || width <= 0 || height <= 0) continue;
+                        if (file.Length == 0 || width <= 0 || height <= 0)
+                        {
+                            continue;
+                        }
 
-                        int? step = TryGetInt(item, "Step", "step");
+                        int? step =
+                            TryGetInt(item, "Step", "step") ??
+                            TryGetInt(item, "TemplateStep", "templateStep");
+                        int? pageNumber = TryGetInt(item, "PageNumber", "pageNumber");
                         string pageKey = GetString(item, "PageKey", "pageKey");
                         double? startCss = TryGetDouble(item, "StartY", "startY");
                         double? endCss = TryGetDouble(item, "EndY", "endY");
@@ -100,6 +118,7 @@ internal static class ShareXModRecipeOutputLedger
                             width,
                             height,
                             step,
+                            pageNumber,
                             pageKey,
                             startCss,
                             endCss,
@@ -110,66 +129,17 @@ internal static class ShareXModRecipeOutputLedger
                 }
             }
 
-            if (recipe != null)
+            bool pageLoopManifest =
+                manifestFormat.Contains("Page Loop", StringComparison.OrdinalIgnoreCase) ||
+                manifestFormat.Contains("Adaptive Template", StringComparison.OrdinalIgnoreCase);
+
+            if (pageLoopManifest)
             {
-                foreach (ShareXModCaptureRecipeStep step in recipe.Steps.Where(x => x.Kind == ShareXModCaptureRecipeStepKind.CaptureVerticalRange))
-                {
-                    List<OutputRange> captured = ranges
-                        .Where(x => x.Kind == "vertical-content" &&
-                                    x.RecipeStep == step.Index &&
-                                    string.Equals(x.PageKey, step.PageKey, StringComparison.Ordinal))
-                        .Where(x => x.DocumentStartCss.HasValue && x.DocumentEndCss.HasValue)
-                        .OrderBy(x => x.DocumentStartCss)
-                        .ToList();
-
-                    if (captured.Count == 0)
-                    {
-                        coverage.Add(new CoverageCheck(
-                            step.Index,
-                            step.PageKey,
-                            step.StartY,
-                            step.EndY,
-                            0,
-                            0,
-                            Math.Max(0, step.EndY - step.StartY),
-                            false,
-                            new[] { "requested-range-has-no-output-parts" }));
-                        continue;
-                    }
-
-                    double coveredStart = captured.Min(x => x.DocumentStartCss!.Value);
-                    double coveredEnd = captured.Max(x => x.DocumentEndCss!.Value);
-                    double gap = 0;
-                    double cursor = coveredStart;
-
-                    foreach (OutputRange part in captured)
-                    {
-                        double s = part.DocumentStartCss!.Value;
-                        double e = part.DocumentEndCss!.Value;
-                        if (s > cursor + 2) gap += s - cursor;
-                        cursor = Math.Max(cursor, e);
-                    }
-
-                    double edgeMissing =
-                        Math.Max(0, coveredStart - step.StartY) +
-                        Math.Max(0, step.EndY - coveredEnd);
-                    double missing = gap + edgeMissing;
-
-                    List<string> reasons = new();
-                    if (edgeMissing > 2) reasons.Add("requested-range-edge-missing");
-                    if (gap > 2) reasons.Add("gap-between-output-parts");
-
-                    coverage.Add(new CoverageCheck(
-                        step.Index,
-                        step.PageKey,
-                        step.StartY,
-                        step.EndY,
-                        coveredStart,
-                        coveredEnd,
-                        missing,
-                        missing <= 2,
-                        reasons.ToArray()));
-                }
+                BuildPageLoopCoverage(ranges, coverage);
+            }
+            else if (recipe != null)
+            {
+                BuildFiniteRecipeCoverage(recipe, ranges, coverage);
             }
 
             AppendTailPages(
@@ -189,14 +159,15 @@ internal static class ShareXModRecipeOutputLedger
             string finalPng = Path.Combine(result.DirectoryPath, "capture-full.png");
             (int pngWidth, int pngHeight) = TryReadPngDimensions(finalPng);
 
+            bool finalExists = File.Exists(finalPng);
             bool dimensionsPass =
+                finalExists &&
                 pngWidth == result.SourceWidth &&
                 pngHeight > 0 &&
                 Math.Abs((long)pngHeight - outputY) <= 2;
 
             int failedCoverage = coverage.Count(x => !x.Passed);
             bool coveragePass = failedCoverage == 0;
-            bool finalExists = File.Exists(finalPng);
 
             string status =
                 runFailed ? "failed" :
@@ -208,7 +179,8 @@ internal static class ShareXModRecipeOutputLedger
             string confidence = status switch
             {
                 "complete" => "high",
-                "bounded-stop" when result.StoppedByUser || stopReason.Contains("no-new-content", StringComparison.OrdinalIgnoreCase) => "high",
+                "bounded-stop" when result.StoppedByUser ||
+                                    stopReason.Contains("no-new-content", StringComparison.OrdinalIgnoreCase) => "high",
                 "bounded-stop" => "medium",
                 _ => "low"
             };
@@ -223,10 +195,12 @@ internal static class ShareXModRecipeOutputLedger
                 JsonSerializer.Serialize(new
                 {
                     format = "ShareX-Mod Recipe Position Ledger",
-                    version = "0.6.4-dev",
+                    version = "current-integration",
                     sessionId = ShareXModCaptureSessionContext.CurrentSessionId,
                     created = DateTimeOffset.Now,
                     sourceRecipe = settings.CaptureRecipeReplayPath,
+                    sourceManifestFormat = manifestFormat,
+                    coverageModel = pageLoopManifest ? "page-template" : "finite-recipe",
                     finalOutput = new
                     {
                         expectedWidth = result.SourceWidth,
@@ -249,7 +223,7 @@ internal static class ShareXModRecipeOutputLedger
                 JsonSerializer.Serialize(new
                 {
                     format = "ShareX-Mod Recipe Capture Quality Summary",
-                    version = "0.6.4-dev",
+                    version = "current-integration",
                     sessionId = ShareXModCaptureSessionContext.CurrentSessionId,
                     created = DateTimeOffset.Now,
                     status,
@@ -258,6 +232,7 @@ internal static class ShareXModRecipeOutputLedger
                     stoppedByUser = result.StoppedByUser,
                     truncatedBySafetyLimit = runTruncated,
                     runFailed,
+                    coverageModel = pageLoopManifest ? "page-template" : "finite-recipe",
                     requestedVerticalRangeCount = coverage.Count,
                     failedCoverageRangeCount = failedCoverage,
                     outputRangeCount = ranges.Count,
@@ -269,7 +244,7 @@ internal static class ShareXModRecipeOutputLedger
 
             File.WriteAllText(
                 Path.Combine(directory, "recipe-quality-summary.txt"),
-                $"ShareX-Mod Recipe Quality\nStatus: {status}\nConfidence: {confidence}\nStop: {stopReason}\nRequested ranges: {coverage.Count}\nCoverage failures: {failedCoverage}\nOutput ranges: {ranges.Count}\nFinal PNG dimensions: {pngWidth}x{pngHeight}\nLedger height: {outputY}\n",
+                $"ShareX-Mod Recipe Quality\nStatus: {status}\nConfidence: {confidence}\nStop: {stopReason}\nCoverage model: {(pageLoopManifest ? "page-template" : "finite-recipe")}\nRequested ranges: {coverage.Count}\nCoverage failures: {failedCoverage}\nOutput ranges: {ranges.Count}\nFinal PNG dimensions: {pngWidth}x{pngHeight}\nLedger height: {outputY}\n",
                 new UTF8Encoding(false));
 
             return ledgerPath;
@@ -278,6 +253,140 @@ internal static class ShareXModRecipeOutputLedger
         {
             return null;
         }
+    }
+
+    private static void BuildFiniteRecipeCoverage(
+        ShareXModCaptureRecipe recipe,
+        IReadOnlyList<OutputRange> ranges,
+        List<CoverageCheck> coverage)
+    {
+        foreach (ShareXModCaptureRecipeStep step in recipe.Steps.Where(
+                     x => x.Kind == ShareXModCaptureRecipeStepKind.CaptureVerticalRange))
+        {
+            List<OutputRange> captured = ranges
+                .Where(x => x.Kind == "vertical-content" &&
+                            x.RecipeStep == step.Index &&
+                            string.Equals(x.PageKey, step.PageKey, StringComparison.Ordinal))
+                .Where(x => x.DocumentStartCss.HasValue && x.DocumentEndCss.HasValue)
+                .OrderBy(x => x.DocumentStartCss)
+                .ToList();
+
+            if (captured.Count == 0)
+            {
+                coverage.Add(new CoverageCheck(
+                    step.Index,
+                    null,
+                    step.PageKey,
+                    step.StartY,
+                    step.EndY,
+                    0,
+                    0,
+                    Math.Max(0, step.EndY - step.StartY),
+                    false,
+                    new[] { "requested-range-has-no-output-parts" }));
+                continue;
+            }
+
+            CoverageCheck check = BuildCoverageCheck(
+                step.Index,
+                null,
+                step.PageKey,
+                step.StartY,
+                step.EndY,
+                captured,
+                checkRequestedEdges: true);
+            coverage.Add(check);
+        }
+    }
+
+    private static void BuildPageLoopCoverage(
+        IReadOnlyList<OutputRange> ranges,
+        List<CoverageCheck> coverage)
+    {
+        IEnumerable<IGrouping<(int PageNumber, int Step, string PageKey), OutputRange>> groups =
+            ranges
+                .Where(x => x.Kind == "vertical-content" &&
+                            x.PageNumber.HasValue &&
+                            x.RecipeStep.HasValue &&
+                            x.DocumentStartCss.HasValue &&
+                            x.DocumentEndCss.HasValue)
+                .GroupBy(x => (
+                    x.PageNumber!.Value,
+                    x.RecipeStep!.Value,
+                    x.PageKey));
+
+        foreach (IGrouping<(int PageNumber, int Step, string PageKey), OutputRange> group in groups)
+        {
+            List<OutputRange> captured = group
+                .OrderBy(x => x.DocumentStartCss)
+                .ThenBy(x => x.DocumentEndCss)
+                .ToList();
+
+            if (captured.Count == 0)
+            {
+                continue;
+            }
+
+            double start = captured.Min(x => x.DocumentStartCss!.Value);
+            double end = captured.Max(x => x.DocumentEndCss!.Value);
+
+            coverage.Add(BuildCoverageCheck(
+                group.Key.Step,
+                group.Key.PageNumber,
+                group.Key.PageKey,
+                start,
+                end,
+                captured,
+                checkRequestedEdges: false));
+        }
+    }
+
+    private static CoverageCheck BuildCoverageCheck(
+        int step,
+        int? pageNumber,
+        string pageKey,
+        double requestedStart,
+        double requestedEnd,
+        IReadOnlyList<OutputRange> captured,
+        bool checkRequestedEdges)
+    {
+        double coveredStart = captured.Min(x => x.DocumentStartCss!.Value);
+        double coveredEnd = captured.Max(x => x.DocumentEndCss!.Value);
+        double cursor = coveredStart;
+        double gap = 0;
+
+        foreach (OutputRange part in captured.OrderBy(x => x.DocumentStartCss))
+        {
+            double start = part.DocumentStartCss!.Value;
+            double end = part.DocumentEndCss!.Value;
+            if (start > cursor + 2)
+            {
+                gap += start - cursor;
+            }
+            cursor = Math.Max(cursor, end);
+        }
+
+        double edgeMissing = checkRequestedEdges
+            ? Math.Max(0, coveredStart - requestedStart) +
+              Math.Max(0, requestedEnd - coveredEnd)
+            : 0;
+        double missing = gap + edgeMissing;
+
+        List<string> reasons = new();
+        if (edgeMissing > 2) reasons.Add("requested-range-edge-missing");
+        if (gap > 2) reasons.Add("gap-between-output-parts");
+
+        return new CoverageCheck(
+            step,
+            pageNumber,
+            pageKey,
+            requestedStart,
+            requestedEnd,
+            coveredStart,
+            coveredEnd,
+            missing,
+            missing <= 2,
+            reasons.ToArray());
     }
 
     private static ShareXModCaptureRecipe? LoadRecipe(string path)
@@ -324,6 +433,7 @@ internal static class ShareXModRecipeOutputLedger
                     outputY + height,
                     width,
                     height,
+                    null,
                     null,
                     string.Empty,
                     null,

@@ -51,6 +51,12 @@ internal sealed class ShareXModV04Settings
     public int CaptureRecipeDynamicFeedMaxDurationSeconds { get; set; } = 1200;
     public int CaptureRecipeDynamicFeedMaxUnchangedPasses { get; set; } = 4;
 
+    public bool CaptureRecipeHorizontalAppendixEnabled { get; set; } = true;
+    public double CaptureRecipeHorizontalAppendixMinOverlapRatio { get; set; } = 0.05;
+    public double CaptureRecipeHorizontalAppendixMaxOverlapRatio { get; set; } = 0.45;
+    public double CaptureRecipeHorizontalAppendixMaxScore { get; set; } = 18.0;
+    public double CaptureRecipeHorizontalAppendixMinGap { get; set; } = 0.8;
+
     public bool RepairPlanEnabled { get; set; } = true;
     public int RepairPlanMarginPx { get; set; } = 256;
     public int RepairPlanMergeGapPx { get; set; } = 96;

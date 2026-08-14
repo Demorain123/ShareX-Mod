@@ -33,9 +33,7 @@ function Replace-Literal {
     Write-Host "[v0.5.1-hook] applied: $Marker" -ForegroundColor Cyan
 }
 
-# Defer the capture-session completion until segmented output, verified local repairs and
-# appendix processing have finished. This first transformation is intentionally kept exact so
-# an upstream finalization change is still surfaced rather than silently patched in the wrong place.
+# Defer capture-session completion until segmented output, verified repair and appendix work is done.
 Replace-Literal `
     -Old @'
                     if (modChromeSession != null)
@@ -55,10 +53,9 @@ Replace-Literal `
 '@ `
     -Marker "ShareXMod-v0.5.1-session-complete-deferred"
 
-# v0.4.1/v0.4.2 already expand the image-appendix block before v0.5.1 is replayed. The old
-# v0.5.1 hook tried to replace the pre-v0.4.1 block verbatim, which made the current overlay
-# chain fail before compilation. Insert the repair stage relative to stable semantic anchors
-# instead, while still failing closed if those anchors disappear upstream.
+# v0.4.1/v0.4.2 already transform the image appendix block before v0.5.1 runs. Insert the
+# verified-repair stage relative to the surviving semantic appendix anchor instead of trying to
+# replace the obsolete pre-v0.4.1 block verbatim.
 $text = [IO.File]::ReadAllText($manager)
 $repairMarker = "await modChromeSession.ApplyVerifiedRepairsAsync(Result);"
 
@@ -78,12 +75,12 @@ else {
                         }
 
 '@
-
     $text = $text.Replace($appendixAnchor, $repairBlock + $appendixAnchor)
 
     $completeMarker = "modCaptureSession?.Complete(modEndReason, status, Result);"
     if (-not $text.Contains($completeMarker)) {
         $disposeAnchor = @'
+                    }
                     finally
                     {
                         modSegmentStore?.Dispose();

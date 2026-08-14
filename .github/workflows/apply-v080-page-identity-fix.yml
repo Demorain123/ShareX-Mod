@@ -1,0 +1,49 @@
+name: Apply ShareX-Mod v0.8 shared page identity once
+
+on:
+  push:
+    branches:
+      - "mod/robust-scrolling-v0.1"
+    paths:
+      - ".github/workflows/apply-v080-page-identity-fix.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: mod/robust-scrolling-v0.1
+          fetch-depth: 0
+
+      - name: Remove compiler-helper coupling
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          foreach ($path in @(
+            "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipeReviewService.cs",
+            "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipePageLoopPlan.cs"
+          )) {
+            $text = [IO.File]::ReadAllText($path)
+            $text = $text.Replace(
+              "ShareXModCaptureRecipeCompiler.PageKey",
+              "ShareXModRecipePageIdentity.FromState")
+            [IO.File]::WriteAllText($path,$text,[Text.UTF8Encoding]::new($true))
+          }
+          git diff --check
+
+      - name: Commit shared page identity fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "sharex-mod-ci"
+          git config user.email "sharex-mod-ci@users.noreply.github.com"
+          git add \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipeReviewService.cs \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipePageLoopPlan.cs
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "refactor(v0.8): decouple review and loop planning from compiler-private page keys"
+          git push origin HEAD:mod/robust-scrolling-v0.1

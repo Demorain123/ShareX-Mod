@@ -1,0 +1,370 @@
+name: Apply ShareX-Mod v0.9.1 adaptive resume once
+
+on:
+  push:
+    branches:
+      - "mod/robust-scrolling-v0.1"
+    paths:
+      - ".github/workflows/apply-v091-adaptive-resume.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: mod/robust-scrolling-v0.1
+          fetch-depth: 0
+
+      - name: Wait for v0.9 integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 60); do
+            git fetch origin mod/robust-scrolling-v0.1
+            git reset --hard origin/mod/robust-scrolling-v0.1
+            if grep -q "ShareXModAdaptivePageTemplateRunner.TryRunAsync" mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModChromeRecipeCaptureEntryV062.cs; then
+              exit 0
+            fi
+            echo "Waiting for v0.9 integration ($i/60)..."
+            sleep 10
+          done
+          exit 1
+
+      - name: Add resume and final-page guard to adaptive runner
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $path = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModAdaptivePageTemplateRunner.cs"
+          $text = [IO.File]::ReadAllText($path)
+
+          if (-not $text.Contains("adaptiveResumeJournal")) {
+            $old = @'
+        string directory = ResolveDirectory(settings);
+        Directory.CreateDirectory(directory);
+        ShareXModCaptureSessionContext.RegisterComponent("adaptive-page-template", directory);
+
+        List<Part> parts = new();
+        List<Audit> audit = new();
+'@
+            $new = @'
+        string suggestedDirectory = ResolveDirectory(settings);
+        ShareXModPageLoopResumeJournal adaptiveResumeJournal =
+            ShareXModPageLoopResumeJournal.Open(
+                settings,
+                settings.CaptureRecipeReplayPath,
+                suggestedDirectory);
+
+        string directory = adaptiveResumeJournal.OutputDirectory;
+        if (adaptiveResumeJournal.IsResumed &&
+            !string.Equals(directory, suggestedDirectory, StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                if (Directory.Exists(suggestedDirectory) &&
+                    !Directory.EnumerateFileSystemEntries(suggestedDirectory).Any())
+                {
+                    Directory.Delete(suggestedDirectory);
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        Directory.CreateDirectory(directory);
+        ShareXModCaptureSessionContext.RegisterComponent("adaptive-page-template", directory);
+        ShareXModCaptureSessionContext.RegisterComponent("adaptive-template-resume", directory);
+
+        List<Part> parts = adaptiveResumeJournal.Parts
+            .Select(x => new Part(
+                x.File,
+                x.PageNumber,
+                x.TemplateStep,
+                x.PageKey,
+                x.StartY,
+                x.EndY,
+                x.Width,
+                x.Height))
+            .ToList();
+        List<Audit> audit = new();
+'@
+            if (-not $text.Contains($old)) { throw "Adaptive resume directory anchor missing." }
+            $text = $text.Replace($old,$new)
+          }
+
+          if (-not $text.Contains("adaptiveResumeStartPage")) {
+            $old = @'
+        bool overlayEmitted = false;
+        string stopReason = "adaptive-template-complete";
+        int pagesCompleted = 0;
+
+        for (int pageNumber = 1; pageNumber <= maxPages; pageNumber++)
+'@
+            $new = @'
+        bool overlayEmitted = parts.Count > 0;
+        string stopReason = "adaptive-template-complete";
+        int pagesCompleted = parts.Select(x => x.PageNumber).Distinct().Count();
+        int adaptiveResumeStartPage = adaptiveResumeJournal.IsResumed
+            ? Math.Max(1, adaptiveResumeJournal.NextPageNumber)
+            : 1;
+        bool adaptiveResumeBlocked = false;
+
+        if (adaptiveResumeJournal.IsResumed)
+        {
+            if (adaptiveResumeJournal.Phase.Equals("before-next", StringComparison.OrdinalIgnoreCase) ||
+                adaptiveResumeJournal.Phase.Equals("needs-review", StringComparison.OrdinalIgnoreCase))
+            {
+                adaptiveResumeJournal.NeedsReview(
+                    "Adaptive template stopped at an ambiguous in-flight Next Page boundary.");
+                adaptiveResumeBlocked = true;
+                truncated = true;
+                stopReason = "adaptive-resume-needs-review";
+            }
+            else
+            {
+                ShareXModRecipePageEvidence resumeEvidence =
+                    await ShareXModRecipePageTransitionVerifier.CaptureAsync(client);
+
+                if (adaptiveResumeJournal.Phase.Equals("ready", StringComparison.OrdinalIgnoreCase) &&
+                    !string.IsNullOrWhiteSpace(adaptiveResumeJournal.CurrentFingerprint) &&
+                    (!string.Equals(resumeEvidence.MainFingerprint, adaptiveResumeJournal.CurrentFingerprint, StringComparison.Ordinal) ||
+                     !string.Equals(resumeEvidence.Url, adaptiveResumeJournal.CurrentUrl, StringComparison.Ordinal)))
+                {
+                    adaptiveResumeJournal.NeedsReview(
+                        "Current browser page no longer matches the last committed adaptive-template boundary.");
+                    adaptiveResumeBlocked = true;
+                    truncated = true;
+                    stopReason = "adaptive-resume-page-mismatch";
+                }
+                else if (adaptiveResumeJournal.Phase.Equals("capturing", StringComparison.OrdinalIgnoreCase))
+                {
+                    int redoPage = Math.Max(1, adaptiveResumeJournal.CurrentPageNumber);
+                    adaptiveResumeJournal.RemovePageParts(redoPage, archive: true);
+                    parts.RemoveAll(x => x.PageNumber == redoPage);
+                    adaptiveResumeStartPage = redoPage;
+                    pagesCompleted = parts.Select(x => x.PageNumber).Distinct().Count();
+                }
+            }
+        }
+
+        int adaptiveLoopStartPage = adaptiveResumeBlocked
+            ? maxPages + 1
+            : adaptiveResumeStartPage;
+
+        for (int pageNumber = adaptiveLoopStartPage; pageNumber <= maxPages; pageNumber++)
+'@
+            if (-not $text.Contains($old)) { throw "Adaptive resume loop anchor missing." }
+            $text = $text.Replace($old,$new)
+          }
+
+          if (-not $text.Contains("adaptiveResumeJournal.BeginPage")) {
+            $old = @'
+            IReadOnlyList<ShareXModCaptureRecipeStep> template =
+                pageNumber == 1 ? plan.InitialSteps : plan.TemplateSteps;
+
+            PageExecution execution = await ExecutePageAsync(
+'@
+            $new = @'
+            adaptiveResumeJournal.BeginPage(pageNumber, current);
+
+            IReadOnlyList<ShareXModCaptureRecipeStep> template =
+                pageNumber == 1 ? plan.InitialSteps : plan.TemplateSteps;
+
+            PageExecution execution = await ExecutePageAsync(
+'@
+            if (-not $text.Contains($old)) { throw "Adaptive BeginPage anchor missing." }
+            $text = $text.Replace($old,$new)
+          }
+
+          if (-not $text.Contains("adaptiveResumeJournal.RecordPageParts")) {
+            $old = @'
+            pagesCompleted++;
+
+            if (shouldStop?.Invoke() == true)
+'@
+            $new = @'
+            pagesCompleted++;
+
+            List<ShareXModPageLoopResumePart> adaptiveCommittedParts = parts
+                .Where(x => x.PageNumber == pageNumber)
+                .OrderBy(x => x.TemplateStep)
+                .ThenBy(x => x.StartY)
+                .Select(x => new ShareXModPageLoopResumePart(
+                    x.File,
+                    x.PageNumber,
+                    x.TemplateStep,
+                    x.PageKey,
+                    x.StartY,
+                    x.EndY,
+                    x.Width,
+                    x.Height))
+                .ToList();
+            adaptiveResumeJournal.RecordPageParts(pageNumber, adaptiveCommittedParts);
+
+            if (shouldStop?.Invoke() == true)
+'@
+            if (-not $text.Contains($old)) { throw "Adaptive RecordPageParts anchor missing." }
+            $text = $text.Replace($old,$new)
+          }
+
+          if (-not $text.Contains("adaptiveResumeJournal.CompleteTransition")) {
+            $old = @'
+            if (!execution.Transitioned)
+            {
+                stopReason = execution.StopReason;
+                break;
+            }
+
+            if (pageNumber >= maxPages)
+'@
+            $new = @'
+            if (!execution.Transitioned)
+            {
+                stopReason = execution.StopReason;
+                adaptiveResumeJournal.Complete(stopReason);
+                break;
+            }
+
+            if (execution.After != null)
+            {
+                adaptiveResumeJournal.CompleteTransition(pageNumber, execution.After);
+            }
+
+            if (pageNumber >= maxPages)
+'@
+            if (-not $text.Contains($old)) { throw "Adaptive CompleteTransition anchor missing." }
+            $text = $text.Replace($old,$new)
+          }
+
+          # ExecutePageAsync must journal before the Next input is sent. Add the journal parameter.
+          if (-not $text.Contains("ShareXModPageLoopResumeJournal? resumeJournal")) {
+            $oldCall = @'
+                includeFirstOverlay: !overlayEmitted,
+                allowNextPage: pageNumber < maxPages,
+                shouldStop);
+'@
+            $newCall = @'
+                includeFirstOverlay: !overlayEmitted,
+                allowNextPage: pageNumber < maxPages,
+                adaptiveResumeJournal,
+                shouldStop);
+'@
+            if (-not $text.Contains($oldCall)) { throw "Adaptive ExecutePage call anchor missing." }
+            $text = $text.Replace($oldCall,$newCall)
+
+            $oldSig = @'
+        bool includeFirstOverlay,
+        bool allowNextPage,
+        Func<bool>? shouldStop)
+'@
+            $newSig = @'
+        bool includeFirstOverlay,
+        bool allowNextPage,
+        ShareXModPageLoopResumeJournal? resumeJournal,
+        Func<bool>? shouldStop)
+'@
+            if (-not $text.Contains($oldSig)) { throw "Adaptive ExecutePage signature anchor missing." }
+            $text = $text.Replace($oldSig,$newSig)
+          }
+
+          # Move the max-page stop after Page Guard + image collection so the final page is also sealed.
+          $oldEarly = @'
+                    if (!allowNextPage)
+                    {
+                        return new PageExecution(true, false, true, "adaptive-template-max-pages", before, null);
+                    }
+
+                    IReadOnlyList<ShareXModRecipeStaleRange> stale =
+'@
+          if ($text.Contains($oldEarly)) {
+            $text = $text.Replace(
+              $oldEarly,
+              @'
+                    IReadOnlyList<ShareXModRecipeStaleRange> stale =
+'@)
+          }
+
+          if (-not $text.Contains("adaptive-final-page-sealed")) {
+            $anchor = @'
+                    await ShareXModCaptureRecipePageImageCollector.CollectAsync(
+                        client,
+                        settings,
+                        directory,
+                        pageNumber);
+
+                    if (step.Locator == null)
+'@
+            $replacement = @'
+                    await ShareXModCaptureRecipePageImageCollector.CollectAsync(
+                        client,
+                        settings,
+                        directory,
+                        pageNumber);
+
+                    if (!allowNextPage)
+                    {
+                        // adaptive-final-page-sealed
+                        resumeJournal?.Complete("adaptive-template-max-pages");
+                        return new PageExecution(true, false, true, "adaptive-template-max-pages", before, null);
+                    }
+
+                    resumeJournal?.BeforeNext(pageNumber, before);
+
+                    if (step.Locator == null)
+'@
+            if (-not $text.Contains($anchor)) { throw "Adaptive final-page sealing anchor missing." }
+            $text = $text.Replace($anchor,$replacement)
+          }
+
+          if (-not $text.Contains("adaptiveResumeJournal.Complete(")) {
+            $old = @'
+        ShareXModSegmentedOutputRegistry.Register(
+            preview,
+            manifestPath,
+            finalPng ?? string.Empty,
+            sourceWidth,
+            sourceHeight);
+
+        return new ShareXModChromeBackgroundCaptureResult
+'@
+            $new = @'
+        ShareXModSegmentedOutputRegistry.Register(
+            preview,
+            manifestPath,
+            finalPng ?? string.Empty,
+            sourceWidth,
+            sourceHeight);
+
+        adaptiveResumeJournal.Complete(
+            failed
+                ? "failed"
+                : truncated
+                    ? stopReason
+                    : stoppedByUser
+                        ? "stopped"
+                        : stopReason);
+
+        return new ShareXModChromeBackgroundCaptureResult
+'@
+            if (-not $text.Contains($old)) { throw "Adaptive final journal anchor missing." }
+            $text = $text.Replace($old,$new)
+          }
+
+          [IO.File]::WriteAllText($path,$text,[Text.UTF8Encoding]::new($true))
+          [IO.File]::WriteAllText("mod-overlay/VERSION","0.9.1-dev`n",[Text.UTF8Encoding]::new($false))
+          git diff --check
+
+      - name: Commit v0.9.1 adaptive resume
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "sharex-mod-ci"
+          git config user.email "sharex-mod-ci@users.noreply.github.com"
+          git add mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModAdaptivePageTemplateRunner.cs mod-overlay/VERSION
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "feat(v0.9.1): resume adaptive page templates and seal final page"
+          git push origin HEAD:mod/robust-scrolling-v0.1

@@ -2,6 +2,7 @@
 
 using System;
 using System.IO;
+using System.Text.Json;
 
 namespace ShareX.ScreenCaptureLib;
 
@@ -17,10 +18,14 @@ internal static class ShareXModBuildInfo
     {
         try
         {
-            string path = Path.Combine(AppContext.BaseDirectory, "ShareX.Mod.VERSION.txt");
-            if (File.Exists(path))
+            string path = Path.Combine(AppContext.BaseDirectory, "ShareX.Mod.VERSION.json");
+            if (!File.Exists(path)) return FallbackVersion;
+
+            using JsonDocument document = JsonDocument.Parse(File.ReadAllText(path));
+            if (document.RootElement.TryGetProperty("version", out JsonElement version) &&
+                version.ValueKind == JsonValueKind.String)
             {
-                string value = File.ReadAllText(path).Trim();
+                string value = version.GetString()?.Trim() ?? string.Empty;
                 if (!string.IsNullOrWhiteSpace(value)) return value;
             }
         }

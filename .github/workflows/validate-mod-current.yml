@@ -59,6 +59,10 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($version)) { throw "Overlay VERSION is empty." }
           Write-Host "Overlay VERSION=$version"
           "version=$version" >> $env:GITHUB_OUTPUT
+          $versionJson = Get-Content "mod-overlay\config\ShareX.Mod.VERSION.json" -Raw | ConvertFrom-Json
+          if ($versionJson.version -ne $version) {
+            throw "Source mod version mismatch: VERSION='$version', JSON='$($versionJson.version)'."
+          }
           $sourceCount = (Get-ChildItem "mod-overlay\src\ShareX.ScreenCaptureLib" -Filter *.cs -File -Recurse).Count
           Write-Host "Overlay C# sources=$sourceCount"
           if ($sourceCount -lt 1) { throw "Overlay source directory is empty." }
@@ -87,13 +91,13 @@ jobs:
           if (-not $zip) { throw "Portable zip missing." }
           $temp = Join-Path $env:RUNNER_TEMP "sharex-mod-current-portable"
           Expand-Archive -LiteralPath $zip.FullName -DestinationPath $temp -Force
-          foreach ($name in @("ShareX.exe", "ShareX.ScreenCaptureLib.dll", "ShareX.Mod.v04.json", "ShareX.Mod.VERSION.txt")) {
+          foreach ($name in @("ShareX.exe", "ShareX.ScreenCaptureLib.dll", "ShareX.Mod.v04.json", "ShareX.Mod.VERSION.json")) {
             if (-not (Get-ChildItem -Path $temp -Recurse -File -Filter $name | Select-Object -First 1)) {
               throw "Portable package missing $name"
             }
           }
-          $versionFile = Get-ChildItem -Path $temp -Recurse -File -Filter "ShareX.Mod.VERSION.txt" | Select-Object -First 1
-          $packagedVersion = (Get-Content $versionFile.FullName -Raw).Trim()
+          $versionFile = Get-ChildItem -Path $temp -Recurse -File -Filter "ShareX.Mod.VERSION.json" | Select-Object -First 1
+          $packagedVersion = (Get-Content $versionFile.FullName -Raw | ConvertFrom-Json).version
           $expectedVersion = "${{ steps.modmeta.outputs.version }}"
           if ($packagedVersion -ne $expectedVersion) {
             throw "Portable mod version mismatch: expected '$expectedVersion', got '$packagedVersion'."

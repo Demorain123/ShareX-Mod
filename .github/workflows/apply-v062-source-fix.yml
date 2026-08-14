@@ -1,0 +1,102 @@
+name: Apply ShareX-Mod v0.6.2 source fix once
+
+on:
+  push:
+    branches:
+      - "mod/robust-scrolling-v0.1"
+    paths:
+      - ".github/workflows/apply-v062-source-fix.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout overlay branch
+        uses: actions/checkout@v6
+        with:
+          ref: mod/robust-scrolling-v0.1
+          fetch-depth: 0
+
+      - name: Patch v0.6.2 existing files
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $settingsPath = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModV04Settings.cs"
+          $settings = [IO.File]::ReadAllText($settingsPath)
+          if (-not $settings.Contains("ChromeImageAppendixOriginalRetention")) {
+            $anchor = '    public bool ChromeImageAppendixEnabled { get; set; } = true;'
+            if (-not $settings.Contains($anchor)) { throw "Settings retention anchor missing." }
+            $replacement = $anchor + "`n" + '    public string ChromeImageAppendixOriginalRetention { get; set; } = "ask";'
+            $settings = $settings.Replace($anchor, $replacement)
+            [IO.File]::WriteAllText($settingsPath, $settings, [Text.UTF8Encoding]::new($true))
+          }
+
+          $configPath = "mod-overlay/config/ShareX.Mod.v04.json"
+          $config = [IO.File]::ReadAllText($configPath)
+          if (-not $config.Contains('"chromeImageAppendixOriginalRetention"')) {
+            $anchor = '  "chromeImageAppendixEnabled": true,'
+            if (-not $config.Contains($anchor)) { throw "Config retention anchor missing." }
+            $replacement = $anchor + "`n" + '  "chromeImageAppendixOriginalRetention": "ask",'
+            $config = $config.Replace($anchor, $replacement)
+            [IO.File]::WriteAllText($configPath, $config, [Text.UTF8Encoding]::new($false))
+          }
+
+          $v062 = ".github/workflows/validate-mod-v062.yml"
+          $workflow = [IO.File]::ReadAllText($v062)
+          if (-not $workflow.Contains('apply-v062-post-hooks.ps1')) {
+            $anchor = @'
+          pwsh -NoProfile -File "scripts\apply-v061-post-hooks.ps1"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          git diff --check
+'@
+            $replacement = @'
+          pwsh -NoProfile -File "scripts\apply-v061-post-hooks.ps1"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          pwsh -NoProfile -File "scripts\apply-v062-post-hooks.ps1"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          git diff --check
+'@
+            if (-not $workflow.Contains($anchor)) { throw "v0.6.2 workflow hook anchor missing." }
+            $workflow = $workflow.Replace($anchor, $replacement)
+            [IO.File]::WriteAllText($v062, $workflow, [Text.UTF8Encoding]::new($false))
+          }
+
+          $v061 = ".github/workflows/validate-mod-v061.yml"
+          if (Test-Path $v061) {
+            $old = [IO.File]::ReadAllText($v061)
+            if ($old -match '(?ms)^on:\s*\n\s*push:') {
+              $old = [regex]::Replace(
+                $old,
+                '(?ms)^on:\s*\n.*?^permissions:',
+                "on:`n  workflow_dispatch:`n`npermissions:",
+                1)
+              [IO.File]::WriteAllText($v061, $old, [Text.UTF8Encoding]::new($false))
+            }
+          }
+
+          git diff --check
+
+      - name: Commit source fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "sharex-mod-ci"
+          git config user.email "sharex-mod-ci@users.noreply.github.com"
+          git add \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModV04Settings.cs \
+            mod-overlay/config/ShareX.Mod.v04.json \
+            .github/workflows/validate-mod-v062.yml \
+            .github/workflows/validate-mod-v061.yml
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+            exit 0
+          fi
+          git commit -m "fix(v0.6.2): finalize retention config and hook chain"
+          git push origin HEAD:mod/robust-scrolling-v0.1

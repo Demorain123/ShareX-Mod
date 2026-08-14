@@ -47,12 +47,33 @@ internal static class ShareXModChromeRecipeCaptureEntryV062
 
             await client.ConnectAsync(target);
 
+            // Runner order is deliberate. A separately approved simple page loop is the most
+            // constrained multi-page topology. Adaptive templates are next, dynamic feeds are a
+            // different growing-document topology, and the finite Recipe runner remains fallback.
             ShareXModChromeBackgroundCaptureResult? result =
-                await ShareXModCaptureRecipeDynamicFeed.TryRunAsync(
+                await ShareXModCaptureRecipePageLoopRunner.TryRunAsync(
                     client,
                     target,
                     settings,
                     shouldStop);
+
+            if (result == null)
+            {
+                result = await ShareXModAdaptivePageTemplateRunner.TryRunAsync(
+                    client,
+                    target,
+                    settings,
+                    shouldStop);
+            }
+
+            if (result == null)
+            {
+                result = await ShareXModCaptureRecipeDynamicFeed.TryRunAsync(
+                    client,
+                    target,
+                    settings,
+                    shouldStop);
+            }
 
             if (result == null)
             {

@@ -26,10 +26,7 @@ internal static class ShareXModChromeRecipeCaptureEntryV062
         }
 
         string processName = GetProcessName(selectedWindowHandle);
-        if (!IsChromiumProcess(processName))
-        {
-            return null;
-        }
+        if (!IsChromiumProcess(processName)) return null;
 
         string windowTitle = GetWindowTitle(selectedWindowHandle);
         ShareXModChromeCdpClient client = new();
@@ -38,20 +35,15 @@ internal static class ShareXModChromeRecipeCaptureEntryV062
         {
             IReadOnlyList<ShareXModChromeTarget> targets =
                 await client.ListTargetsAsync(settings.ChromeCdpEndpoint);
-
             ShareXModChromeTarget? target = SelectBestTarget(targets, windowTitle);
-            if (target == null)
-            {
-                return null;
-            }
+            if (target == null) return null;
 
             await client.ConnectAsync(target);
 
-            // Runner order is deliberate. A separately approved simple page loop is the most
-            // constrained multi-page topology. Adaptive templates are next, dynamic feeds are a
-            // different growing-document topology, and the finite Recipe runner remains fallback.
+            // Most constrained topology first. Every multi-page path is separately reviewed and
+            // approved before this entry is reached; null means the topology did not match.
             ShareXModChromeBackgroundCaptureResult? result =
-                await ShareXModCaptureRecipePageLoopRunner.TryRunAsync(
+                await ShareXModCaptureRecipePageLoopRunnerCurrent.TryRunAsync(
                     client,
                     target,
                     settings,
@@ -84,10 +76,7 @@ internal static class ShareXModChromeRecipeCaptureEntryV062
                     shouldStop);
             }
 
-            if (result == null)
-            {
-                return null;
-            }
+            if (result == null) return null;
 
             result = ShareXModRecipeHorizontalAppendix.TryAppend(result, settings) ?? result;
 
@@ -95,16 +84,22 @@ internal static class ShareXModChromeRecipeCaptureEntryV062
             {
                 try
                 {
-                    await ShareXModChromeImageAppendix.ExportAsync(
-                        client,
-                        settings,
-                        result.DirectoryPath);
+                    // Page-loop runners preserve resources before each navigation. Do not export
+                    // only the final page again when that per-page collection already exists.
+                    if (!ShareXModCaptureRecipePageImageCollector.HasPageLoopCollection(
+                            result.DirectoryPath))
+                    {
+                        await ShareXModChromeImageAppendix.ExportAsync(
+                            client,
+                            settings,
+                            result.DirectoryPath);
+                    }
 
                     result = ShareXModRecipeImageAppendix.TryAppend(result, settings) ?? result;
                 }
                 catch
                 {
-                    // The main recipe capture is already valid. Appendix failures remain advisory.
+                    // Main capture remains valid even if optional appendix preservation fails.
                 }
             }
 
@@ -195,14 +190,9 @@ internal static class ShareXModChromeRecipeCaptureEntryV062
         try
         {
             GetWindowThreadProcessId(hwnd, out uint pid);
-            return pid == 0
-                ? string.Empty
-                : Process.GetProcessById((int)pid).ProcessName;
+            return pid == 0 ? string.Empty : Process.GetProcessById((int)pid).ProcessName;
         }
-        catch
-        {
-            return string.Empty;
-        }
+        catch { return string.Empty; }
     }
 
     private static string GetWindowTitle(IntPtr hwnd)

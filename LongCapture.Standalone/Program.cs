@@ -1,5 +1,7 @@
+using ShareX.AvaloniaUI.Integration;
 using ShareX.ScreenCaptureLib;
 using System;
+using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Windows.Forms;
@@ -21,11 +23,22 @@ internal static class Program
             return RunSelfTest();
         }
 
-        ApplicationConfiguration.Initialize();
+        InitializeDesktopUiHosts();
         using var form = new MainForm();
         StandaloneUiPolish.Apply(form);
         Application.Run(form);
         return 0;
+    }
+
+    private static void InitializeDesktopUiHosts()
+    {
+        ApplicationConfiguration.Initialize();
+
+        // ShareX's scrolling-capture engine uses an Avalonia overlay window to
+        // outline the selected scrolling region. LongCapture owns a WinForms
+        // message loop, so explicitly initialize Avalonia in its documented
+        // legacy-host mode before any capture can create that overlay.
+        AvaloniaBootstrapper.EnsureInitialized();
     }
 
     private static int RunSelfTest()
@@ -45,6 +58,8 @@ internal static class Program
                 LongCaptureStandaloneBridge.ProbeAsync(LongCaptureStandaloneMode.Normal).GetAwaiter().GetResult();
             if (!readiness.Ready) return 12;
 
+            InitializeDesktopUiHosts();
+
             using (var service = new ScrollingCaptureService(new ScrollingCaptureOptions
             {
                 StartDelay = 100,
@@ -52,13 +67,32 @@ internal static class Program
                 ScrollMethod = ScrollMethod.MouseWheel,
                 ScrollAmount = 1,
                 AutoUpload = false,
-                ShowRegion = false
+                ShowRegion = true
             }))
             {
                 if (service.IsCapturing) return 13;
             }
 
-            ApplicationConfiguration.Initialize();
+            // Regression guard for the real v0.1.1 F8 failure. The standalone
+            // host previously constructed the ShareX Avalonia region overlay
+            // without initializing Avalonia, so Window.Show() threw
+            // "The window has not been initialized." This deliberately executes
+            // that exact window bootstrap path inside the packaged executable.
+            var overlay = new ScrollingCaptureRegionWindow(new Rectangle(8, 8, 96, 72));
+            try
+            {
+                overlay.Show();
+                if (!overlay.IsVisible) return 16;
+                overlay.Close();
+            }
+            finally
+            {
+                if (overlay.IsVisible)
+                {
+                    overlay.Close();
+                }
+            }
+
             using (var form = new MainForm())
             {
                 StandaloneUiPolish.Apply(form);

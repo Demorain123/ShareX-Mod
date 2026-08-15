@@ -37,7 +37,13 @@ internal static class Program
             Type? modBuildInfo = Type.GetType("ShareX.ScreenCaptureLib.ShareXModBuildInfo, ShareX.ScreenCaptureLib", throwOnError: false);
             if (modBuildInfo is null) return 11;
 
-            using var service = new ScrollingCaptureService(new ScrollingCaptureOptions
+            LongCaptureStandaloneBridge.ConfigureMode(LongCaptureStandaloneMode.SmartWeb);
+            LongCaptureStandaloneBridge.ConfigureMode(LongCaptureStandaloneMode.Normal);
+            LongCaptureStandaloneReadiness readiness =
+                LongCaptureStandaloneBridge.ProbeAsync(LongCaptureStandaloneMode.Normal).GetAwaiter().GetResult();
+            if (!readiness.Ready) return 12;
+
+            using (var service = new ScrollingCaptureService(new ScrollingCaptureOptions
             {
                 StartDelay = 100,
                 ScrollDelay = 100,
@@ -45,9 +51,18 @@ internal static class Program
                 ScrollAmount = 1,
                 AutoUpload = false,
                 ShowRegion = false
-            });
+            }))
+            {
+                if (service.IsCapturing) return 13;
+            }
 
-            if (service.IsCapturing) return 12;
+            ApplicationConfiguration.Initialize();
+            using (var form = new MainForm())
+            {
+                _ = form.Handle;
+                if (!form.Text.Contains("LongCapture", StringComparison.OrdinalIgnoreCase)) return 14;
+            }
+
             return 0;
         }
         catch

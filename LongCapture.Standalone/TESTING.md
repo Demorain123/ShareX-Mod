@@ -10,7 +10,7 @@
 4. 如果是 `FAIL`：停止，不要继续真实测试。保留最新 `AutomationReports\<时间>\`、LongCapture log，以及需要时的 `Export diagnostics` ZIP。
 5. 只有 `PASS_AUTOMATED` 才进入下面 Test 1–6。通过后会自动打开本文件。
 
-QUICK 自动化阶段覆盖：portable 文件/配置完整性、LongCapture shell、Avalonia overlay、真实 F8 风格 Start/Stop 捕获链、HWND target、LongCapture 自身 UI capture exclusion、target resize/minimize/close 恢复、100/125/150/200% 布局压力、anchor/repeated-pattern、sticky/fixed、lazy-load、Recipe/Integrity/Router/Pagination 回归、CaptureSession + Export diagnostics ZIP round-trip，以及在 core self-test 后再执行一次真实 capture smoke，确认第二次捕获也能正常启动/结束。
+QUICK 自动化阶段覆盖：portable 文件/配置完整性、LongCapture shell、Avalonia overlay、真实 F8 风格 Start/Stop 捕获链、HWND target、LongCapture 自身 UI capture exclusion、target resize/minimize/close 恢复、100/125/150/200% 布局压力、anchor/repeated-pattern、sticky/fixed、lazy-load、Recipe/Integrity/Router/Pagination 回归，以及 CaptureSession + Export diagnostics ZIP round-trip。
 
 **10 次连续 capture + memory growth 属于可选 Deep 压力测试，不再阻塞每次真实测试。** 需要时执行：`1-RUN-AUTOMATED-TESTS.cmd --deep`。
 
@@ -21,7 +21,7 @@ This guide is shipped with the portable build only after the Quick automated acc
 ## What changed in v0.1.3 RC2
 
 - Added a package-resident double-click automated acceptance gate and machine-readable per-run reports.
-- Default one-click mode is QUICK: functional coverage first, then move directly to real-world testing.
+- Default one-click mode is QUICK: each changed/new functional area is checked once, then move directly to real-world testing.
 - Optional `--deep` retains the 10-run capture/memory stress loop for stability investigation without delaying normal handoff.
 - CI executes the same default `1-RUN-AUTOMATED-TESTS.cmd --ci` path that the user double-clicks, including again after extracting the final ZIP.
 - Independent `LongCapture.exe` remains the only user entry point; `ShareX.exe` is not required.

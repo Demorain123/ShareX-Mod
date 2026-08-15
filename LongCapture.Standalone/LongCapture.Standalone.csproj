@@ -20,5 +20,7 @@
     <Content Include="..\mod-overlay\config\ShareX.Mod.v04.json" Link="ShareX.Mod.v04.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\mod-overlay\config\ShareX.Mod.VERSION.json" Link="ShareX.Mod.VERSION.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="TESTING.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="1-RUN-AUTOMATED-TESTS.cmd" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Run-LongCapture-AutomatedTests.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

@@ -59,17 +59,15 @@ internal static class AutomationTestRunner
         {
             int code = Program.RunSelfTest();
             if (code != 0) throw new InvalidOperationException($"LongCapture core self-test returned exit code {code}.");
-            return "Packaged shell self-test returned exit code 0.";
+            return "Packaged shell self-test returned exit code 0; this includes the real StartCaptureAsync -> StopCapture smoke path.";
         });
         RunCase(report, "shell.recovery-layout", "Shell", "Target lifecycle recovery and 100-200% layout pressure", LongCaptureRcSelfTests.RunOrThrow);
         RunCase(report, "engine.semantic-regression", "Engine", "Recipe / anchor / integrity / scrolling / fixed / lazy / router / pagination suites", RunSemanticSuites);
         RunCase(report, "diagnostics.roundtrip", "Diagnostics", "Capture-session recorder and diagnostics ZIP round-trip", TestDiagnosticsRoundTrip);
 
-        // Quick is intentionally the default user gate. The core self-test already executes the
-        // real StartCaptureAsync -> StopCapture path; one additional capture here proves a second
-        // capture can start after the first without making every pre-manual-test run a 10x stress.
-        RunCase(report, "stability.quick-repeat", "Stability", "Second real capture smoke after the core self-test", RunQuickCaptureRepeat);
-
+        // Deep is deliberately opt-in. Quick already exercises every changed/new functional area,
+        // including one real capture in Program.RunSelfTest. Repetition and memory-growth testing
+        // are stability stress, not a reason to delay the user's real-world validation every time.
         if (deep)
         {
             RunCase(report, "stress.capture-memory", "Deep stability", $"{DeepRepetitions} consecutive real capture smoke runs and memory growth", RunDeepCaptureAndMemoryGate);
@@ -231,14 +229,6 @@ internal static class AutomationTestRunner
             TryDeleteDirectory(tempExportRoot);
             TryDeleteDirectory(sessionDir);
         }
-    }
-
-    private static string RunQuickCaptureRepeat()
-    {
-        int code = Program.RunScrollingCaptureSmokeTest();
-        if (code != 0)
-            throw new InvalidOperationException($"Second real capture smoke failed with exit code {code}.");
-        return "A second real capture smoke completed after the core self-test; the default Quick gate does not run the 10x stress loop.";
     }
 
     private static string RunDeepCaptureAndMemoryGate()

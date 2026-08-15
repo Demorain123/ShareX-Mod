@@ -1,9 +1,12 @@
 using ShareX.AvaloniaUI.Integration;
 using ShareX.ScreenCaptureLib;
 using System;
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Reflection;
+using System.Threading;
 using System.Windows.Forms;
 
 namespace LongCapture.Standalone;
@@ -93,6 +96,15 @@ internal static class Program
                 }
             }
 
+            // Go beyond constructor-only tests: create a real Win32 target window,
+            // inject it into the same ScrollingCaptureManager used after interactive
+            // region selection, then run StartCaptureAsync through overlay creation,
+            // target activation, screen capture, one scroll input, image comparison,
+            // result production and cleanup. A static target naturally terminates
+            // after the second identical frame, so this remains deterministic in CI.
+            int captureSmoke = RunScrollingCaptureSmokeTest();
+            if (captureSmoke != 0) return captureSmoke;
+
             using (var form = new MainForm())
             {
                 StandaloneUiPolish.Apply(form);
@@ -107,5 +119,78 @@ internal static class Program
         {
             return 99;
         }
+    }
+
+    private static int RunScrollingCaptureSmokeTest()
+    {
+        using var target = new Form
+        {
+            Text = "LongCapture smoke target",
+            StartPosition = FormStartPosition.Manual,
+            Bounds = new Rectangle(120, 120, 360, 260),
+            BackColor = Color.White,
+            ShowInTaskbar = false,
+            FormBorderStyle = FormBorderStyle.FixedToolWindow
+        };
+        target.Controls.Add(new Label
+        {
+            Text = "LongCapture deterministic scrolling-capture smoke target",
+            AutoSize = true,
+            Location = new Point(18, 18)
+        });
+        target.Show();
+        target.Refresh();
+        Application.DoEvents();
+
+        Rectangle targetRectangle = target.RectangleToScreen(target.ClientRectangle);
+        if (target.Handle == IntPtr.Zero || targetRectangle.IsEmpty) return 17;
+
+        using var service = new ScrollingCaptureService(new ScrollingCaptureOptions
+        {
+            StartDelay = 40,
+            ScrollDelay = 40,
+            ScrollMethod = ScrollMethod.MouseWheel,
+            ScrollAmount = 1,
+            AutoIgnoreBottomEdge = true,
+            AutoUpload = false,
+            ShowRegion = true
+        });
+
+        FieldInfo? managerField = typeof(ScrollingCaptureService).GetField("_manager", BindingFlags.Instance | BindingFlags.NonPublic);
+        object? manager = managerField?.GetValue(service);
+        if (manager is null) return 18;
+
+        Type managerType = manager.GetType();
+        FieldInfo? selectedWindowField = managerType.GetField("selectedWindow", BindingFlags.Instance | BindingFlags.NonPublic);
+        FieldInfo? selectedRectangleField = managerType.GetField("selectedRectangle", BindingFlags.Instance | BindingFlags.NonPublic);
+        Type? windowInfoType = Type.GetType("ShareX.HelpersLib.WindowInfo, ShareX.HelpersLib", throwOnError: false);
+        if (selectedWindowField is null || selectedRectangleField is null || windowInfoType is null) return 19;
+
+        object? windowInfo = Activator.CreateInstance(windowInfoType, target.Handle);
+        if (windowInfo is null) return 20;
+        selectedWindowField.SetValue(manager, windowInfo);
+        selectedRectangleField.SetValue(manager, targetRectangle);
+
+        var captureTask = service.StartCaptureAsync();
+        Stopwatch timeout = Stopwatch.StartNew();
+        while (!captureTask.IsCompleted && timeout.Elapsed < TimeSpan.FromSeconds(8))
+        {
+            Application.DoEvents();
+            Thread.Sleep(10);
+        }
+
+        if (!captureTask.IsCompleted)
+        {
+            service.StopCapture();
+            return 21;
+        }
+
+        ScrollingCaptureStatus status = captureTask.GetAwaiter().GetResult();
+        if (status == ScrollingCaptureStatus.Failed || service.Result is null) return 22;
+        if (service.Result.Width != targetRectangle.Width || service.Result.Height < targetRectangle.Height) return 23;
+
+        target.Close();
+        Application.DoEvents();
+        return 0;
     }
 }

@@ -1,0 +1,54 @@
+name: LongCapture v0.1.8 Hook Debug
+
+on:
+  push:
+    branches: ["standalone/longcapture-v0.1.8-trust-split"]
+    paths: [".github/workflows/longcapture-v018-hook-debug.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v6
+      - name: Apply hooks with transcript
+        id: apply
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Start-Transcript -Path "$env:GITHUB_WORKSPACE\v018-hook-transcript.txt" -Force
+          $ErrorActionPreference = "Continue"
+          $hooks = @(
+            "scripts\run-v04-hooks.ps1","scripts\apply-v041-post-hooks.ps1","scripts\apply-v042-post-hooks.ps1",
+            "scripts\apply-v043-post-hooks.ps1","scripts\apply-v044-post-hooks.ps1","scripts\apply-v050-post-hooks.ps1",
+            "scripts\apply-v051-post-hooks.ps1","scripts\apply-v052-post-hooks.ps1","scripts\apply-v061-post-hooks.ps1",
+            "scripts\apply-v062-post-hooks.ps1","scripts\apply-v064-post-hooks.ps1","scripts\apply-longcapture-v013-standalone-hooks.ps1",
+            "scripts\apply-longcapture-v013-rc-hardening.ps1","scripts\apply-longcapture-v014-core-hooks.ps1",
+            "scripts\apply-longcapture-v015-fixed-overlay-hooks.ps1","scripts\apply-longcapture-v016-replay-compositor-hooks.ps1",
+            "scripts\apply-longcapture-v017-anchor-continuity-hooks.ps1","scripts\apply-longcapture-v018-trust-split-hooks.ps1",
+            "scripts\apply-longcapture-v018-rc-evidence.ps1"
+          )
+          $failed = $false
+          foreach ($hook in $hooks) {
+            Write-Host "`n===== $hook ====="
+            & pwsh -NoProfile -File $hook 2>&1 | ForEach-Object { Write-Host $_ }
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "FAILED_HOOK=$hook EXIT=$LASTEXITCODE"
+              $failed = $true
+              break
+            }
+          }
+          git diff | Out-File "$env:GITHUB_WORKSPACE\v018-generated.diff" -Encoding utf8
+          Stop-Transcript
+          if ($failed) { exit 1 }
+      - name: Upload hook diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: longcapture-v018-hook-debug
+          path: |
+            v018-hook-transcript.txt
+            v018-generated.diff

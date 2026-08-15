@@ -131,6 +131,22 @@ Replace-Literal -Path $ui `
 '@ `
     -Marker "int auxiliaryWidth = Math.Min(360"
 
+# Recompute button minimums from their actual font every time layout reflows. This catches 125–200%
+# DPI/font growth for every current and future button instead of hard-coding one larger width for the
+# specific caption that happened to fail CI.
+Replace-Literal -Path $ui `
+    -Old @'
+    {
+        int labelColumn = body.ColumnStyles.Count > 0
+'@ `
+    -New @'
+    {
+        StandaloneButtonTextFit.Apply(form);
+
+        int labelColumn = body.ColumnStyles.Count > 0
+'@ `
+    -Marker "StandaloneButtonTextFit.Apply(form);"
+
 # Validation must prove both output and diagnostics actions survived the responsive rebuild.
 Replace-Literal -Path $ui `
     -Old @'

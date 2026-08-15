@@ -15,13 +15,13 @@
     GNU General Public License for more details.
 
     You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
-
-    Optionally you can also view the license at <http://www.gnu.org/licenses/>.
+    along with this program; if not, write to the Free Software Foundation, Inc.,
+    51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 */
 
 #endregion License Information (GPL v3)
+
+using System;
 
 namespace ShareX.ScreenCaptureLib
 {
@@ -35,5 +35,17 @@ namespace ShareX.ScreenCaptureLib
         public bool AutoIgnoreBottomEdge { get; set; } = true;
         public bool AutoUpload { get; set; } = false;
         public bool ShowRegion { get; set; } = true;
+
+        // LongCapture opt-in quality extensions. Defaults intentionally preserve
+        // upstream ShareX scrolling behavior for callers that do not enable them.
+        public bool AdaptiveSettle { get; set; } = false;
+        public int AdaptiveSettleProbeInterval { get; set; } = 100;
+        public int AdaptiveSettleStableSamples { get; set; } = 2;
+        public int AdaptiveSettleMaxDelay { get; set; } = 2500;
+        public double AdaptiveSettleChangedFraction { get; set; } = 0.015;
+        public bool SuppressStationaryOverlays { get; set; } = false;
+
+        public Action<ScrollingCaptureTelemetryEvent>? TelemetrySink { get; set; }
+        public Action<ScrollingCaptureFrameEvent>? FrameSink { get; set; }
     }
 }

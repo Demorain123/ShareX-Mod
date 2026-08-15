@@ -16,6 +16,7 @@ internal sealed class MainForm : Form
     private const int WM_HOTKEY = 0x0312;
     private const uint MOD_NOREPEAT = 0x4000;
     private const uint VK_F8 = 0x77;
+    private const string ShareXPickerLabel = "ShareX region/window picker (fallback)";
 
     private readonly Label statusLabel = new();
     private readonly Label readinessLabel = new();
@@ -24,7 +25,10 @@ internal sealed class MainForm : Form
     private readonly Button browserButton = new();
     private readonly Button reviewButton = new();
     private readonly Button browseRecipeButton = new();
+    private readonly Button refreshTargetsButton = new();
+    private readonly Button openLogsButton = new();
     private readonly ComboBox modeSelector = new();
+    private readonly ComboBox targetSelector = new();
     private readonly TextBox recipePath = new();
     private readonly NumericUpDown startDelay = new();
     private readonly NumericUpDown scrollDelay = new();
@@ -50,7 +54,7 @@ internal sealed class MainForm : Form
     {
         outputDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "LongCapture");
 
-        Text = "LongCapture Standalone v0.1-dev";
+        Text = "LongCapture Standalone v0.1.3-dev";
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new Size(760, 690);
         Size = new Size(900, 760);
@@ -67,11 +71,55 @@ internal sealed class MainForm : Form
 
         var subtitle = new Label
         {
-            Text = "Independent long screenshot workspace — ShareX capture engine, quality guard, Smart Web and Capture Recipes",
+            Text = "Independent long screenshot workspace — title-locked targets, ShareX capture engine, quality guard, Smart Web and Capture Recipes",
             Dock = DockStyle.Top,
             Height = 42,
             Padding = new Padding(20, 0, 0, 8)
         };
+
+        var targetStrip = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            Height = 58,
+            Padding = new Padding(20, 6, 20, 6),
+            ColumnCount = 4,
+            RowCount = 1,
+            GrowStyle = TableLayoutPanelGrowStyle.FixedSize
+        };
+        targetStrip.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
+        targetStrip.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        targetStrip.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 140));
+        targetStrip.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 135));
+
+        var targetLabel = new Label
+        {
+            Text = "Capture target",
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft
+        };
+
+        targetSelector.DropDownStyle = ComboBoxStyle.DropDownList;
+        targetSelector.Dock = DockStyle.Fill;
+        targetSelector.MaxDropDownItems = 24;
+        targetSelector.DropDownWidth = 760;
+        targetSelector.Items.Add(ShareXPickerLabel);
+        targetSelector.SelectedIndex = 0;
+        targetSelector.SelectionChangeCommitted += (_, _) => LogSelectedTarget();
+
+        refreshTargetsButton.Text = "Refresh targets";
+        refreshTargetsButton.Dock = DockStyle.Fill;
+        refreshTargetsButton.MinimumSize = new Size(130, 34);
+        refreshTargetsButton.Click += (_, _) => RefreshTargetList();
+
+        openLogsButton.Text = "Open logs folder";
+        openLogsButton.Dock = DockStyle.Fill;
+        openLogsButton.MinimumSize = new Size(125, 34);
+        openLogsButton.Click += (_, _) => OpenLogDirectory();
+
+        targetStrip.Controls.Add(targetLabel, 0, 0);
+        targetStrip.Controls.Add(targetSelector, 1, 0);
+        targetStrip.Controls.Add(refreshTargetsButton, 2, 0);
+        targetStrip.Controls.Add(openLogsButton, 3, 0);
 
         var body = new TableLayoutPanel
         {
@@ -190,7 +238,7 @@ internal sealed class MainForm : Form
         body.Controls.Add(actionPanel, 0, 11);
         body.SetColumnSpan(actionPanel, 2);
 
-        statusLabel.Text = "Ready. Press F8 or click Start long capture.";
+        statusLabel.Text = "Ready. Choose a target by title, or keep the ShareX picker fallback, then press F8.";
         statusLabel.Dock = DockStyle.Bottom;
         statusLabel.Height = 46;
         statusLabel.Padding = new Padding(18, 12, 0, 0);
@@ -205,11 +253,18 @@ internal sealed class MainForm : Form
         trayIcon.Visible = false;
 
         Controls.Add(body);
+        Controls.Add(targetStrip);
         Controls.Add(subtitle);
         Controls.Add(title);
         Controls.Add(statusLabel);
 
-        Shown += async (_, _) => await RefreshModeUiAsync();
+        Shown += async (_, _) =>
+        {
+            RefreshTargetList();
+            await RefreshModeUiAsync();
+            LongCaptureLog.Info($"main form shown version={StandaloneVersion.Value} output={outputDirectory}");
+        };
+        FormClosed += (_, _) => LongCaptureLog.Info("main form closed");
     }
 
     protected override void OnHandleCreated(EventArgs e)
@@ -218,7 +273,13 @@ internal sealed class MainForm : Form
         hotkeyRegistered = RegisterHotKey(Handle, HotkeyId, MOD_NOREPEAT, VK_F8);
         if (!hotkeyRegistered)
         {
+            int error = Marshal.GetLastWin32Error();
             statusLabel.Text = "F8 is already in use by another app. Use the Start button; tray Stop remains available.";
+            LongCaptureLog.Warn($"global F8 registration failed win32={error}");
+        }
+        else
+        {
+            LongCaptureLog.Info("global F8 hotkey registered");
         }
     }
 
@@ -228,6 +289,7 @@ internal sealed class MainForm : Form
         {
             UnregisterHotKey(Handle, HotkeyId);
             hotkeyRegistered = false;
+            LongCaptureLog.Info("global F8 hotkey unregistered");
         }
         base.OnHandleDestroyed(e);
     }
@@ -236,6 +298,7 @@ internal sealed class MainForm : Form
     {
         if (m.Msg == WM_HOTKEY && m.WParam.ToInt32() == HotkeyId)
         {
+            LongCaptureLog.Info(captureBusy ? "F8 requested capture stop" : "F8 requested capture start");
             if (captureBusy) RequestStop();
             else BeginInvoke(new Action(() => _ = ToggleCaptureAsync()));
             return;
@@ -262,6 +325,8 @@ internal sealed class MainForm : Form
         _ => LongCaptureStandaloneMode.Normal
     };
 
+    private CaptureTargetDescriptor? SelectedTarget => targetSelector.SelectedItem as CaptureTargetDescriptor;
+
     private static void AddRow(TableLayoutPanel body, int row, string label, Control control)
     {
         body.Controls.Add(new Label
@@ -271,6 +336,52 @@ internal sealed class MainForm : Form
             TextAlign = ContentAlignment.MiddleLeft
         }, 0, row);
         body.Controls.Add(control, 1, row);
+    }
+
+    private void RefreshTargetList()
+    {
+        IntPtr previousHandle = SelectedTarget?.Handle ?? IntPtr.Zero;
+        targetSelector.BeginUpdate();
+        try
+        {
+            targetSelector.Items.Clear();
+            targetSelector.Items.Add(ShareXPickerLabel);
+
+            var targets = CaptureTargetService.EnumerateTopLevelWindows();
+            int selectedIndex = 0;
+            foreach (CaptureTargetDescriptor target in targets)
+            {
+                int index = targetSelector.Items.Add(target);
+                if (target.Handle == previousHandle) selectedIndex = index;
+            }
+
+            targetSelector.SelectedIndex = selectedIndex;
+            LongCaptureLog.Info($"target list refreshed visibleTargets={targets.Count} preserved={(selectedIndex > 0)}");
+        }
+        catch (Exception ex)
+        {
+            targetSelector.Items.Clear();
+            targetSelector.Items.Add(ShareXPickerLabel);
+            targetSelector.SelectedIndex = 0;
+            LongCaptureLog.Error("target list refresh failed", ex);
+        }
+        finally
+        {
+            targetSelector.EndUpdate();
+        }
+    }
+
+    private void LogSelectedTarget()
+    {
+        CaptureTargetDescriptor? target = SelectedTarget;
+        if (target is null)
+        {
+            LongCaptureLog.Info("capture target changed to ShareX picker fallback");
+            return;
+        }
+
+        LongCaptureLog.Info(
+            $"capture target selected hwnd={target.HandleHex} pid={target.ProcessId} process={LongCaptureLog.OneLine(target.ProcessName)} title={LongCaptureLog.OneLine(target.Title)} bounds={target.Bounds}");
     }
 
     private async Task RefreshModeUiAsync()
@@ -291,6 +402,7 @@ internal sealed class MainForm : Form
         }
 
         LongCaptureStandaloneBridge.ConfigureMode(mode, runMode ? recipePath.Text : null);
+        LongCaptureLog.Info($"mode configured mode={mode}");
         await RefreshReadinessAsync(showDialogOnFailure: false);
     }
 
@@ -300,6 +412,7 @@ internal sealed class MainForm : Form
         string? recipe = mode == LongCaptureStandaloneMode.RunRecipe ? recipePath.Text : null;
         LongCaptureStandaloneReadiness readiness = await LongCaptureStandaloneBridge.ProbeAsync(mode, recipe);
         readinessLabel.Text = readiness.Ready ? "Ready · " + readiness.Detail : "Not ready · " + readiness.Detail;
+        LongCaptureLog.Info($"readiness mode={mode} ready={readiness.Ready} detail={LongCaptureLog.OneLine(readiness.Detail)}");
 
         if (!string.IsNullOrWhiteSpace(readiness.RecipePath) && mode == LongCaptureStandaloneMode.RunRecipe)
         {
@@ -322,10 +435,12 @@ internal sealed class MainForm : Form
     {
         browserButton.Enabled = false;
         readinessLabel.Text = "Starting Capture Browser...";
+        LongCaptureLog.Info("Capture Browser launch requested");
         try
         {
             LongCaptureBrowserLaunchResult result = await LongCaptureStandaloneBridge.LaunchCaptureBrowserAsync();
             readinessLabel.Text = result.Started ? "Capture Browser ready · " + result.Detail : "Capture Browser failed · " + result.Detail;
+            LongCaptureLog.Info($"Capture Browser launch started={result.Started} detail={LongCaptureLog.OneLine(result.Detail)}");
             if (!result.Started)
             {
                 MessageBox.Show(this, result.Detail, "Capture Browser", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -333,8 +448,14 @@ internal sealed class MainForm : Form
             else
             {
                 await Task.Delay(250);
+                RefreshTargetList();
                 await RefreshReadinessAsync(showDialogOnFailure: false);
             }
+        }
+        catch (Exception ex)
+        {
+            LongCaptureLog.Error("Capture Browser launch failed", ex);
+            throw;
         }
         finally
         {
@@ -354,6 +475,7 @@ internal sealed class MainForm : Form
         {
             recipePath.Text = dialog.FileName;
             LongCaptureStandaloneBridge.ConfigureMode(LongCaptureStandaloneMode.RunRecipe, dialog.FileName);
+            LongCaptureLog.Info($"recipe selected path={LongCaptureLog.OneLine(dialog.FileName)}");
             _ = RefreshReadinessAsync(showDialogOnFailure: false);
         }
     }
@@ -365,14 +487,17 @@ internal sealed class MainForm : Form
         LongCaptureRecipeReviewInfo? info = LongCaptureStandaloneBridge.LoadRecipeReview(path);
         if (info is null)
         {
+            LongCaptureLog.Warn($"recipe review failed path={LongCaptureLog.OneLine(path)}");
             MessageBox.Show(this, "No valid Capture Recipe could be loaded.", "Recipe review", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
+        LongCaptureLog.Info($"recipe review opened path={LongCaptureLog.OneLine(info.RecipePath)}");
         using var review = new RecipeReviewForm(info);
         if (review.ShowDialog(this) == DialogResult.OK)
         {
             recipePath.Text = info.RecipePath;
+            LongCaptureLog.Info($"recipe review approved path={LongCaptureLog.OneLine(info.RecipePath)}");
             _ = RefreshReadinessAsync(showDialogOnFailure: false);
         }
     }
@@ -386,18 +511,25 @@ internal sealed class MainForm : Form
         }
 
         LongCaptureStandaloneMode mode = SelectedMode;
-        if (!await RefreshReadinessAsync(showDialogOnFailure: true)) return;
+        if (!await RefreshReadinessAsync(showDialogOnFailure: true))
+        {
+            LongCaptureLog.Warn($"capture blocked by readiness mode={mode}");
+            return;
+        }
 
         LongCaptureStandaloneBridge.ConfigureMode(
             mode,
             mode == LongCaptureStandaloneMode.RunRecipe ? recipePath.Text : null);
 
+        CaptureTargetDescriptor? requestedTarget = SelectedTarget;
         captureBusy = true;
         SetControlsEnabled(false);
         captureButton.Text = "Stop capture   (F8)";
-        statusLabel.Text = mode == LongCaptureStandaloneMode.Normal
-            ? "Select the scrolling window or region..."
-            : "Select the Capture Browser window or desired capture region...";
+        statusLabel.Text = requestedTarget is null
+            ? (mode == LongCaptureStandaloneMode.Normal
+                ? "Select the scrolling window or region..."
+                : "Select the Capture Browser window or desired capture region...")
+            : $"Locking capture to: {requestedTarget.Title}";
 
         var options = new ScrollingCaptureOptions
         {
@@ -411,6 +543,12 @@ internal sealed class MainForm : Form
             ShowRegion = true
         };
 
+        string targetSummary = requestedTarget is null
+            ? "ShareX-picker-fallback"
+            : $"hwnd={requestedTarget.HandleHex} pid={requestedTarget.ProcessId} title={LongCaptureLog.OneLine(requestedTarget.Title)}";
+        LongCaptureLog.Info(
+            $"capture requested mode={mode} target={targetSummary} startDelay={options.StartDelay} scrollDelay={options.ScrollDelay} scrollAmount={options.ScrollAmount} scrollMethod={options.ScrollMethod} autoScrollTop={options.AutoScrollTop}");
+
         try
         {
             using var service = new ScrollingCaptureService(options);
@@ -419,20 +557,49 @@ internal sealed class MainForm : Form
             Hide();
             await Task.Delay(180);
 
-            if (!service.SelectWindow())
+            bool targetAssigned = false;
+            if (requestedTarget is not null)
             {
-                ShowMainWindow();
-                statusLabel.Text = "Capture cancelled before start.";
-                return;
+                if (CaptureTargetService.TryRefreshTarget(requestedTarget, out CaptureTargetDescriptor? refreshed, out string refreshDetail) && refreshed is not null)
+                {
+                    if (ScrollingCaptureTargetBridge.TryAssignTarget(service, refreshed, out string bridgeDetail))
+                    {
+                        targetAssigned = true;
+                        LongCaptureLog.Info(
+                            $"locked target assigned hwnd={refreshed.HandleHex} pid={refreshed.ProcessId} title={LongCaptureLog.OneLine(refreshed.Title)} bounds={refreshed.Bounds} bridge={LongCaptureLog.OneLine(bridgeDetail)}");
+                    }
+                    else
+                    {
+                        LongCaptureLog.Warn($"locked target bridge unavailable; falling back to ShareX picker detail={LongCaptureLog.OneLine(bridgeDetail)}");
+                    }
+                }
+                else
+                {
+                    LongCaptureLog.Warn($"locked target became unavailable; falling back to ShareX picker detail={LongCaptureLog.OneLine(refreshDetail)}");
+                }
+            }
+
+            if (!targetAssigned)
+            {
+                if (!service.SelectWindow())
+                {
+                    ShowMainWindow();
+                    statusLabel.Text = "Capture cancelled before start.";
+                    LongCaptureLog.Info("capture cancelled in ShareX target picker");
+                    return;
+                }
+                LongCaptureLog.Info("ShareX fallback picker selected a capture region/window");
             }
 
             trayStopItem.Enabled = true;
             trayIcon.Visible = true;
             trayIcon.ShowBalloonTip(1800, "LongCapture is running", "Press F8 or use the tray menu to stop at any point.", ToolTipIcon.Info);
+            LongCaptureLog.Info("capture engine start requested");
 
             ScrollingCaptureStatus status = await service.StartCaptureAsync();
             trayStopItem.Enabled = false;
             trayIcon.Visible = false;
+            LongCaptureLog.Info($"capture engine completed status={status}");
 
             string? savedPath = null;
             Size? resultSize = null;
@@ -442,6 +609,7 @@ internal sealed class MainForm : Form
                 savedPath = Path.Combine(outputDirectory, $"LongCapture_{DateTime.Now:yyyyMMdd_HHmmssfff}.png");
                 service.Result.Save(savedPath, ImageFormat.Png);
                 resultSize = service.Result.Size;
+                LongCaptureLog.Info($"capture image saved width={resultSize.Value.Width} height={resultSize.Value.Height} path={LongCaptureLog.OneLine(savedPath)}");
             }
 
             ShowMainWindow();
@@ -450,6 +618,7 @@ internal sealed class MainForm : Form
             {
                 string latest = LongCaptureStandaloneBridge.GetLatestRecipePath();
                 if (!string.IsNullOrWhiteSpace(latest)) recipePath.Text = latest;
+                LongCaptureLog.Info($"Teach mode latest recipe={LongCaptureLog.OneLine(latest)}");
             }
 
             UpdateQualityLabel();
@@ -461,7 +630,8 @@ internal sealed class MainForm : Form
             else
             {
                 statusLabel.Text = $"Capture ended with status {status}; no usable image was produced.";
-                MessageBox.Show(this, "LongCapture did not receive a usable stitched image. Try a larger scrolling region or a different scroll method.", "LongCapture", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                LongCaptureLog.Warn($"capture produced no usable stitched image status={status}");
+                MessageBox.Show(this, "LongCapture did not receive a usable stitched image. Try a larger scrolling region or a different scroll method.\n\nDiagnostic log: " + LongCaptureLog.CurrentLogPath, "LongCapture", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
         catch (Exception ex)
@@ -470,7 +640,8 @@ internal sealed class MainForm : Form
             trayIcon.Visible = false;
             ShowMainWindow();
             statusLabel.Text = "Capture failed.";
-            MessageBox.Show(this, ex.Message, "LongCapture capture error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            LongCaptureLog.Error("capture failed", ex);
+            MessageBox.Show(this, ex.Message + "\n\nDiagnostic log: " + LongCaptureLog.CurrentLogPath, "LongCapture capture error", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         finally
         {
@@ -478,6 +649,7 @@ internal sealed class MainForm : Form
             captureBusy = false;
             captureButton.Text = "Start long capture   (F8)";
             SetControlsEnabled(true);
+            LongCaptureLog.Info("capture lifecycle cleanup completed");
             await RefreshModeUiAsync();
         }
     }
@@ -488,6 +660,15 @@ internal sealed class MainForm : Form
         qualityLabel.Text = quality is null
             ? "Quality: no quality summary was produced for this capture."
             : $"Quality: {quality.Status} / {quality.Confidence} · integrity {quality.IntegrityScore}/100 · {quality.SummaryPath}";
+
+        if (quality is null)
+        {
+            LongCaptureLog.Warn("quality summary was not produced for the latest capture");
+        }
+        else
+        {
+            LongCaptureLog.Info($"quality status={quality.Status} confidence={quality.Confidence} integrity={quality.IntegrityScore}/100 summary={LongCaptureLog.OneLine(quality.SummaryPath)}");
+        }
     }
 
     private void RequestStop()
@@ -495,13 +676,21 @@ internal sealed class MainForm : Form
         if (activeService?.IsCapturing == true)
         {
             trayStopItem.Enabled = false;
+            LongCaptureLog.Info("capture stop forwarded to ShareX scrolling engine");
             activeService.StopCapture();
+        }
+        else
+        {
+            LongCaptureLog.Warn("capture stop requested while engine was not capturing");
         }
     }
 
     private void SetControlsEnabled(bool enabled)
     {
         modeSelector.Enabled = enabled;
+        targetSelector.Enabled = enabled;
+        refreshTargetsButton.Enabled = enabled;
+        openLogsButton.Enabled = true;
         startDelay.Enabled = enabled;
         scrollDelay.Enabled = enabled;
         scrollAmount.Enabled = enabled;
@@ -533,11 +722,39 @@ internal sealed class MainForm : Form
 
     private void OpenOutputDirectory()
     {
-        Directory.CreateDirectory(outputDirectory);
-        Process.Start(new ProcessStartInfo
+        try
         {
-            FileName = outputDirectory,
-            UseShellExecute = true
-        });
+            Directory.CreateDirectory(outputDirectory);
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = outputDirectory,
+                UseShellExecute = true
+            });
+            LongCaptureLog.Info($"opened output directory path={LongCaptureLog.OneLine(outputDirectory)}");
+        }
+        catch (Exception ex)
+        {
+            LongCaptureLog.Error("failed to open output directory", ex);
+            MessageBox.Show(this, ex.Message, "Open output folder", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    private void OpenLogDirectory()
+    {
+        try
+        {
+            Directory.CreateDirectory(LongCaptureLog.LogDirectory);
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = LongCaptureLog.LogDirectory,
+                UseShellExecute = true
+            });
+            LongCaptureLog.Info($"opened log directory path={LongCaptureLog.OneLine(LongCaptureLog.LogDirectory)}");
+        }
+        catch (Exception ex)
+        {
+            LongCaptureLog.Error("failed to open log directory", ex);
+            MessageBox.Show(this, ex.Message, "Open logs folder", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
     }
 }

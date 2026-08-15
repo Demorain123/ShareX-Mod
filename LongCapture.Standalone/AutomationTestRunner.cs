@@ -67,8 +67,8 @@ internal static class AutomationTestRunner
         AddManual(report, "manual.live-page-visual", "Real environment", "Real web/app long-image visual inspection", "Deterministic stitch, repeated-pattern, sticky/fixed and lazy-load fixtures are automated; the final pixels on real websites/apps still require visual inspection because page scripts, animation, GPU composition and timing differ by machine/site.");
         AddManual(report, "manual.smart-web-live", "Real environment", "Smart Web live Capture Browser session", "Semantic/router/recipe primitives are regression-tested automatically, but a real signed-in Capture Browser page and site-specific DOM/CDP behavior require a live test.");
         AddManual(report, "manual.daily-chrome-cdp", "Known limitation", "Existing daily Chrome authenticated DOM/CDP reuse", "Normal Long Capture can target an existing Chrome HWND. Reusing that same daily Chrome authenticated DOM/CDP session for Smart Web is not declared complete in v0.1.3 RC2.");
-        AddManual(report, "manual.multimonitor-gpu", "Real environment", "Multi-monitor DPI / GPU / animation / infinite-feed behavior", "Automated layout pressure covers 100/125/150/200% font-DPI pressure, but actual monitor transitions, GPU/compositor behavior and unbounded feeds require the real desktop." );
-        AddManual(report, "manual.teach-recipe-live", "Real environment", "Teach Capture and Run Recipe live interaction", "Planner, anchor, approval/integrity and pagination intent logic are automated; live browser interaction and final workflow semantics must still be exercised manually." );
+        AddManual(report, "manual.multimonitor-gpu", "Real environment", "Multi-monitor DPI / GPU / animation / infinite-feed behavior", "Automated layout pressure covers 100/125/150/200% font-DPI pressure, but actual monitor transitions, GPU/compositor behavior and unbounded feeds require the real desktop.");
+        AddManual(report, "manual.teach-recipe-live", "Real environment", "Teach Capture and Run Recipe live interaction", "Planner, anchor, approval/integrity and pagination intent logic are automated; live browser interaction and final workflow semantics must still be exercised manually.");
 
         report.PassedCount = report.Cases.Count(x => x.Status == "PASS");
         report.FailedCount = report.Cases.Count(x => x.Status == "FAIL");
@@ -146,7 +146,7 @@ internal static class AutomationTestRunner
 
     private static string RunSemanticSuites()
     {
-        Assembly assembly = typeof(ScrollingCaptureManager).Assembly;
+        Assembly assembly = typeof(ScrollingCaptureService).Assembly;
         var passed = new List<string>();
         foreach (string suiteName in SemanticSuites)
         {
@@ -163,47 +163,55 @@ internal static class AutomationTestRunner
     {
         string? sessionDir = null;
         string? exported = null;
+        string tempExportRoot = Path.Combine(Path.GetTempPath(), "LongCapture-Automation-Diagnostics", Guid.NewGuid().ToString("N"));
         try
         {
-            var options = new CaptureSessionOptions(
-                StartAtTop: false,
-                HideSelectionFrame: true,
-                RemoveDuplicateHeaders: true,
-                StopAtPageEnd: false,
-                AppendImageAppendix: true,
-                DetectImagesOnly: false,
-                DebugLevel: "automation",
-                RecipeName: null);
+            var options = new ScrollingCaptureOptions
+            {
+                StartDelay = 0,
+                AutoScrollTop = false,
+                ScrollDelay = 50,
+                ScrollMethod = ScrollMethod.MouseWheel,
+                ScrollAmount = 1,
+                AutoIgnoreBottomEdge = true,
+                AutoUpload = false,
+                ShowRegion = true
+            };
 
             using (var recorder = new CaptureSessionRecorder("AutomationTest", "synthetic diagnostics target", options))
             {
                 sessionDir = recorder.SessionDirectory;
-                CaptureSessionQuality quality = recorder.Complete(null, false, "intentional automation diagnostics fixture");
-                if (string.IsNullOrWhiteSpace(quality.SessionPath) || !Directory.Exists(quality.SessionPath))
-                    throw new InvalidOperationException("Capture session did not return a valid session path.");
+                CaptureSessionQuality quality = recorder.Complete(
+                    ScrollingCaptureStatus.PartiallySuccessful,
+                    savedPath: null,
+                    resultSize: null,
+                    engineQuality: null);
+                if (string.IsNullOrWhiteSpace(quality.Status))
+                    throw new InvalidOperationException("Capture session returned an empty quality status.");
             }
 
-            foreach (string file in new[] { "session.json", "quality.json", "completed.txt" })
+            foreach (string file in new[] { "session.json", "quality.json", "session.log", "engine-evidence-unavailable.txt" })
             {
                 if (!File.Exists(Path.Combine(sessionDir!, file))) throw new FileNotFoundException($"Diagnostics session missing {file}.");
             }
 
-            exported = CaptureSessionRecorder.ExportLatestBundle();
+            exported = CaptureSessionRecorder.ExportLatestBundle(tempExportRoot);
             if (!File.Exists(exported)) throw new FileNotFoundException("Export diagnostics did not create a ZIP.", exported);
 
             using ZipArchive archive = ZipFile.OpenRead(exported);
             string[] names = archive.Entries.Select(x => x.FullName.Replace('\\', '/')).ToArray();
-            foreach (string required in new[] { "session.json", "quality.json", "completed.txt" })
+            foreach (string required in new[] { "session.json", "quality.json", "session.log", "engine-evidence-unavailable.txt" })
             {
                 if (!names.Any(x => x.EndsWith(required, StringComparison.OrdinalIgnoreCase)))
                     throw new InvalidOperationException($"Exported diagnostics ZIP missing {required}.");
             }
 
-            return "Recorder created session.json/quality.json/completed.txt and Export diagnostics produced a readable ZIP containing them.";
+            return "Recorder created session/quality/log/evidence files and Export diagnostics produced a readable ZIP containing them.";
         }
         finally
         {
             TryDeleteFile(exported);
+            TryDeleteDirectory(tempExportRoot);
             TryDeleteDirectory(sessionDir);
         }
     }

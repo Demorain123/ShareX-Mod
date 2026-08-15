@@ -150,7 +150,22 @@ jobs:
         run: dotnet restore --runtime win-x64 LongCapture.Standalone\LongCapture.Standalone.csproj
 
       - name: Publish standalone self-contained win-x64
-        run: dotnet publish LongCapture.Standalone\LongCapture.Standalone.csproj --no-restore --configuration Release --runtime win-x64 --self-contained true --output artifacts\LongCapture /m:1
+        shell: pwsh
+        run: |
+          $publishOutput = @(& dotnet publish LongCapture.Standalone\LongCapture.Standalone.csproj --no-restore --configuration Release --runtime win-x64 --self-contained true --output artifacts\LongCapture /m:1 2>&1)
+          $publishExit = $LASTEXITCODE
+          $publishOutput | ForEach-Object { Write-Host $_ }
+          if ($publishExit -ne 0) {
+            $diagnostics = @($publishOutput | Where-Object { "$_" -match ': (error|warning) [A-Z]+[0-9]+:' })
+            if ($diagnostics.Count -eq 0) {
+              $diagnostics = @($publishOutput | Select-Object -Last 20)
+            }
+            foreach ($line in ($diagnostics | Select-Object -First 20)) {
+              $safe = ("$line").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+              Write-Host "::error::$safe"
+            }
+            exit $publishExit
+          }
 
       - name: Validate published layout
         shell: pwsh

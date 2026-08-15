@@ -1,0 +1,83 @@
+name: Apply ShareX-Mod v0.7.1 UI finalization once
+
+on:
+  push:
+    branches:
+      - "mod/robust-scrolling-v0.1"
+    paths:
+      - ".github/workflows/apply-v071-ui-finalize.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout overlay branch
+        uses: actions/checkout@v6
+        with:
+          ref: mod/robust-scrolling-v0.1
+          fetch-depth: 0
+
+      - name: Finalize v0.7.1 simple UI
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $window = "ShareX.ScreenCaptureLib/Presentation/ScrollingCapture/ScrollingCaptureWindow.axaml.cs"
+          $text = [IO.File]::ReadAllText($window)
+
+          if ($text.Contains("ShareXModCaptureModeUi.Attach(this);")) {
+            $text = $text.Replace(
+              "ShareXModCaptureModeUi.Attach(this);",
+              "ShareXModCaptureModeUiV071.Attach(this);")
+          }
+          elseif (-not $text.Contains("ShareXModCaptureModeUiV071.Attach(this);")) {
+            $anchor = "        InitializeComponent();"
+            if (-not $text.Contains($anchor)) { throw "ScrollingCaptureWindow InitializeComponent anchor missing." }
+            $text = $text.Replace(
+              $anchor,
+              $anchor + "`n        ShareXModCaptureModeUiV071.Attach(this);")
+          }
+
+          [IO.File]::WriteAllText($window,$text,[Text.UTF8Encoding]::new($true))
+
+          foreach ($workflowPath in @(
+            ".github/workflows/validate-mod-v065.yml",
+            ".github/workflows/validate-mod-v067.yml",
+            ".github/workflows/validate-mod-v070.yml"
+          )) {
+            if (-not (Test-Path $workflowPath)) { continue }
+            $wf = [IO.File]::ReadAllText($workflowPath)
+            if ($wf -match '(?ms)^on:\s*\n\s*push:') {
+              $wf = [regex]::Replace(
+                $wf,
+                '(?ms)^on:\s*\n.*?^permissions:',
+                "on:`n  workflow_dispatch:`n`npermissions:",
+                1)
+              [IO.File]::WriteAllText($workflowPath,$wf,[Text.UTF8Encoding]::new($false))
+            }
+          }
+
+          [IO.File]::WriteAllText("mod-overlay/VERSION","0.7.1-dev`n",[Text.UTF8Encoding]::new($false))
+          git diff --check
+
+      - name: Commit v0.7.1 UI
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "sharex-mod-ci"
+          git config user.email "sharex-mod-ci@users.noreply.github.com"
+          git add \
+            ShareX.ScreenCaptureLib/Presentation/ScrollingCapture/ScrollingCaptureWindow.axaml.cs \
+            mod-overlay/VERSION \
+            .github/workflows/validate-mod-v065.yml \
+            .github/workflows/validate-mod-v067.yml \
+            .github/workflows/validate-mod-v070.yml
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+            exit 0
+          fi
+          git commit -m "feat(v0.7.1): surface readiness and appendix retention in capture UI"
+          git push origin HEAD:mod/robust-scrolling-v0.1

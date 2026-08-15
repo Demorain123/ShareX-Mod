@@ -1,0 +1,11 @@
+diff --git a/ShareX.ScreenCaptureLib/Presentation/ScrollingCapture/ScrollingCaptureWindow.axaml.cs b/ShareX.ScreenCaptureLib/Presentation/ScrollingCapture/ScrollingCaptureWindow.axaml.cs
+--- a/ShareX.ScreenCaptureLib/Presentation/ScrollingCapture/ScrollingCaptureWindow.axaml.cs
++++ b/ShareX.ScreenCaptureLib/Presentation/ScrollingCapture/ScrollingCaptureWindow.axaml.cs
+@@ -136,7 +136,7 @@ public partial class ScrollingCaptureWindow : Window
+         finally
+         {
+             SetCaptureControlsEnabled(true);
+-            LoadImage(_service.Result);
++            await LoadShareXModImageAsync(_service.Result);
+             RestoreAndActivate();
+         }

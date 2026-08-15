@@ -1,0 +1,312 @@
+name: Apply ShareX-Mod v0.8.2 Page Loop resume once
+
+on:
+  push:
+    branches:
+      - "mod/robust-scrolling-v0.1"
+    paths:
+      - ".github/workflows/apply-v082-page-loop-resume.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: mod/robust-scrolling-v0.1
+          fetch-depth: 0
+
+      - name: Wait for v0.8.1 Page Loop
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 50); do
+            git fetch origin mod/robust-scrolling-v0.1
+            git reset --hard origin/mod/robust-scrolling-v0.1
+            if grep -q "ShareXModCaptureRecipePageImageCollector.CollectAsync" mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipePageLoopRunner.cs; then
+              exit 0
+            fi
+            echo "Waiting for v0.8.1 integration ($i/50)..."
+            sleep 10
+          done
+          exit 1
+
+      - name: Integrate Page Loop resume
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $path = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipePageLoopRunner.cs"
+          $text = [IO.File]::ReadAllText($path)
+
+          if (-not $text.Contains("ShareXModPageLoopResumeJournal.Open")) {
+            $old = @'
+        string directory = ResolveDirectory(settings);
+        Directory.CreateDirectory(directory);
+        ShareXModCaptureSessionContext.RegisterComponent("capture-recipe-page-loop", directory);
+
+        List<LoopPart> parts = new();
+        List<PageAudit> pages = new();
+'@
+            $new = @'
+        string suggestedDirectory = ResolveDirectory(settings);
+        ShareXModPageLoopResumeJournal resumeJournal =
+            ShareXModPageLoopResumeJournal.Open(
+                settings,
+                settings.CaptureRecipeReplayPath,
+                suggestedDirectory);
+
+        string directory = resumeJournal.OutputDirectory;
+        if (resumeJournal.IsResumed &&
+            !string.Equals(directory, suggestedDirectory, StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                if (Directory.Exists(suggestedDirectory) &&
+                    !Directory.EnumerateFileSystemEntries(suggestedDirectory).Any())
+                {
+                    Directory.Delete(suggestedDirectory);
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        Directory.CreateDirectory(directory);
+        ShareXModCaptureSessionContext.RegisterComponent("capture-recipe-page-loop", directory);
+        ShareXModCaptureSessionContext.RegisterComponent("page-loop-resume", directory);
+
+        List<LoopPart> parts = resumeJournal.Parts
+            .Select(x => new LoopPart(
+                x.File,
+                x.PageNumber,
+                x.TemplateStep,
+                x.PageKey,
+                x.StartY,
+                x.EndY,
+                x.Width,
+                x.Height))
+            .ToList();
+        List<PageAudit> pages = new();
+'@
+            if (-not $text.Contains($old)) { throw "Page Loop resume directory anchor missing." }
+            $text = $text.Replace($old,$new)
+          }
+
+          if (-not $text.Contains("resumeStartPage")) {
+            $old = @'
+        bool overlayEmitted = false;
+        int navigationCount = 0;
+
+        for (int pageNumber = 1; pageNumber <= maxPages; pageNumber++)
+'@
+            $new = @'
+        bool overlayEmitted = parts.Count > 0;
+        int navigationCount = 0;
+        int resumeStartPage = resumeJournal.IsResumed
+            ? Math.Max(1, resumeJournal.NextPageNumber)
+            : 1;
+        bool resumeBlocked = false;
+
+        if (resumeJournal.IsResumed)
+        {
+            if (resumeJournal.Phase.Equals("before-next", StringComparison.OrdinalIgnoreCase) ||
+                resumeJournal.Phase.Equals("needs-review", StringComparison.OrdinalIgnoreCase))
+            {
+                resumeJournal.NeedsReview(
+                    "Resume stopped at an ambiguous in-flight Next Page boundary; existing captured pages are preserved.");
+                resumeBlocked = true;
+                truncated = true;
+                stopReason = "page-loop-resume-needs-review";
+            }
+            else
+            {
+                ShareXModRecipePageEvidence resumeEvidence =
+                    await ShareXModRecipePageTransitionVerifier.CaptureAsync(client);
+
+                if (resumeJournal.Phase.Equals("ready", StringComparison.OrdinalIgnoreCase) &&
+                    !string.IsNullOrWhiteSpace(resumeJournal.CurrentFingerprint) &&
+                    (!string.Equals(resumeEvidence.MainFingerprint, resumeJournal.CurrentFingerprint, StringComparison.Ordinal) ||
+                     !string.Equals(resumeEvidence.Url, resumeJournal.CurrentUrl, StringComparison.Ordinal)))
+                {
+                    resumeJournal.NeedsReview(
+                        "Current browser page no longer matches the last committed resume boundary.");
+                    resumeBlocked = true;
+                    truncated = true;
+                    stopReason = "page-loop-resume-page-mismatch";
+                }
+                else if (resumeJournal.Phase.Equals("capturing", StringComparison.OrdinalIgnoreCase))
+                {
+                    int redoPage = Math.Max(1, resumeJournal.CurrentPageNumber);
+                    resumeJournal.RemovePageParts(redoPage, archive: true);
+                    parts.RemoveAll(x => x.PageNumber == redoPage);
+                    resumeStartPage = redoPage;
+                }
+            }
+        }
+
+        int loopStartPage = resumeBlocked ? maxPages + 1 : resumeStartPage;
+
+        for (int pageNumber = loopStartPage; pageNumber <= maxPages; pageNumber++)
+'@
+            if (-not $text.Contains($old)) { throw "Page Loop resume loop anchor missing." }
+            $text = $text.Replace($old,$new)
+          }
+
+          if (-not $text.Contains("resumeJournal.BeginPage")) {
+            $old = @'
+            string currentPageKey = PageKeyFromUrl(pageEvidence.Url);
+            int pagePartStart = parts.Count;
+'@
+            $new = @'
+            string currentPageKey = PageKeyFromUrl(pageEvidence.Url);
+            resumeJournal.BeginPage(pageNumber, pageEvidence);
+            int pagePartStart = parts.Count;
+'@
+            if (-not $text.Contains($old)) { throw "Page Loop BeginPage anchor missing." }
+            $text = $text.Replace($old,$new)
+          }
+
+          if (-not $text.Contains("resumeJournal.RecordPageParts")) {
+            $old = @'
+            if (!failed)
+            {
+                await ShareXModCaptureRecipePageImageCollector.CollectAsync(
+                    client,
+                    settings,
+                    directory,
+                    pageNumber);
+            }
+
+            if (failed)
+'@
+            $new = @'
+            if (!failed)
+            {
+                List<ShareXModPageLoopResumePart> committedPageParts = parts
+                    .Where(x => x.PageNumber == pageNumber)
+                    .OrderBy(x => x.TemplateStep)
+                    .ThenBy(x => x.StartY)
+                    .Select(x => new ShareXModPageLoopResumePart(
+                        x.File,
+                        x.PageNumber,
+                        x.TemplateStep,
+                        x.PageKey,
+                        x.StartY,
+                        x.EndY,
+                        x.Width,
+                        x.Height))
+                    .ToList();
+
+                resumeJournal.RecordPageParts(pageNumber, committedPageParts);
+
+                await ShareXModCaptureRecipePageImageCollector.CollectAsync(
+                    client,
+                    settings,
+                    directory,
+                    pageNumber);
+            }
+
+            if (failed)
+'@
+            if (-not $text.Contains($old)) { throw "Page Loop RecordPageParts anchor missing." }
+            $text = $text.Replace($old,$new)
+          }
+
+          if (-not $text.Contains("resumeJournal.BeforeNext")) {
+            $old = @'
+            ShareXModRecipeSemanticActionResult next =
+                await ShareXModRecipeSemanticActionExecutor.ActivateAsync(
+'@
+            $new = @'
+            resumeJournal.BeforeNext(pageNumber, pageEvidence);
+
+            ShareXModRecipeSemanticActionResult next =
+                await ShareXModRecipeSemanticActionExecutor.ActivateAsync(
+'@
+            if (-not $text.Contains($old)) { throw "Page Loop BeforeNext anchor missing." }
+            $text = $text.Replace($old,$new)
+          }
+
+          if (-not $text.Contains("resumeJournal.CompleteTransition")) {
+            $old = @'
+            if (!next.Transitioned || failed)
+            {
+                break;
+            }
+
+            await Task.Delay(100);
+'@
+            $new = @'
+            if (!next.Transitioned || failed)
+            {
+                if (!failed)
+                {
+                    resumeJournal.Complete(stopReason);
+                }
+                break;
+            }
+
+            ShareXModRecipePageEvidence nextPageEvidence =
+                await ShareXModRecipePageTransitionVerifier.CaptureAsync(client);
+            resumeJournal.CompleteTransition(pageNumber, nextPageEvidence);
+
+            await Task.Delay(100);
+'@
+            if (-not $text.Contains($old)) { throw "Page Loop CompleteTransition anchor missing." }
+            $text = $text.Replace($old,$new)
+          }
+
+          if (-not $text.Contains("resumeJournal.Complete(failed ?")) {
+            $old = @'
+        ShareXModSegmentedOutputRegistry.Register(
+            preview,
+            manifestPath,
+            finalPng ?? string.Empty,
+            sourceWidth,
+            sourceHeight);
+
+        return new ShareXModChromeBackgroundCaptureResult
+'@
+            $new = @'
+        ShareXModSegmentedOutputRegistry.Register(
+            preview,
+            manifestPath,
+            finalPng ?? string.Empty,
+            sourceWidth,
+            sourceHeight);
+
+        resumeJournal.Complete(
+            failed
+                ? "failed"
+                : truncated
+                    ? stopReason
+                    : stoppedByUser
+                        ? "stopped"
+                        : stopReason);
+
+        return new ShareXModChromeBackgroundCaptureResult
+'@
+            if (-not $text.Contains($old)) { throw "Page Loop final resume completion anchor missing." }
+            $text = $text.Replace($old,$new)
+          }
+
+          [IO.File]::WriteAllText($path,$text,[Text.UTF8Encoding]::new($true))
+          [IO.File]::WriteAllText("mod-overlay/VERSION","0.8.2-dev`n",[Text.UTF8Encoding]::new($false))
+          git diff --check
+
+      - name: Commit v0.8.2 Page Loop resume
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "sharex-mod-ci"
+          git config user.email "sharex-mod-ci@users.noreply.github.com"
+          git add \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipePageLoopRunner.cs \
+            mod-overlay/VERSION
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "feat(v0.8.2): resume Page Template Loops from committed page boundaries"
+          git push origin HEAD:mod/robust-scrolling-v0.1

@@ -1,0 +1,23 @@
+<Project>
+  <PropertyGroup>
+    <ShareXModOverlayRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\'))</ShareXModOverlayRoot>
+    <DefineConstants>$(DefineConstants);SHAREX_MOD</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="$(ShareXModOverlayRoot)src\ShareX.ScreenCaptureLib\**\*.cs"
+             Link="ShareX.ModOverlay\%(RecursiveDir)%(Filename)%(Extension)" />
+    <None Include="$(ShareXModOverlayRoot)config\ShareX.Mod.json"
+          Link="ShareX.Mod.json"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <None Include="$(ShareXModOverlayRoot)config\ShareX.Mod.v04.json"
+          Link="ShareX.Mod.v04.json"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <None Include="$(ShareXModOverlayRoot)config\ShareX.Mod.VERSION.json"
+          Link="ShareX.Mod.VERSION.json"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

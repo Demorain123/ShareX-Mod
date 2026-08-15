@@ -1,0 +1,265 @@
+name: Apply ShareX-Mod v0.6.5 overlay integration once
+
+on:
+  push:
+    branches:
+      - "mod/robust-scrolling-v0.1"
+    paths:
+      - ".github/workflows/apply-v065-overlay-integration.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout overlay branch
+        uses: actions/checkout@v6
+        with:
+          ref: mod/robust-scrolling-v0.1
+          fetch-depth: 0
+
+      - name: Integrate overlay dedup into Recipe runners
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          function Replace-Required {
+            param([string]$Path,[string]$Old,[string]$New,[string]$Marker)
+            $text = [IO.File]::ReadAllText($Path)
+            if ($text.Contains($Marker)) { return }
+            if (-not $text.Contains($Old)) { throw "Anchor '$Marker' missing in $Path" }
+            $text = $text.Replace($Old,$New)
+            [IO.File]::WriteAllText($Path,$text,[Text.UTF8Encoding]::new($true))
+          }
+
+          $runner = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipeRunner.cs"
+
+          Replace-Required $runner @'
+            List<Part> parts = new();
+            List<ActionAudit> actions = new();
+            int navigationCount = 0;
+'@ @'
+            List<Part> parts = new();
+            List<ActionAudit> actions = new();
+            int navigationCount = 0;
+            bool overlayAlreadyEmitted = false;
+            await ShareXModChromeOverlayDeduplicator.PreparePageAsync(client, settings);
+'@ 'overlayAlreadyEmitted = false'
+
+          Replace-Required $runner @'
+                        int before = parts.Count;
+                        await CaptureVerticalRangeAsync(client, step, settings, directory, parts, shouldStop);
+                        int added = parts.Count - before;
+'@ @'
+                        int before = parts.Count;
+                        await CaptureVerticalRangeAsync(
+                            client,
+                            step,
+                            settings,
+                            directory,
+                            parts,
+                            shouldStop,
+                            includeOverlayOnFirstTile: !overlayAlreadyEmitted);
+                        int added = parts.Count - before;
+                        if (added > 0)
+                        {
+                            overlayAlreadyEmitted = true;
+                        }
+'@ 'includeOverlayOnFirstTile: !overlayAlreadyEmitted'
+
+          Replace-Required $runner @'
+                        (bool ok, string detail, double score, double gap) =
+                            await CaptureHorizontalSweepAsync(client, step, settings, directory, shouldStop);
+'@ @'
+                        await ShareXModChromeOverlayDeduplicator.SetHiddenAsync(client, true);
+                        (bool ok, string detail, double score, double gap) =
+                            await CaptureHorizontalSweepAsync(client, step, settings, directory, shouldStop);
+                        await ShareXModChromeOverlayDeduplicator.SetHiddenAsync(client, false);
+'@ 'SetHiddenAsync(client, true);'
+
+          Replace-Required $runner @'
+                        (bool ok, string detail, double score, double gap) =
+                            await ResolveAndActivateAsync(client, step, settings, expectNavigation: false);
+'@ @'
+                        await ShareXModChromeOverlayDeduplicator.SetHiddenAsync(client, false);
+                        (bool ok, string detail, double score, double gap) =
+                            await ResolveAndActivateAsync(client, step, settings, expectNavigation: false);
+'@ 'expectNavigation: false); // overlay-restored'
+
+          # The replacement above needs a stable marker comment without changing behavior.
+          $rtext = [IO.File]::ReadAllText($runner)
+          if (-not $rtext.Contains('expectNavigation: false); // overlay-restored')) {
+            $rtext = $rtext.Replace(
+              'await ResolveAndActivateAsync(client, step, settings, expectNavigation: false);',
+              'await ResolveAndActivateAsync(client, step, settings, expectNavigation: false); // overlay-restored')
+            [IO.File]::WriteAllText($runner,$rtext,[Text.UTF8Encoding]::new($true))
+          }
+
+          Replace-Required $runner @'
+                        (bool ok, string detail, double score, double gap) =
+                            await ResolveAndActivateAsync(client, step, settings, expectNavigation: true);
+'@ @'
+                        await ShareXModChromeOverlayDeduplicator.SetHiddenAsync(client, false);
+                        (bool ok, string detail, double score, double gap) =
+                            await ResolveAndActivateAsync(client, step, settings, expectNavigation: true);
+                        if (ok)
+                        {
+                            await ShareXModChromeOverlayDeduplicator.PreparePageAsync(client, settings);
+                        }
+'@ 'PreparePageAsync(client, settings); // after-navigation'
+
+          $rtext = [IO.File]::ReadAllText($runner)
+          if (-not $rtext.Contains('PreparePageAsync(client, settings); // after-navigation')) {
+            $rtext = $rtext.Replace(
+              'await ShareXModChromeOverlayDeduplicator.PreparePageAsync(client, settings);',
+              'await ShareXModChromeOverlayDeduplicator.PreparePageAsync(client, settings); // after-navigation')
+            [IO.File]::WriteAllText($runner,$rtext,[Text.UTF8Encoding]::new($true))
+          }
+
+          Replace-Required $runner @'
+        List<Part> parts,
+        Func<bool>? shouldStop)
+'@ @'
+        List<Part> parts,
+        Func<bool>? shouldStop,
+        bool includeOverlayOnFirstTile)
+'@ 'bool includeOverlayOnFirstTile)'
+
+          Replace-Required $runner @'
+            using JsonDocument response = await client.SendCdpCommandAsync(
+                "Page.captureScreenshot",
+'@ @'
+            bool hideOverlayForTile = !includeOverlayOnFirstTile || parts.Count > 0;
+            await ShareXModChromeOverlayDeduplicator.SetHiddenAsync(client, hideOverlayForTile);
+
+            using JsonDocument response = await client.SendCdpCommandAsync(
+                "Page.captureScreenshot",
+'@ 'bool hideOverlayForTile = !includeOverlayOnFirstTile'
+
+          Replace-Required $runner @'
+            string? base64 = response.RootElement.GetProperty("result").GetProperty("data").GetString();
+            if (string.IsNullOrWhiteSpace(base64)) break;
+'@ @'
+            await ShareXModChromeOverlayDeduplicator.SetHiddenAsync(client, false);
+            string? base64 = response.RootElement.GetProperty("result").GetProperty("data").GetString();
+            if (string.IsNullOrWhiteSpace(base64)) break;
+'@ 'SetHiddenAsync(client, false); // after-vertical-shot'
+
+          $rtext = [IO.File]::ReadAllText($runner)
+          if (-not $rtext.Contains('SetHiddenAsync(client, false); // after-vertical-shot')) {
+            $rtext = $rtext.Replace(
+              'await ShareXModChromeOverlayDeduplicator.SetHiddenAsync(client, false);`n            string? base64',
+              'await ShareXModChromeOverlayDeduplicator.SetHiddenAsync(client, false); // after-vertical-shot`n            string? base64')
+            [IO.File]::WriteAllText($runner,$rtext,[Text.UTF8Encoding]::new($true))
+          }
+
+          $feed = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipeDynamicFeed.cs"
+
+          Replace-Required $feed @'
+            double y = startY;
+            double knownEnd = Math.Min(initial.CssHeight, maxCssHeight);
+'@ @'
+            double y = startY;
+            double knownEnd = Math.Min(initial.CssHeight, maxCssHeight);
+            bool overlayAlreadyEmitted = false;
+            await ShareXModChromeOverlayDeduplicator.PreparePageAsync(client, settings);
+'@ 'overlayAlreadyEmitted = false'
+
+          Replace-Required $feed @'
+                    using JsonDocument response = await client.SendCdpCommandAsync(
+                        "Page.captureScreenshot",
+'@ @'
+                    await ShareXModChromeOverlayDeduplicator.SetHiddenAsync(
+                        client,
+                        overlayAlreadyEmitted);
+
+                    using JsonDocument response = await client.SendCdpCommandAsync(
+                        "Page.captureScreenshot",
+'@ 'overlayAlreadyEmitted); // feed-overlay-policy'
+
+          $ftext = [IO.File]::ReadAllText($feed)
+          if (-not $ftext.Contains('overlayAlreadyEmitted); // feed-overlay-policy')) {
+            $ftext = $ftext.Replace(
+              '                        overlayAlreadyEmitted);',
+              '                        overlayAlreadyEmitted); // feed-overlay-policy')
+            [IO.File]::WriteAllText($feed,$ftext,[Text.UTF8Encoding]::new($true))
+          }
+
+          Replace-Required $feed @'
+                    string? base64 = response.RootElement
+                        .GetProperty("result")
+                        .GetProperty("data")
+                        .GetString();
+'@ @'
+                    await ShareXModChromeOverlayDeduplicator.SetHiddenAsync(client, false);
+                    string? base64 = response.RootElement
+                        .GetProperty("result")
+                        .GetProperty("data")
+                        .GetString();
+'@ 'SetHiddenAsync(client, false); // feed-after-shot'
+
+          $ftext = [IO.File]::ReadAllText($feed)
+          if (-not $ftext.Contains('SetHiddenAsync(client, false); // feed-after-shot')) {
+            $ftext = $ftext.Replace(
+              '                    await ShareXModChromeOverlayDeduplicator.SetHiddenAsync(client, false);',
+              '                    await ShareXModChromeOverlayDeduplicator.SetHiddenAsync(client, false); // feed-after-shot')
+            [IO.File]::WriteAllText($feed,$ftext,[Text.UTF8Encoding]::new($true))
+          }
+
+          Replace-Required $feed @'
+                    y = actualEnd;
+                    steps++;
+                    continue;
+'@ @'
+                    y = actualEnd;
+                    overlayAlreadyEmitted = true;
+                    steps++;
+                    continue;
+'@ 'overlayAlreadyEmitted = true;'
+
+          Replace-Required $feed @'
+                if (grew)
+                {
+                    knownEnd = Math.Min(Math.Max(knownEnd, afterHeight), maxCssHeight);
+                    unchangedPasses = 0;
+                    continue;
+                }
+'@ @'
+                if (grew)
+                {
+                    knownEnd = Math.Min(Math.Max(knownEnd, afterHeight), maxCssHeight);
+                    unchangedPasses = 0;
+                    await ShareXModChromeOverlayDeduplicator.PreparePageAsync(client, settings);
+                    continue;
+                }
+'@ 'PreparePageAsync(client, settings); // feed-growth'
+
+          $ftext = [IO.File]::ReadAllText($feed)
+          if (-not $ftext.Contains('PreparePageAsync(client, settings); // feed-growth')) {
+            $ftext = $ftext.Replace(
+              '                    await ShareXModChromeOverlayDeduplicator.PreparePageAsync(client, settings);',
+              '                    await ShareXModChromeOverlayDeduplicator.PreparePageAsync(client, settings); // feed-growth')
+            [IO.File]::WriteAllText($feed,$ftext,[Text.UTF8Encoding]::new($true))
+          }
+
+          [IO.File]::WriteAllText("mod-overlay/VERSION","0.6.5-dev`n",[Text.UTF8Encoding]::new($false))
+          git diff --check
+
+      - name: Commit v0.6.5 integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "sharex-mod-ci"
+          git config user.email "sharex-mod-ci@users.noreply.github.com"
+          git add \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipeRunner.cs \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipeDynamicFeed.cs \
+            mod-overlay/VERSION
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+            exit 0
+          fi
+          git commit -m "feat(v0.6.5): deduplicate browser fixed overlays across Recipe tiles"
+          git push origin HEAD:mod/robust-scrolling-v0.1

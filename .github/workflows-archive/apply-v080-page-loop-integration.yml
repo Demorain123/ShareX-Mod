@@ -1,0 +1,259 @@
+name: Apply ShareX-Mod v0.8.0 page loop integration once
+
+on:
+  push:
+    branches:
+      - "mod/robust-scrolling-v0.1"
+    paths:
+      - ".github/workflows/apply-v080-page-loop-integration.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout overlay branch
+        uses: actions/checkout@v6
+        with:
+          ref: mod/robust-scrolling-v0.1
+          fetch-depth: 0
+
+      - name: Wait for v0.7.5 review prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 50); do
+            git fetch origin mod/robust-scrolling-v0.1
+            git reset --hard origin/mod/robust-scrolling-v0.1
+            if grep -q "ShareXModCaptureRecipeReviewService" mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipeRunner.cs && \
+               grep -q "ShareXModCaptureModeUiV075" ShareX.ScreenCaptureLib/Presentation/ScrollingCapture/ScrollingCaptureWindow.axaml.cs; then
+              echo "Prerequisites ready."
+              exit 0
+            fi
+            echo "Waiting for v0.7.5 integration ($i/50)..."
+            sleep 10
+          done
+          exit 1
+
+      - name: Integrate Page Template Loop
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $settingsPath = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModV04Settings.cs"
+          $settings = [IO.File]::ReadAllText($settingsPath)
+          if (-not $settings.Contains("CaptureRecipePageLoopEnabled")) {
+            $anchor = '    public int CaptureRecipeMaxNavigationCount { get; set; } = 100;'
+            if (-not $settings.Contains($anchor)) { throw "Page Loop settings anchor missing." }
+            $block = @'
+    public int CaptureRecipeMaxNavigationCount { get; set; } = 100;
+    public bool CaptureRecipePageLoopEnabled { get; set; } = true;
+    public int CaptureRecipePageLoopMaxPages { get; set; } = 100;
+    public bool CaptureRecipePageLoopRequireObservedTransition { get; set; } = true;
+'@
+            $settings = $settings.Replace($anchor,$block)
+            [IO.File]::WriteAllText($settingsPath,$settings,[Text.UTF8Encoding]::new($true))
+          }
+
+          $configPath = "mod-overlay/config/ShareX.Mod.v04.json"
+          $config = [IO.File]::ReadAllText($configPath)
+          if (-not $config.Contains('"captureRecipePageLoopEnabled"')) {
+            $anchor = '  "captureRecipeMaxNavigationCount": 100,'
+            if (-not $config.Contains($anchor)) { throw "Page Loop config anchor missing." }
+            $block = @'
+  "captureRecipeMaxNavigationCount": 100,
+  "captureRecipePageLoopEnabled": true,
+  "captureRecipePageLoopMaxPages": 100,
+  "captureRecipePageLoopRequireObservedTransition": true,
+'@
+            $config = $config.Replace($anchor,$block)
+            [IO.File]::WriteAllText($configPath,$config,[Text.UTF8Encoding]::new($false))
+          }
+
+          $entry = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModChromeRecipeCaptureEntryV062.cs"
+          $entryText = [IO.File]::ReadAllText($entry)
+          if (-not $entryText.Contains("ShareXModCaptureRecipePageLoopRunner.TryRunAsync")) {
+            $old = @'
+            ShareXModChromeBackgroundCaptureResult? result =
+                await ShareXModCaptureRecipeDynamicFeed.TryRunAsync(
+                    client,
+                    target,
+                    settings,
+                    shouldStop);
+
+            if (result == null)
+            {
+                result = await ShareXModCaptureRecipeRunner.RunAsync(
+'@
+            $new = @'
+            ShareXModChromeBackgroundCaptureResult? result =
+                await ShareXModCaptureRecipePageLoopRunner.TryRunAsync(
+                    client,
+                    target,
+                    settings,
+                    shouldStop);
+
+            if (result == null)
+            {
+                result = await ShareXModCaptureRecipeDynamicFeed.TryRunAsync(
+                    client,
+                    target,
+                    settings,
+                    shouldStop);
+            }
+
+            if (result == null)
+            {
+                result = await ShareXModCaptureRecipeRunner.RunAsync(
+'@
+            if (-not $entryText.Contains($old)) { throw "Recipe V062 runner-selection anchor missing." }
+            $entryText = $entryText.Replace($old,$new)
+            [IO.File]::WriteAllText($entry,$entryText,[Text.UTF8Encoding]::new($true))
+          }
+
+          $ui = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureModeUiV075.cs"
+          $uiText = [IO.File]::ReadAllText($ui)
+          if ($uiText.Contains("ShareXModCaptureRecipeReviewWindow.TryOpen(window, path);")) {
+            $uiText = $uiText.Replace(
+              "ShareXModCaptureRecipeReviewWindow.TryOpen(window, path);",
+              "ShareXModCaptureRecipeReviewWindowV080.TryOpen(window, path);")
+            [IO.File]::WriteAllText($ui,$uiText,[Text.UTF8Encoding]::new($true))
+          }
+
+          # Page Loop parts use TemplateStep rather than the finite Recipe's Step field. Teach the
+          # position ledger to recognize those parts and perform per-page continuity checks.
+          $ledgerPath = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModRecipeOutputLedger.cs"
+          $ledger = [IO.File]::ReadAllText($ledgerPath)
+
+          if (-not $ledger.Contains("pageLoopManifest")) {
+            $anchor = @'
+                JsonElement root = manifest.RootElement;
+
+                if (root.TryGetProperty("failed", out JsonElement failed) && failed.ValueKind == JsonValueKind.True)
+'@
+            $replacement = @'
+                JsonElement root = manifest.RootElement;
+                string manifestFormat = root.TryGetProperty("format", out JsonElement formatElement) &&
+                                        formatElement.ValueKind == JsonValueKind.String
+                    ? formatElement.GetString() ?? string.Empty
+                    : string.Empty;
+                bool pageLoopManifest = manifestFormat.Contains("Page Loop", StringComparison.OrdinalIgnoreCase);
+
+                if (root.TryGetProperty("failed", out JsonElement failed) && failed.ValueKind == JsonValueKind.True)
+'@
+            if (-not $ledger.Contains($anchor)) { throw "Ledger manifest-format anchor missing." }
+            $ledger = $ledger.Replace($anchor,$replacement)
+
+            $anchor2 = @'
+                        int? step = TryGetInt(item, "Step", "step");
+                        string pageKey = GetString(item, "PageKey", "pageKey");
+'@
+            $replacement2 = @'
+                        int? step = TryGetInt(item, "Step", "step") ??
+                                    TryGetInt(item, "TemplateStep", "templateStep");
+                        string pageKey = GetString(item, "PageKey", "pageKey");
+'@
+            if (-not $ledger.Contains($anchor2)) { throw "Ledger TemplateStep anchor missing." }
+            $ledger = $ledger.Replace($anchor2,$replacement2)
+
+            $anchor3 = @'
+            if (recipe != null)
+            {
+                foreach (ShareXModCaptureRecipeStep step in recipe.Steps.Where(x => x.Kind == ShareXModCaptureRecipeStepKind.CaptureVerticalRange))
+'@
+            $replacement3 = @'
+            bool isPageLoopOutput = false;
+            try
+            {
+                using JsonDocument manifestCheck = JsonDocument.Parse(File.ReadAllText(result.ManifestPath));
+                string format = manifestCheck.RootElement.TryGetProperty("format", out JsonElement f) && f.ValueKind == JsonValueKind.String
+                    ? f.GetString() ?? string.Empty
+                    : string.Empty;
+                isPageLoopOutput = format.Contains("Page Loop", StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+            }
+
+            if (isPageLoopOutput)
+            {
+                foreach (IGrouping<(string PageKey, int? Step), OutputRange> group in ranges
+                    .Where(x => x.Kind == "vertical-content" && x.DocumentStartCss.HasValue && x.DocumentEndCss.HasValue)
+                    .GroupBy(x => (x.PageKey, x.RecipeStep)))
+                {
+                    List<OutputRange> captured = group.OrderBy(x => x.DocumentStartCss).ToList();
+                    if (captured.Count == 0) continue;
+
+                    double coveredStart = captured[0].DocumentStartCss!.Value;
+                    double coveredEnd = captured[0].DocumentEndCss!.Value;
+                    double gap = 0;
+                    foreach (OutputRange part in captured.Skip(1))
+                    {
+                        double start = part.DocumentStartCss!.Value;
+                        double end = part.DocumentEndCss!.Value;
+                        if (start > coveredEnd + 2) gap += start - coveredEnd;
+                        coveredEnd = Math.Max(coveredEnd, end);
+                    }
+
+                    coverage.Add(new CoverageCheck(
+                        group.Key.Step ?? 0,
+                        group.Key.PageKey,
+                        coveredStart,
+                        coveredEnd,
+                        coveredStart,
+                        coveredEnd,
+                        gap,
+                        gap <= 2,
+                        gap <= 2 ? Array.Empty<string>() : new[] { "gap-between-page-loop-output-parts" }));
+                }
+            }
+            else if (recipe != null)
+            {
+                foreach (ShareXModCaptureRecipeStep step in recipe.Steps.Where(x => x.Kind == ShareXModCaptureRecipeStepKind.CaptureVerticalRange))
+'@
+            if (-not $ledger.Contains($anchor3)) { throw "Ledger page-loop coverage anchor missing." }
+            $ledger = $ledger.Replace($anchor3,$replacement3)
+
+            [IO.File]::WriteAllText($ledgerPath,$ledger,[Text.UTF8Encoding]::new($true))
+          }
+
+          foreach ($workflowPath in @(
+            ".github/workflows/validate-mod-v075.yml"
+          )) {
+            if (-not (Test-Path $workflowPath)) { continue }
+            $wf = [IO.File]::ReadAllText($workflowPath)
+            if ($wf -match '(?ms)^on:\s*\n\s*push:') {
+              $wf = [regex]::Replace(
+                $wf,
+                '(?ms)^on:\s*\n.*?^permissions:',
+                "on:`n  workflow_dispatch:`n`npermissions:",
+                1)
+              [IO.File]::WriteAllText($workflowPath,$wf,[Text.UTF8Encoding]::new($false))
+            }
+          }
+
+          [IO.File]::WriteAllText("mod-overlay/VERSION","0.8.0-dev`n",[Text.UTF8Encoding]::new($false))
+          git diff --check
+
+      - name: Commit v0.8.0 Page Loop integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "sharex-mod-ci"
+          git config user.email "sharex-mod-ci@users.noreply.github.com"
+          git add \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModV04Settings.cs \
+            mod-overlay/config/ShareX.Mod.v04.json \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModChromeRecipeCaptureEntryV062.cs \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureModeUiV075.cs \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModRecipeOutputLedger.cs \
+            .github/workflows/validate-mod-v075.yml \
+            mod-overlay/VERSION
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+            exit 0
+          fi
+          git commit -m "feat(v0.8): add explicitly approved simple Page Template Loop"
+          git push origin HEAD:mod/robust-scrolling-v0.1

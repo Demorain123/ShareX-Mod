@@ -1,0 +1,64 @@
+name: Apply ShareX-Mod v0.9 horizontal executor settings once
+
+on:
+  push:
+    branches:
+      - "mod/robust-scrolling-v0.1"
+    paths:
+      - ".github/workflows/apply-v090-horizontal-settings.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: mod/robust-scrolling-v0.1
+          fetch-depth: 0
+
+      - name: Add horizontal execution settings
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $settingsPath = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModV04Settings.cs"
+          $settings = [IO.File]::ReadAllText($settingsPath)
+          if (-not $settings.Contains("CaptureRecipeHorizontalCaptureOverlapRatio")) {
+            $anchor = '    public bool CaptureRecipeHorizontalAppendixEnabled { get; set; } = true;'
+            if (-not $settings.Contains($anchor)) { throw "Horizontal settings anchor missing." }
+            $block = @'
+    public bool CaptureRecipeHorizontalAppendixEnabled { get; set; } = true;
+    public double CaptureRecipeHorizontalCaptureOverlapRatio { get; set; } = 0.22;
+    public int CaptureRecipeHorizontalMaxPanels { get; set; } = 40;
+'@
+            $settings = $settings.Replace($anchor,$block)
+            [IO.File]::WriteAllText($settingsPath,$settings,[Text.UTF8Encoding]::new($true))
+          }
+
+          $configPath = "mod-overlay/config/ShareX.Mod.v04.json"
+          $config = [IO.File]::ReadAllText($configPath)
+          if (-not $config.Contains('"captureRecipeHorizontalCaptureOverlapRatio"')) {
+            $anchor = '  "captureRecipeHorizontalAppendixEnabled": true,'
+            if (-not $config.Contains($anchor)) { throw "Horizontal config anchor missing." }
+            $block = @'
+  "captureRecipeHorizontalAppendixEnabled": true,
+  "captureRecipeHorizontalCaptureOverlapRatio": 0.22,
+  "captureRecipeHorizontalMaxPanels": 40,
+'@
+            $config = $config.Replace($anchor,$block)
+            [IO.File]::WriteAllText($configPath,$config,[Text.UTF8Encoding]::new($false))
+          }
+          git diff --check
+
+      - name: Commit settings
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "sharex-mod-ci"
+          git config user.email "sharex-mod-ci@users.noreply.github.com"
+          git add mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModV04Settings.cs mod-overlay/config/ShareX.Mod.v04.json
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "feat(v0.9): add horizontal template execution bounds"
+          git push origin HEAD:mod/robust-scrolling-v0.1

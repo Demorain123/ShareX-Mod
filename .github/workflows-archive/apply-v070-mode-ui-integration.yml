@@ -1,0 +1,181 @@
+name: Apply ShareX-Mod v0.7.0 capture-mode UI once
+
+on:
+  push:
+    branches:
+      - "mod/robust-scrolling-v0.1"
+    paths:
+      - ".github/workflows/apply-v070-mode-ui-integration.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout overlay branch
+        uses: actions/checkout@v6
+        with:
+          ref: mod/robust-scrolling-v0.1
+          fetch-depth: 0
+
+      - name: Integrate simple capture mode UI
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          function Replace-Required {
+            param([string]$Path,[string]$Old,[string]$New,[string]$Marker)
+            $text = [IO.File]::ReadAllText($Path)
+            if ($text.Contains($Marker)) { return }
+            if (-not $text.Contains($Old)) { throw "Anchor '$Marker' missing in $Path" }
+            $text = $text.Replace($Old,$New)
+            [IO.File]::WriteAllText($Path,$text,[Text.UTF8Encoding]::new($true))
+          }
+
+          # Avoid relying on a FrameworkElement.Tag-like property; keep attachment state entirely
+          # inside the overlay helper so this remains stable across Avalonia versions.
+          $uiPath = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureModeUi.cs"
+          $ui = [IO.File]::ReadAllText($uiPath)
+          if (-not $ui.Contains("ConditionalWeakTable<Window")) {
+            $ui = $ui.Replace(
+              "using Avalonia.Layout;",
+              "using Avalonia.Layout;`nusing System.Runtime.CompilerServices;")
+            $ui = $ui.Replace(
+              '    private const string AttachedMarker = "ShareXModCaptureModeUiAttached";',
+              '    private static readonly ConditionalWeakTable<Window, object> Attached = new();')
+            $old = @'
+            if (window.Tag is string marker && marker.Contains(AttachedMarker, StringComparison.Ordinal))
+            {
+                return;
+            }
+'@
+            $new = @'
+            if (Attached.TryGetValue(window, out _))
+            {
+                return;
+            }
+'@
+            if (-not $ui.Contains($old)) { throw "Mode UI attachment guard anchor missing." }
+            $ui = $ui.Replace($old,$new)
+            $old2 = @'
+            window.Tag = string.IsNullOrWhiteSpace(window.Tag?.ToString())
+                ? AttachedMarker
+                : window.Tag + ";" + AttachedMarker;
+'@
+            $new2 = @'
+            Attached.Add(window, new object());
+'@
+            if (-not $ui.Contains($old2)) { throw "Mode UI attachment marker anchor missing." }
+            $ui = $ui.Replace($old2,$new2)
+            [IO.File]::WriteAllText($uiPath,$ui,[Text.UTF8Encoding]::new($true))
+          }
+
+          $settingsPath = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModV04Settings.cs"
+          $settings = [IO.File]::ReadAllText($settingsPath)
+
+          if (-not $settings.Contains("ShareXModCaptureModeProfile.Apply")) {
+            $oldDefault = @'
+        if (!File.Exists(path))
+        {
+            return new ShareXModV04Settings();
+        }
+'@
+            $newDefault = @'
+        if (!File.Exists(path))
+        {
+            return ShareXModCaptureModeProfile.Apply(new ShareXModV04Settings());
+        }
+'@
+            if (-not $settings.Contains($oldDefault)) { throw "Settings no-file return anchor missing." }
+            $settings = $settings.Replace($oldDefault,$newDefault)
+
+            $oldDeserialize = @'
+            return JsonSerializer.Deserialize<ShareXModV04Settings>(json, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true,
+                ReadCommentHandling = JsonCommentHandling.Skip,
+                AllowTrailingCommas = true
+            }) ?? new ShareXModV04Settings();
+'@
+            $newDeserialize = @'
+            ShareXModV04Settings loaded =
+                JsonSerializer.Deserialize<ShareXModV04Settings>(json, new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true,
+                    ReadCommentHandling = JsonCommentHandling.Skip,
+                    AllowTrailingCommas = true
+                }) ?? new ShareXModV04Settings();
+
+            return ShareXModCaptureModeProfile.Apply(loaded);
+'@
+            if (-not $settings.Contains($oldDeserialize)) { throw "Settings deserialize return anchor missing." }
+            $settings = $settings.Replace($oldDeserialize,$newDeserialize)
+
+            $oldCatch = @'
+        catch
+        {
+            return new ShareXModV04Settings();
+        }
+'@
+            $newCatch = @'
+        catch
+        {
+            return ShareXModCaptureModeProfile.Apply(new ShareXModV04Settings());
+        }
+'@
+            if (-not $settings.Contains($oldCatch)) { throw "Settings catch return anchor missing." }
+            $settings = $settings.Replace($oldCatch,$newCatch)
+            [IO.File]::WriteAllText($settingsPath,$settings,[Text.UTF8Encoding]::new($true))
+          }
+
+          $window = "ShareX.ScreenCaptureLib/Presentation/ScrollingCapture/ScrollingCaptureWindow.axaml.cs"
+          $windowText = [IO.File]::ReadAllText($window)
+          if (-not $windowText.Contains("ShareXModCaptureModeUi.Attach(this);")) {
+            $anchor = "        InitializeComponent();"
+            if (-not $windowText.Contains($anchor)) { throw "ScrollingCaptureWindow InitializeComponent anchor missing." }
+            $windowText = $windowText.Replace(
+              $anchor,
+              $anchor + "`n        ShareXModCaptureModeUi.Attach(this);")
+            [IO.File]::WriteAllText($window,$windowText,[Text.UTF8Encoding]::new($true))
+          }
+
+          # The mode picker is changed while the scrolling-capture window is open. Reload the
+          # overlay settings immediately before the real browser/pixel capture begins.
+          $manager = "ShareX.ScreenCaptureLib/ScrollingCaptureManager.cs"
+          $managerText = [IO.File]::ReadAllText($manager)
+          if (-not $managerText.Contains("ShareXModCaptureModeProfile-current-capture")) {
+            $anchor = @'
+                    await Task.Delay(Options.StartDelay);
+'@
+            $replacement = @'
+                    await Task.Delay(Options.StartDelay);
+                    modV04 = ShareXModV04Settings.Load(); // ShareXModCaptureModeProfile-current-capture
+'@
+            if (-not $managerText.Contains($anchor)) { throw "Manager StartDelay anchor missing." }
+            $managerText = $managerText.Replace($anchor,$replacement)
+            [IO.File]::WriteAllText($manager,$managerText,[Text.UTF8Encoding]::new($true))
+          }
+
+          [IO.File]::WriteAllText("mod-overlay/VERSION","0.7.0-dev`n",[Text.UTF8Encoding]::new($false))
+          git diff --check
+
+      - name: Commit v0.7.0 UI integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "sharex-mod-ci"
+          git config user.email "sharex-mod-ci@users.noreply.github.com"
+          git add \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureModeUi.cs \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModV04Settings.cs \
+            ShareX.ScreenCaptureLib/Presentation/ScrollingCapture/ScrollingCaptureWindow.axaml.cs \
+            ShareX.ScreenCaptureLib/ScrollingCaptureManager.cs \
+            mod-overlay/VERSION
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+            exit 0
+          fi
+          git commit -m "feat(v0.7): add simple Normal Record Run capture mode UI"
+          git push origin HEAD:mod/robust-scrolling-v0.1

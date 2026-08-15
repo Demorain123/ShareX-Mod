@@ -1,0 +1,145 @@
+name: Apply ShareX-Mod v0.6.4 source fix once
+
+on:
+  push:
+    branches:
+      - "mod/robust-scrolling-v0.1"
+    paths:
+      - ".github/workflows/apply-v064-source-fix.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout overlay branch
+        uses: actions/checkout@v6
+        with:
+          ref: mod/robust-scrolling-v0.1
+          fetch-depth: 0
+
+      - name: Finalize v0.6.4 sources
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $settingsPath = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModV04Settings.cs"
+          $settings = [IO.File]::ReadAllText($settingsPath)
+          if (-not $settings.Contains("ChromeOverlayDeduplicateEnabled")) {
+            $anchor = '    public bool ChromeSemanticMapEnabled { get; set; } = true;'
+            if (-not $settings.Contains($anchor)) { throw "Overlay settings anchor missing." }
+            $block = @'
+    public bool ChromeOverlayDeduplicateEnabled { get; set; } = true;
+    public int ChromeOverlayMinimumWidthCss { get; set; } = 24;
+    public int ChromeOverlayMinimumHeightCss { get; set; } = 20;
+    public int ChromeOverlayMaximumViewportAreaPercent { get; set; } = 35;
+
+    public bool ChromeSemanticMapEnabled { get; set; } = true;
+'@
+            $settings = $settings.Replace($anchor, $block)
+          }
+          if (-not $settings.Contains("ChromeImageAppendixOriginalRetention")) {
+            $anchor = '    public bool ChromeImageAppendixEnabled { get; set; } = true;'
+            if (-not $settings.Contains($anchor)) { throw "Retention settings anchor missing." }
+            $settings = $settings.Replace(
+              $anchor,
+              $anchor + "`n" + '    public string ChromeImageAppendixOriginalRetention { get; set; } = "ask";')
+          }
+          [IO.File]::WriteAllText($settingsPath, $settings, [Text.UTF8Encoding]::new($true))
+
+          $configPath = "mod-overlay/config/ShareX.Mod.v04.json"
+          $config = [IO.File]::ReadAllText($configPath)
+          if (-not $config.Contains('"chromeOverlayDeduplicateEnabled"')) {
+            $anchor = '  "chromeSemanticMapEnabled": true,'
+            if (-not $config.Contains($anchor)) { throw "Overlay config anchor missing." }
+            $block = @'
+  "chromeOverlayDeduplicateEnabled": true,
+  "chromeOverlayMinimumWidthCss": 24,
+  "chromeOverlayMinimumHeightCss": 20,
+  "chromeOverlayMaximumViewportAreaPercent": 35,
+
+  "chromeSemanticMapEnabled": true,
+'@
+            $config = $config.Replace($anchor, $block)
+          }
+          if (-not $config.Contains('"chromeImageAppendixOriginalRetention"')) {
+            $anchor = '  "chromeImageAppendixEnabled": true,'
+            if (-not $config.Contains($anchor)) { throw "Retention config anchor missing." }
+            $config = $config.Replace(
+              $anchor,
+              $anchor + "`n" + '  "chromeImageAppendixOriginalRetention": "ask",')
+          }
+          [IO.File]::WriteAllText($configPath, $config, [Text.UTF8Encoding]::new($false))
+
+          $ledgerPath = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModRecipeOutputLedger.cs"
+          $ledger = [IO.File]::ReadAllText($ledgerPath)
+          if (-not $ledger.Contains("dynamicFeedCoverage")) {
+            $old = @'
+                    List<OutputRange> captured = ranges
+                        .Where(x => x.Kind == "vertical-content" &&
+                                    x.RecipeStep == step.Index &&
+                                    string.Equals(x.PageKey, step.PageKey, StringComparison.Ordinal))
+                        .Where(x => x.DocumentStartCss.HasValue && x.DocumentEndCss.HasValue)
+                        .OrderBy(x => x.DocumentStartCss)
+                        .ToList();
+'@
+            $new = @'
+                    bool dynamicFeedCoverage = recipe.StopBoundary.Kind.Equals(
+                        "dynamic-feed",
+                        StringComparison.OrdinalIgnoreCase);
+
+                    List<OutputRange> captured = ranges
+                        .Where(x => x.Kind == "vertical-content")
+                        .Where(x => x.DocumentStartCss.HasValue && x.DocumentEndCss.HasValue)
+                        .Where(x => dynamicFeedCoverage
+                            ? x.DocumentEndCss!.Value > step.StartY && x.DocumentStartCss!.Value < step.EndY
+                            : x.RecipeStep == step.Index &&
+                              string.Equals(x.PageKey, step.PageKey, StringComparison.Ordinal))
+                        .OrderBy(x => x.DocumentStartCss)
+                        .ToList();
+'@
+            if (-not $ledger.Contains($old)) { throw "Dynamic-feed ledger anchor missing." }
+            $ledger = $ledger.Replace($old, $new)
+            [IO.File]::WriteAllText($ledgerPath, $ledger, [Text.UTF8Encoding]::new($true))
+          }
+
+          foreach ($workflowPath in @(
+            ".github/workflows/validate-mod-v062.yml",
+            ".github/workflows/validate-mod-v063.yml"
+          )) {
+            if (-not (Test-Path $workflowPath)) { continue }
+            $text = [IO.File]::ReadAllText($workflowPath)
+            if ($text -match '(?ms)^on:\s*\n\s*push:') {
+              $text = [regex]::Replace(
+                $text,
+                '(?ms)^on:\s*\n.*?^permissions:',
+                "on:`n  workflow_dispatch:`n`npermissions:",
+                1)
+              [IO.File]::WriteAllText($workflowPath, $text, [Text.UTF8Encoding]::new($false))
+            }
+          }
+
+          [IO.File]::WriteAllText("mod-overlay/VERSION", "0.6.4-dev`n", [Text.UTF8Encoding]::new($false))
+          git diff --check
+
+      - name: Commit v0.6.4 source fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "sharex-mod-ci"
+          git config user.email "sharex-mod-ci@users.noreply.github.com"
+          git add \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModV04Settings.cs \
+            mod-overlay/config/ShareX.Mod.v04.json \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModRecipeOutputLedger.cs \
+            mod-overlay/VERSION \
+            .github/workflows/validate-mod-v062.yml \
+            .github/workflows/validate-mod-v063.yml
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+            exit 0
+          fi
+          git commit -m "fix(v0.6.4): finalize overlay config and dynamic-feed ledger"
+          git push origin HEAD:mod/robust-scrolling-v0.1

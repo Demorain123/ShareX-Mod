@@ -1,0 +1,277 @@
+name: Apply ShareX-Mod v0.7.5 Recipe review gate once
+
+on:
+  push:
+    branches:
+      - "mod/robust-scrolling-v0.1"
+    paths:
+      - ".github/workflows/apply-v075-review-gate.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout overlay branch
+        uses: actions/checkout@v6
+        with:
+          ref: mod/robust-scrolling-v0.1
+          fetch-depth: 0
+
+      - name: Wait for current Recipe/UI prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 45); do
+            git fetch origin mod/robust-scrolling-v0.1
+            git reset --hard origin/mod/robust-scrolling-v0.1
+            if grep -q "ShareXModCaptureRecipePageGuard" mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipeRunner.cs && \
+               grep -q "ShareXModChromeConnectionBroker.ResolveAsync" mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureModeReadiness.cs; then
+              echo "Prerequisites ready."
+              exit 0
+            fi
+            echo "Waiting for previous source integrations ($i/45)..."
+            sleep 10
+          done
+          exit 1
+
+      - name: Integrate review gate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          function Replace-Required {
+            param([string]$Path,[string]$Old,[string]$New,[string]$Marker)
+            $text = [IO.File]::ReadAllText($Path)
+            if ($text.Contains($Marker)) { return }
+            if (-not $text.Contains($Old)) { throw "Anchor '$Marker' missing in $Path" }
+            $text = $text.Replace($Old,$New)
+            [IO.File]::WriteAllText($Path,$text,[Text.UTF8Encoding]::new($true))
+          }
+
+          $settingsPath = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModV04Settings.cs"
+          $settings = [IO.File]::ReadAllText($settingsPath)
+          if (-not $settings.Contains("CaptureRecipeRequireReviewBeforeAutomation")) {
+            $anchor = '    public bool CaptureRecipeAutomationEnabled { get; set; } = false;'
+            if (-not $settings.Contains($anchor)) { throw "Review gate settings anchor missing." }
+            $replacement = $anchor + "`n" + '    public bool CaptureRecipeRequireReviewBeforeAutomation { get; set; } = true;'
+            $settings = $settings.Replace($anchor,$replacement)
+            [IO.File]::WriteAllText($settingsPath,$settings,[Text.UTF8Encoding]::new($true))
+          }
+
+          $configPath = "mod-overlay/config/ShareX.Mod.v04.json"
+          $config = [IO.File]::ReadAllText($configPath)
+          if (-not $config.Contains('"captureRecipeRequireReviewBeforeAutomation"')) {
+            $anchor = '  "captureRecipeAutomationEnabled": false,'
+            if (-not $config.Contains($anchor)) { throw "Review gate config anchor missing." }
+            $replacement = $anchor + "`n" + '  "captureRecipeRequireReviewBeforeAutomation": true,'
+            $config = $config.Replace($anchor,$replacement)
+            [IO.File]::WriteAllText($configPath,$config,[Text.UTF8Encoding]::new($false))
+          }
+
+          $readiness = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureModeReadiness.cs"
+          Replace-Required $readiness @'
+        if (mode == ShareXModCaptureMode.RunRecipe && string.IsNullOrWhiteSpace(recipe))
+        {
+            return new ShareXModCaptureModeReadinessResult(
+                false,
+                "no-recipe",
+                "No Capture Recipe has been recorded yet.",
+                string.Empty,
+                0);
+        }
+
+        try
+'@ @'
+        if (mode == ShareXModCaptureMode.RunRecipe && string.IsNullOrWhiteSpace(recipe))
+        {
+            return new ShareXModCaptureModeReadinessResult(
+                false,
+                "no-recipe",
+                "No Capture Recipe has been recorded yet.",
+                string.Empty,
+                0);
+        }
+
+        if (mode == ShareXModCaptureMode.RunRecipe &&
+            !ShareXModCaptureRecipeReviewService.IsRunAllowed(settings, recipe, out string reviewReason))
+        {
+            return new ShareXModCaptureModeReadinessResult(
+                false,
+                "recipe-review-required",
+                reviewReason,
+                recipe,
+                0);
+        }
+
+        try
+'@ 'recipe-review-required'
+
+          foreach ($entry in @(
+            "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModChromeRecipeCaptureEntryV062.cs",
+            "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModChromeRecipeCaptureEntry.cs"
+          )) {
+            if (-not (Test-Path $entry)) { continue }
+            $text = [IO.File]::ReadAllText($entry)
+            if ($text.Contains("ShareXModCaptureRecipeReviewService.IsRunAllowed")) { continue }
+            $anchor = @'
+        string processName = GetProcessName(selectedWindowHandle);
+'@
+            if (-not $text.Contains($anchor)) { throw "Recipe entry review anchor missing in $entry" }
+            $replacement = @'
+        if (!ShareXModCaptureRecipeReviewService.IsRunAllowed(
+                settings,
+                settings.CaptureRecipeReplayPath,
+                out _))
+        {
+            return null;
+        }
+
+        string processName = GetProcessName(selectedWindowHandle);
+'@
+            $text = $text.Replace($anchor,$replacement)
+            [IO.File]::WriteAllText($entry,$text,[Text.UTF8Encoding]::new($true))
+          }
+
+          $runner = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipeRunner.cs"
+          $r = [IO.File]::ReadAllText($runner)
+          if (-not $r.Contains("reviewDisabledSteps")) {
+            $anchor = @'
+            ShareXModCaptureRecipePageGuard.Session pageGuard =
+                ShareXModCaptureRecipePageGuard.Create(client, settings);
+
+            foreach (ShareXModCaptureRecipeStep step in recipe.Steps.OrderBy(x => x.Index))
+'@
+            $replacement = @'
+            ShareXModCaptureRecipePageGuard.Session pageGuard =
+                ShareXModCaptureRecipePageGuard.Create(client, settings);
+            HashSet<int> reviewDisabledSteps =
+                ShareXModCaptureRecipeReviewService.GetDisabledSteps(settings.CaptureRecipeReplayPath);
+
+            foreach (ShareXModCaptureRecipeStep step in recipe.Steps.OrderBy(x => x.Index))
+'@
+            if (-not $r.Contains($anchor)) { throw "Runner review-disabled set anchor missing." }
+            $r = $r.Replace($anchor,$replacement)
+            [IO.File]::WriteAllText($runner,$r,[Text.UTF8Encoding]::new($true))
+          }
+
+          $r = [IO.File]::ReadAllText($runner)
+          if (-not $r.Contains("review-disabled-next-page")) {
+            $anchor = @'
+                if (step.Index < resumeStep)
+                {
+                    continue;
+                }
+
+                string journalUrl = await GetUrlAsync(client);
+'@
+            $replacement = @'
+                if (step.Index < resumeStep)
+                {
+                    continue;
+                }
+
+                if (reviewDisabledSteps.Contains(step.Index))
+                {
+                    if (ShareXModCaptureRecipeReviewService.ShouldStopInsteadOfSkip(step, reviewDisabledSteps))
+                    {
+                        stopped = true;
+                        stopReason = "review-disabled-next-page";
+                        actions.Add(new ActionAudit(
+                            step.Index,
+                            "review",
+                            "stopped",
+                            "User disabled this Next Page step during Recipe review.",
+                            0,
+                            0));
+                        break;
+                    }
+
+                    actions.Add(new ActionAudit(
+                        step.Index,
+                        "review",
+                        "skipped",
+                        "User disabled this step during Recipe review.",
+                        0,
+                        0));
+                    journal.RecordAction(
+                        step.Index,
+                        step.Kind.ToString(),
+                        "review-disabled",
+                        "Skipped by approved Recipe review.");
+                    journal.CompleteStep(
+                        step.Index,
+                        await GetPageKeyAsync(client),
+                        await GetUrlAsync(client));
+                    continue;
+                }
+
+                string journalUrl = await GetUrlAsync(client);
+'@
+            if (-not $r.Contains($anchor)) { throw "Runner review skip anchor missing." }
+            $r = $r.Replace($anchor,$replacement)
+            [IO.File]::WriteAllText($runner,$r,[Text.UTF8Encoding]::new($true))
+          }
+
+          $window = "ShareX.ScreenCaptureLib/Presentation/ScrollingCapture/ScrollingCaptureWindow.axaml.cs"
+          $w = [IO.File]::ReadAllText($window)
+          foreach ($old in @(
+            "ShareXModCaptureModeUiV073.Attach(this);",
+            "ShareXModCaptureModeUiV071.Attach(this);",
+            "ShareXModCaptureModeUi.Attach(this);"
+          )) {
+            if ($w.Contains($old)) {
+              $w = $w.Replace($old,"ShareXModCaptureModeUiV075.Attach(this);")
+            }
+          }
+          if (-not $w.Contains("ShareXModCaptureModeUiV075.Attach(this);")) {
+            $anchor = "        InitializeComponent();"
+            if (-not $w.Contains($anchor)) { throw "Capture UI review anchor missing." }
+            $w = $w.Replace($anchor,$anchor + "`n        ShareXModCaptureModeUiV075.Attach(this);")
+          }
+          [IO.File]::WriteAllText($window,$w,[Text.UTF8Encoding]::new($true))
+
+          foreach ($workflowPath in @(
+            ".github/workflows/validate-mod-v073.yml",
+            ".github/workflows/validate-mod-v074.yml"
+          )) {
+            if (-not (Test-Path $workflowPath)) { continue }
+            $wf = [IO.File]::ReadAllText($workflowPath)
+            if ($wf -match '(?ms)^on:\s*\n\s*push:') {
+              $wf = [regex]::Replace(
+                $wf,
+                '(?ms)^on:\s*\n.*?^permissions:',
+                "on:`n  workflow_dispatch:`n`npermissions:",
+                1)
+              [IO.File]::WriteAllText($workflowPath,$wf,[Text.UTF8Encoding]::new($false))
+            }
+          }
+
+          [IO.File]::WriteAllText("mod-overlay/VERSION","0.7.5-dev`n",[Text.UTF8Encoding]::new($false))
+          git diff --check
+
+      - name: Commit v0.7.5 review gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "sharex-mod-ci"
+          git config user.email "sharex-mod-ci@users.noreply.github.com"
+          git add \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModV04Settings.cs \
+            mod-overlay/config/ShareX.Mod.v04.json \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureModeReadiness.cs \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModChromeRecipeCaptureEntryV062.cs \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModChromeRecipeCaptureEntry.cs \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipeRunner.cs \
+            ShareX.ScreenCaptureLib/Presentation/ScrollingCapture/ScrollingCaptureWindow.axaml.cs \
+            .github/workflows/validate-mod-v073.yml \
+            .github/workflows/validate-mod-v074.yml \
+            mod-overlay/VERSION
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+            exit 0
+          fi
+          git commit -m "feat(v0.7.5): require SHA-bound Recipe review before unattended run"
+          git push origin HEAD:mod/robust-scrolling-v0.1

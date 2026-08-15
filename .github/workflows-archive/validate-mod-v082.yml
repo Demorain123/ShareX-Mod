@@ -1,0 +1,128 @@
+name: Validate ShareX-Mod v0.8.2
+
+on:
+  push:
+    branches:
+      - "mod/**"
+    paths:
+      - "mod-overlay/**"
+      - "scripts/apply-v04-hooks.ps1"
+      - "scripts/run-v04-hooks.ps1"
+      - "scripts/apply-v041-post-hooks.ps1"
+      - "scripts/apply-v042-post-hooks.ps1"
+      - "scripts/apply-v043-post-hooks.ps1"
+      - "scripts/apply-v044-post-hooks.ps1"
+      - "scripts/apply-v050-post-hooks.ps1"
+      - "scripts/apply-v051-post-hooks.ps1"
+      - "scripts/apply-v052-post-hooks.ps1"
+      - "scripts/apply-v061-post-hooks.ps1"
+      - "scripts/apply-v062-post-hooks.ps1"
+      - "scripts/apply-v064-post-hooks.ps1"
+      - "ShareX.ScreenCaptureLib/**"
+      - "Directory.build.targets"
+      - ".github/workflows/validate-mod-v082.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Apply complete overlay chain
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $hooks = @(
+            "scripts\run-v04-hooks.ps1",
+            "scripts\apply-v041-post-hooks.ps1",
+            "scripts\apply-v042-post-hooks.ps1",
+            "scripts\apply-v043-post-hooks.ps1",
+            "scripts\apply-v044-post-hooks.ps1",
+            "scripts\apply-v050-post-hooks.ps1",
+            "scripts\apply-v051-post-hooks.ps1",
+            "scripts\apply-v052-post-hooks.ps1",
+            "scripts\apply-v061-post-hooks.ps1",
+            "scripts\apply-v062-post-hooks.ps1",
+            "scripts\apply-v064-post-hooks.ps1"
+          )
+          foreach ($hook in $hooks) {
+            pwsh -NoProfile -File $hook
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          git diff --check
+
+      - name: Verify latest integrated source markers
+        shell: pwsh
+        run: |
+          $version = (Get-Content "mod-overlay\VERSION" -Raw).Trim()
+          if ($version -ne "0.8.2-dev") {
+            throw "Expected v0.8.2-dev, got '$version'."
+          }
+
+          $requiredFiles = @(
+            "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModCaptureRecipePageLoopRunner.cs",
+            "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModPageLoopResumeJournal.cs",
+            "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModCaptureRecipePageGuard.cs",
+            "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModCaptureRecipeReviewService.cs",
+            "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModChromeDedicatedProfileLauncher.cs",
+            "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModChromeConnectionBroker.cs",
+            "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModCaptureRecipePageImageCollector.cs"
+          )
+          foreach ($path in $requiredFiles) {
+            if (-not (Test-Path $path)) { throw "Missing required v0.8.2 source: $path" }
+          }
+
+          $runner = Get-Content "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModCaptureRecipeRunner.cs" -Raw
+          foreach ($marker in @(
+            "ShareXModCaptureRecipePageGuard",
+            "ShareXModCaptureRecipeReviewService",
+            "ShareXModRecipeRangeAnchorResolver"
+          )) {
+            if (-not $runner.Contains($marker)) { throw "Runner is missing integrated marker: $marker" }
+          }
+
+          $entry = Get-Content "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModChromeRecipeCaptureEntryV062.cs" -Raw
+          if (-not $entry.Contains("ShareXModCaptureRecipePageLoopRunner.TryRunAsync")) {
+            throw "Page Loop is not integrated into Recipe entry."
+          }
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Restore Release x64
+        run: dotnet restore --runtime win-x64 ShareX.sln
+
+      - name: Build Release x64
+        run: dotnet build --no-restore --configuration Release -p:Platform=x64 --self-contained true /m:1 ShareX.sln
+
+      - name: Build portable package
+        shell: pwsh
+        run: |
+          & "ShareX.Setup\bin\Release\win-x64\ShareX.Setup.exe" -silent -job "Release" -platform "x64"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Validate portable contents
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem "Output\*-portable-x64.zip" | Select-Object -First 1
+          if (-not $zip) { throw "Portable zip missing." }
+          $temp = Join-Path $env:RUNNER_TEMP "sharex-mod-v082-portable"
+          Expand-Archive -LiteralPath $zip.FullName -DestinationPath $temp -Force
+          foreach ($name in @("ShareX.exe", "ShareX.ScreenCaptureLib.dll", "ShareX.Mod.v04.json")) {
+            if (-not (Get-ChildItem -Path $temp -Recurse -File -Filter $name | Select-Object -First 1)) {
+              throw "Portable package is missing $name"
+            }
+          }
+
+      - name: Upload v0.8.2 portable
+        uses: actions/upload-artifact@v7
+        with:
+          name: ShareX-Mod-v0.8.2-dev-portable-x64
+          path: Output\*-portable-x64.zip

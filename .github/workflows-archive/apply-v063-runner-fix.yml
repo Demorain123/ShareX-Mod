@@ -1,0 +1,153 @@
+name: Apply ShareX-Mod v0.6.3 runner fix once
+
+on:
+  push:
+    branches:
+      - "mod/robust-scrolling-v0.1"
+    paths:
+      - ".github/workflows/apply-v063-runner-fix.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout overlay branch
+        uses: actions/checkout@v6
+        with:
+          ref: mod/robust-scrolling-v0.1
+          fetch-depth: 0
+
+      - name: Patch runner and finalize v0.6.3
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $runnerPath = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipeRunner.cs"
+          $runner = [IO.File]::ReadAllText($runnerPath)
+
+          if (-not $runner.Contains("ShareXModRecipePageTransitionVerifier.WaitForChangeAsync")) {
+            $old = @'
+        string beforeUrl = await GetUrlAsync(client);
+        (bool ok, double score, double gap, string detail) = await ResolveElementAsync(
+            client,
+            step.Locator,
+            action: "click");
+        if (!ok) return (false, detail, score, gap);
+
+        if (!expectNavigation)
+        {
+            await Task.Delay(120);
+            return (true, "semantic-action-executed", score, gap);
+        }
+
+        int timeout = Math.Clamp(settings.CaptureRecipeActionTimeoutMs, 1000, 30000);
+        DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeout);
+
+        while (DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(150);
+            try
+            {
+                string afterUrl = await GetUrlAsync(client);
+                if (!string.Equals(beforeUrl, afterUrl, StringComparison.Ordinal))
+                {
+                    return (true, $"url-changed:{afterUrl}", score, gap);
+                }
+            }
+            catch
+            {
+                // Navigation can temporarily destroy the execution context; keep polling.
+            }
+        }
+
+        return (false, "navigation-not-observed", score, gap);
+'@
+
+            $new = @'
+        ShareXModRecipePageEvidence? before = expectNavigation
+            ? await ShareXModRecipePageTransitionVerifier.CaptureAsync(client)
+            : null;
+
+        (bool ok, double score, double gap, string detail) = await ResolveElementAsync(
+            client,
+            step.Locator,
+            action: "click");
+        if (!ok) return (false, detail, score, gap);
+
+        if (!expectNavigation)
+        {
+            await Task.Delay(120);
+            return (true, "semantic-action-executed", score, gap);
+        }
+
+        ShareXModRecipePageTransitionResult transition =
+            await ShareXModRecipePageTransitionVerifier.WaitForChangeAsync(
+                client,
+                before!,
+                Math.Clamp(settings.CaptureRecipeActionTimeoutMs, 1000, 30000));
+
+        if (!transition.Changed)
+        {
+            return (false, transition.Reason, score, gap);
+        }
+
+        return (
+            true,
+            $"{transition.Reason}:{transition.After.Url}",
+            score,
+            gap);
+'@
+
+            if (-not $runner.Contains($old)) {
+              throw "Capture Recipe runner navigation block changed; refusing blind patch."
+            }
+
+            $runner = $runner.Replace($old, $new)
+            [IO.File]::WriteAllText($runnerPath, $runner, [Text.UTF8Encoding]::new($true))
+          }
+
+          $settingsPath = "mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModV04Settings.cs"
+          $settings = [IO.File]::ReadAllText($settingsPath)
+          if (-not $settings.Contains("ChromeImageAppendixOriginalRetention")) {
+            $anchor = '    public bool ChromeImageAppendixEnabled { get; set; } = true;'
+            if (-not $settings.Contains($anchor)) { throw "Settings retention anchor missing." }
+            $settings = $settings.Replace(
+              $anchor,
+              $anchor + "`n" + '    public string ChromeImageAppendixOriginalRetention { get; set; } = "ask";')
+            [IO.File]::WriteAllText($settingsPath, $settings, [Text.UTF8Encoding]::new($true))
+          }
+
+          $configPath = "mod-overlay/config/ShareX.Mod.v04.json"
+          $config = [IO.File]::ReadAllText($configPath)
+          if (-not $config.Contains('"chromeImageAppendixOriginalRetention"')) {
+            $anchor = '  "chromeImageAppendixEnabled": true,'
+            if (-not $config.Contains($anchor)) { throw "Config retention anchor missing." }
+            $config = $config.Replace(
+              $anchor,
+              $anchor + "`n" + '  "chromeImageAppendixOriginalRetention": "ask",')
+            [IO.File]::WriteAllText($configPath, $config, [Text.UTF8Encoding]::new($false))
+          }
+
+          [IO.File]::WriteAllText("mod-overlay/VERSION", "0.6.3-dev`n", [Text.UTF8Encoding]::new($false))
+          git diff --check
+
+      - name: Commit runner fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "sharex-mod-ci"
+          git config user.email "sharex-mod-ci@users.noreply.github.com"
+          git add \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModCaptureRecipeRunner.cs \
+            mod-overlay/src/ShareX.ScreenCaptureLib/ShareXModV04Settings.cs \
+            mod-overlay/config/ShareX.Mod.v04.json \
+            mod-overlay/VERSION
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+            exit 0
+          fi
+          git commit -m "feat(v0.6.3): verify same-url page transitions and finalize appendix retention"
+          git push origin HEAD:mod/robust-scrolling-v0.1

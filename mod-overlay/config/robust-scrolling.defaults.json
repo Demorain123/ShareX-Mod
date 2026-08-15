@@ -1,0 +1,10 @@
+{
+  "enabled": true,
+  "manualStopOnly": true,
+  "continueAfterCombineFailure": true,
+  "maxConsecutiveCombineFailures": 0,
+  "saveRawFramesOnFailure": true,
+  "diagnosticsEnabled": true,
+  "fallbackMatcherEnabled": true,
+  "fallbackMaxMeanDifference": 20.0
+}

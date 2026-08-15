@@ -5,6 +5,8 @@ using System.Reflection;
 using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace LongCapture.Standalone;
 
@@ -55,15 +57,22 @@ internal static class AutomationTestRunner
         bool deep = string.Equals(report.Profile, "DEEP", StringComparison.OrdinalIgnoreCase);
 
         RunCase(report, "package.integrity", "Package", "Portable package integrity and configuration", TestPackageIntegrity);
+
+        // Run pure/async engine regressions before initializing the desktop hosts. They are also
+        // isolated onto a worker thread so an STA/WinForms SynchronizationContext can never turn
+        // an async lazy-load fixture's synchronous RunOrThrow bridge into a UI-thread deadlock.
+        RunCase(report, "engine.semantic-regression", "Engine", "Recipe / anchor / integrity / scrolling / fixed / lazy / router / pagination suites", RunSemanticSuitesIsolated);
+
+        RunCase(report, "diagnostics.roundtrip", "Diagnostics", "Capture-session recorder and diagnostics ZIP round-trip", TestDiagnosticsRoundTrip);
+
         RunCase(report, "core.selftest", "Core", "Packaged shell / F8 / target / Avalonia / UI-exclusion self-test", () =>
         {
             int code = Program.RunSelfTest();
             if (code != 0) throw new InvalidOperationException($"LongCapture core self-test returned exit code {code}.");
             return "Packaged shell self-test returned exit code 0; this includes the real StartCaptureAsync -> StopCapture smoke path.";
         });
+
         RunCase(report, "shell.recovery-layout", "Shell", "Target lifecycle recovery and 100-200% layout pressure", LongCaptureRcSelfTests.RunOrThrow);
-        RunCase(report, "engine.semantic-regression", "Engine", "Recipe / anchor / integrity / scrolling / fixed / lazy / router / pagination suites", RunSemanticSuites);
-        RunCase(report, "diagnostics.roundtrip", "Diagnostics", "Capture-session recorder and diagnostics ZIP round-trip", TestDiagnosticsRoundTrip);
 
         // Deep is deliberately opt-in. Quick already exercises every changed/new functional area,
         // including one real capture in Program.RunSelfTest. Repetition and memory-growth testing
@@ -90,10 +99,12 @@ internal static class AutomationTestRunner
             Directory.CreateDirectory(Path.GetDirectoryName(reportPath)!);
             File.WriteAllText(reportPath, JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
             File.WriteAllText(textPath, BuildTextReport(report, reportPath), new UTF8Encoding(false));
+            WriteProgress("complete", report.Status, $"PASS={report.PassedCount} FAIL={report.FailedCount} MANUAL_REQUIRED={report.ManualRequiredCount}");
         }
         catch (Exception ex)
         {
             LongCaptureLog.Error("automation report write failed", ex);
+            WriteProgress("report", "FAIL", OneLineException(ex));
             return 91;
         }
 
@@ -111,16 +122,20 @@ internal static class AutomationTestRunner
     private static void RunCase(AutomationTestReport report, string id, string category, string name, Func<string> action)
     {
         Stopwatch sw = Stopwatch.StartNew();
+        WriteProgress(id, "START", name);
         try
         {
             string detail = action();
             report.Cases.Add(new AutomationTestCase(id, category, name, "PASS", sw.ElapsedMilliseconds, detail));
+            WriteProgress(id, "PASS", detail);
             Console.WriteLine($"[PASS] {name} - {detail}");
         }
         catch (Exception ex)
         {
-            report.Cases.Add(new AutomationTestCase(id, category, name, "FAIL", sw.ElapsedMilliseconds, OneLineException(ex)));
-            Console.Error.WriteLine($"[FAIL] {name} - {OneLineException(ex)}");
+            string detail = OneLineException(ex);
+            report.Cases.Add(new AutomationTestCase(id, category, name, "FAIL", sw.ElapsedMilliseconds, detail));
+            WriteProgress(id, "FAIL", detail);
+            Console.Error.WriteLine($"[FAIL] {name} - {detail}");
             LongCaptureLog.Error($"automation case failed id={id} name={name}", ex);
         }
     }
@@ -128,6 +143,22 @@ internal static class AutomationTestRunner
     private static void AddManual(AutomationTestReport report, string id, string category, string name, string detail)
     {
         report.Cases.Add(new AutomationTestCase(id, category, name, "MANUAL_REQUIRED", 0, detail));
+    }
+
+    private static void WriteProgress(string id, string status, string detail)
+    {
+        string? path = Environment.GetEnvironmentVariable("LONGCAPTURE_AUTOMATION_PROGRESS")?.Trim();
+        if (string.IsNullOrWhiteSpace(path)) return;
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
+            string line = $"{DateTime.UtcNow:o}\t{id}\t{status}\t{detail.Replace('\r', ' ').Replace('\n', ' ')}{Environment.NewLine}";
+            File.AppendAllText(path, line, new UTF8Encoding(false));
+        }
+        catch
+        {
+            // Progress telemetry must never become a test failure.
+        }
     }
 
     private static string TestPackageIntegrity()
@@ -159,7 +190,16 @@ internal static class AutomationTestRunner
         return $"Required files/config JSONs valid; ShareX.exe absent; baseDir={root}";
     }
 
-    private static string RunSemanticSuites()
+    private static string RunSemanticSuitesIsolated()
+    {
+        return Task.Run(() =>
+        {
+            SynchronizationContext.SetSynchronizationContext(null);
+            return RunSemanticSuitesCore();
+        }).GetAwaiter().GetResult();
+    }
+
+    private static string RunSemanticSuitesCore()
     {
         Assembly assembly = typeof(ScrollingCaptureService).Assembly;
         var passed = new List<string>();

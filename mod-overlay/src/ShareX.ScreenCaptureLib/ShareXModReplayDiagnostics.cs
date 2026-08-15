@@ -4,7 +4,6 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
-using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -13,9 +12,9 @@ using System.Text.Json;
 namespace ShareX.ScreenCaptureLib;
 
 /// <summary>
-/// Raw-frame flight recorder used to make real-site failures replayable without asking the user to
-/// repeat the capture after every compositor change. Recording is opt-in from LongCapture Debug.
-/// Frames are stored as lossless BMP for low encoder overhead and exact pixel replay.
+/// Lossless raw-frame flight recorder. Capture uses BMP to keep encoder work out of the scrolling
+/// loop. Diagnostic export may convert these BMPs to PNG after capture so the complete replay set
+/// can be shared without hundreds of megabytes of uncompressed pixels.
 /// </summary>
 public static class ShareXModReplayDiagnostics
 {
@@ -26,10 +25,7 @@ public static class ShareXModReplayDiagnostics
     private static int nextFrameIndex;
     private static int lastFrameIndex = -1;
 
-    public static bool Enabled
-    {
-        get { lock (Sync) return enabled; }
-    }
+    public static bool Enabled { get { lock (Sync) return enabled; } }
 
     public static void Configure(bool value)
     {
@@ -49,20 +45,16 @@ public static class ShareXModReplayDiagnostics
     internal static void RecordRawFrame(Bitmap frame, Rectangle captureRectangle, ScrollingCaptureOptions options)
     {
         if (frame is null || !Enabled) return;
-
         try
         {
             lock (Sync)
             {
                 string? directory = EnsureDirectoryUnsafe();
                 if (directory is null) return;
-
                 int index = nextFrameIndex++;
                 lastFrameIndex = index;
                 string fileName = $"frame-{index:D4}.bmp";
-                string path = Path.Combine(directory, fileName);
-                frame.Save(path, ImageFormat.Bmp);
-
+                frame.Save(Path.Combine(directory, fileName), ImageFormat.Bmp);
                 AppendJsonLine(Path.Combine(directory, "frames.jsonl"), new
                 {
                     index,
@@ -70,13 +62,7 @@ public static class ShareXModReplayDiagnostics
                     file = fileName,
                     frame.Width,
                     frame.Height,
-                    captureRectangle = new
-                    {
-                        captureRectangle.X,
-                        captureRectangle.Y,
-                        captureRectangle.Width,
-                        captureRectangle.Height
-                    },
+                    captureRectangle = new { captureRectangle.X, captureRectangle.Y, captureRectangle.Width, captureRectangle.Height },
                     options = new
                     {
                         options.StartDelay,
@@ -90,10 +76,7 @@ public static class ShareXModReplayDiagnostics
                 });
             }
         }
-        catch
-        {
-            // Diagnostics must never invalidate a capture.
-        }
+        catch { }
     }
 
     internal static void RecordAnchor(bool hasAnchor, ShareXModAnchorMatch match)
@@ -116,9 +99,30 @@ public static class ShareXModReplayDiagnostics
                 });
             }
         }
-        catch
+        catch { }
+    }
+
+    internal static void RecordResolution(bool resolved, int delta, string source, double score)
+    {
+        if (!Enabled) return;
+        try
         {
+            lock (Sync)
+            {
+                string? directory = EnsureDirectoryUnsafe();
+                if (directory is null || lastFrameIndex < 0) return;
+                AppendJsonLine(Path.Combine(directory, "resolutions-v017.jsonl"), new
+                {
+                    frameIndex = lastFrameIndex,
+                    timestamp = DateTimeOffset.Now,
+                    resolved,
+                    scrollDelta = resolved ? delta : 0,
+                    source,
+                    score = double.IsFinite(score) ? score : -1
+                });
+            }
         }
+        catch { }
     }
 
     private static string? EnsureDirectoryUnsafe()
@@ -137,17 +141,14 @@ public static class ShareXModReplayDiagnostics
             lastFrameIndex = -1;
             File.WriteAllText(
                 Path.Combine(activeDirectory, "README.txt"),
-                "LongCapture v0.1.6 raw-frame replay evidence. Keep this directory/diagnostics ZIP when reporting a real-site stitch failure.\r\n",
+                "LongCapture raw-frame replay evidence. v0.1.7 keeps every resolved transition on the delayed-compositor path; diagnostics export converts BMP frames to PNG when needed.\r\n",
                 new UTF8Encoding(false));
         }
-
         return activeDirectory;
     }
 
-    private static void AppendJsonLine(string path, object value)
-    {
+    private static void AppendJsonLine(string path, object value) =>
         File.AppendAllText(path, JsonSerializer.Serialize(value) + Environment.NewLine, new UTF8Encoding(false));
-    }
 }
 
 public static class ShareXModOfflineReplay
@@ -160,18 +161,26 @@ public static class ShareXModOfflineReplay
         string root = Path.GetFullPath(sessionDirectory);
         string rawDirectory = Directory.Exists(Path.Combine(root, "raw-frames-v016"))
             ? Path.Combine(root, "raw-frames-v016")
-            : root;
+            : Directory.Exists(Path.Combine(root, "engine-evidence", "raw-frames-v016"))
+                ? Path.Combine(root, "engine-evidence", "raw-frames-v016")
+                : root;
 
-        string[] frames = Directory.GetFiles(rawDirectory, "frame-*.bmp")
-            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+        string[] frames = Directory.EnumerateFiles(rawDirectory, "frame-*.*")
+            .Where(x => string.Equals(Path.GetExtension(x), ".bmp", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(Path.GetExtension(x), ".png", StringComparison.OrdinalIgnoreCase))
+            .GroupBy(x => Path.GetFileNameWithoutExtension(x), StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.OrderBy(x => string.Equals(Path.GetExtension(x), ".bmp", StringComparison.OrdinalIgnoreCase) ? 0 : 1).First())
+            .OrderBy(x => Path.GetFileNameWithoutExtension(x), StringComparer.OrdinalIgnoreCase)
             .ToArray();
         if (frames.Length < 2)
             throw new InvalidOperationException($"Replay requires at least two raw frames. Found {frames.Length} in {rawDirectory}.");
 
-        Dictionary<int, int> recordedDeltas = LoadRecordedDeltas(Path.Combine(rawDirectory, "anchors.jsonl"));
+        Dictionary<int, int> recordedResolutions = LoadRecordedDeltas(Path.Combine(rawDirectory, "resolutions-v017.jsonl"), "resolved");
+        Dictionary<int, int> recordedAnchors = LoadRecordedDeltas(Path.Combine(rawDirectory, "anchors.jsonl"), "hasAnchor");
         Bitmap? result = null;
         Bitmap? previous = null;
-        var replay = new ShareXModDelayedCompositorV016.Session();
+        using var replay = new ShareXModDelayedCompositorV016.Session();
+        ShareXModAnchorContinuityV017.ResetLive();
 
         try
         {
@@ -179,87 +188,85 @@ public static class ShareXModOfflineReplay
             {
                 using Bitmap currentLoaded = new(frames[i]);
                 using Bitmap current = new(currentLoaded);
-
                 if (result is null)
                 {
                     result = (Bitmap)current.Clone();
                     previous = (Bitmap)current.Clone();
                     continue;
                 }
-
                 if (previous is null) throw new InvalidOperationException("Replay previous frame state was lost.");
 
-                int delta = recordedDeltas.TryGetValue(i, out int savedDelta) && savedDelta > 0
-                    ? savedDelta
-                    : EstimateDelta(previous, current);
+                int delta = 0;
+                if (recordedResolutions.TryGetValue(i, out int savedResolution) && savedResolution > 0)
+                {
+                    delta = savedResolution;
+                }
+                else if (recordedAnchors.TryGetValue(i, out int savedAnchor) && savedAnchor > 0)
+                {
+                    delta = savedAnchor;
+                    ShareXModAnchorContinuityV017.TryResolve(previous, current, true,
+                        new ShareXModAnchorMatch(savedAnchor, 0, 3), out _, out _, out _);
+                }
+                else if (!ShareXModAnchorContinuityV017.TryResolve(previous, current, false, default,
+                             out delta, out _, out _))
+                {
+                    throw new InvalidOperationException($"Replay could not safely resolve scroll delta for frame {i}; legacy mosaic fallback is intentionally disabled.");
+                }
+
                 if (delta <= 0 || delta >= current.Height)
-                    throw new InvalidOperationException($"Replay could not resolve a valid scroll delta for frame {i}: {delta}.");
+                    throw new InvalidOperationException($"Replay resolved invalid scroll delta for frame {i}: {delta}.");
 
                 Bitmap? next = replay.TryAppend(result, previous, current, delta);
-                if (next is null)
-                    throw new InvalidOperationException($"Replay compositor rejected frame {i} with delta={delta}.");
-
+                if (next is null) throw new InvalidOperationException($"Replay compositor rejected frame {i} with delta={delta}.");
                 result.Dispose();
                 result = next;
                 previous.Dispose();
                 previous = (Bitmap)current.Clone();
             }
 
-            outputPath ??= Path.Combine(root, $"LongCapture-Replay-v016-{DateTime.Now:yyyyMMdd-HHmmss}.png");
+            outputPath ??= Path.Combine(root, $"LongCapture-Replay-v017-{DateTime.Now:yyyyMMdd-HHmmss}.png");
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputPath))!);
             result!.Save(outputPath, ImageFormat.Png);
-
-            string manifestPath = Path.ChangeExtension(outputPath, ".json");
-            File.WriteAllText(manifestPath, JsonSerializer.Serialize(new
+            File.WriteAllText(Path.ChangeExtension(outputPath, ".json"), JsonSerializer.Serialize(new
             {
                 format = "LongCapture Offline Replay",
-                version = "0.1.6",
+                version = "0.1.7",
                 created = DateTimeOffset.Now,
                 rawDirectory,
                 frameCount = frames.Length,
                 outputPath,
                 outputWidth = result.Width,
                 outputHeight = result.Height,
-                telemetry = replay.SnapshotTelemetry()
+                compositor = replay.SnapshotTelemetry(),
+                anchorContinuity = ShareXModAnchorContinuityV017.SnapshotTelemetry()
             }, new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
-
             return outputPath;
         }
         finally
         {
             previous?.Dispose();
             result?.Dispose();
-            replay.Dispose();
+            ShareXModAnchorContinuityV017.ResetLive();
         }
     }
 
-    private static int EstimateDelta(Bitmap previous, Bitmap current)
-    {
-        return ShareXModAnchorMatcher.TryEstimateScrollDelta(previous, current, out ShareXModAnchorMatch match)
-            ? match.ScrollDelta
-            : 0;
-    }
-
-    private static Dictionary<int, int> LoadRecordedDeltas(string path)
+    private static Dictionary<int, int> LoadRecordedDeltas(string path, string acceptedFlag)
     {
         var result = new Dictionary<int, int>();
         if (!File.Exists(path)) return result;
-
         foreach (string line in File.ReadLines(path))
         {
             if (string.IsNullOrWhiteSpace(line)) continue;
             try
             {
                 using JsonDocument document = JsonDocument.Parse(line);
-                JsonElement root = document.RootElement;
-                if (!root.TryGetProperty("hasAnchor", out JsonElement has) || !has.GetBoolean()) continue;
-                int frameIndex = root.GetProperty("frameIndex").GetInt32();
-                int delta = root.GetProperty("scrollDelta").GetInt32();
+                JsonElement item = document.RootElement;
+                if (!item.TryGetProperty(acceptedFlag, out JsonElement accepted) || !accepted.GetBoolean()) continue;
+                int frameIndex = item.GetProperty("frameIndex").GetInt32();
+                int delta = item.GetProperty("scrollDelta").GetInt32();
                 if (delta > 0) result[frameIndex] = delta;
             }
-            catch
-            {
-            }
+            catch { }
         }
         return result;
     }

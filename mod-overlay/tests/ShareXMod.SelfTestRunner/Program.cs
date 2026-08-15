@@ -22,6 +22,7 @@ string[] suites =
     "ShareX.ScreenCaptureLib.ShareXModRecipePlannerSelfTests",
     "ShareX.ScreenCaptureLib.ShareXModRecipeAnchorSelfTests",
     "ShareX.ScreenCaptureLib.ShareXModCaptureIntegritySelfTests",
+    "ShareX.ScreenCaptureLib.ShareXModScrollingReliabilitySelfTests",
     "ShareX.ScreenCaptureLib.ShareXModTemplateRouterEvidenceSelfTests",
     "ShareX.ScreenCaptureLib.ShareXModPaginationIntentSelfTests"
 };

@@ -39,7 +39,6 @@ internal static class ShareXModV017AnchorContinuitySelfTests
             for (int frame = 0; frame < Frames; frame++)
             {
                 using Bitmap current = BuildViewport(frame * Delta, frame);
-                // Exported diagnostics use PNG, so the replay half deliberately uses PNG-only frames.
                 current.Save(Path.Combine(raw, $"frame-{frame:D4}.png"), ImageFormat.Png);
 
                 if (result is null)
@@ -83,6 +82,14 @@ internal static class ShareXModV017AnchorContinuitySelfTests
             if (liveBands > 1)
                 throw new InvalidOperationException($"v0.1.7 live path repeated fixed control {liveBands} times after anchor fallback.");
 
+            // Snapshot live continuity telemetry before offline replay. Replay intentionally owns and
+            // resets its own continuity state so it cannot leak temporal priors back into a live run.
+            ShareXModV017AnchorTelemetry liveTelemetry = ShareXModAnchorContinuityV017.SnapshotTelemetry();
+            if (fallbacks != ForcedDirectAnchorFailures.Length || liveTelemetry.FallbackAnchors + liveTelemetry.PriorValidatedAnchors < fallbacks)
+                throw new InvalidOperationException($"v0.1.7 fallback telemetry mismatch forced={fallbacks} telemetry={liveTelemetry}.");
+            if (liveTelemetry.UnresolvedTransitions != 0)
+                throw new InvalidOperationException($"v0.1.7 fixture left {liveTelemetry.UnresolvedTransitions} unresolved transitions.");
+
             string replayPath = ShareXModOfflineReplay.Replay(temp, Path.Combine(temp, "replay-v017.png"));
             using Bitmap replay = new(replayPath);
             int replayBands = CountFixedBands(replay);
@@ -91,13 +98,7 @@ internal static class ShareXModV017AnchorContinuitySelfTests
             if (Math.Abs(replay.Height - result.Height) > 2)
                 throw new InvalidOperationException($"v0.1.7 replay geometry differs: live={result.Height}, replay={replay.Height}.");
 
-            ShareXModV017AnchorTelemetry telemetry = ShareXModAnchorContinuityV017.SnapshotTelemetry();
-            if (fallbacks != ForcedDirectAnchorFailures.Length || telemetry.FallbackAnchors + telemetry.PriorValidatedAnchors < fallbacks)
-                throw new InvalidOperationException($"v0.1.7 fallback telemetry mismatch forced={fallbacks} telemetry={telemetry}.");
-            if (telemetry.UnresolvedTransitions != 0)
-                throw new InvalidOperationException($"v0.1.7 fixture left {telemetry.UnresolvedTransitions} unresolved transitions.");
-
-            return $"v0.1.7 anchor-continuity passed: frames={Frames}, forcedDirectFailures={fallbacks}, liveFixedBands={liveBands}, replayFixedBands={replayBands}, height={result.Height}, unresolved={telemetry.UnresolvedTransitions}.";
+            return $"v0.1.7 anchor-continuity passed: frames={Frames}, forcedDirectFailures={fallbacks}, liveFixedBands={liveBands}, replayFixedBands={replayBands}, height={result.Height}, unresolved={liveTelemetry.UnresolvedTransitions}.";
         }
         finally
         {
@@ -123,8 +124,6 @@ internal static class ShareXModV017AnchorContinuitySelfTests
             g.FillRectangle(ink, 40 + row * 37 % 610, y + 4, 90 + row % 170, 4);
         }
 
-        // Repeating central cards make the conservative direct anchor plausibly ambiguous while the
-        // vertical fallback still has enough distributed document motion to validate the true delta.
         for (int logicalTop = 160; logicalTop < logicalOffset + Height + 180; logicalTop += 240)
         {
             int y = logicalTop - logicalOffset;

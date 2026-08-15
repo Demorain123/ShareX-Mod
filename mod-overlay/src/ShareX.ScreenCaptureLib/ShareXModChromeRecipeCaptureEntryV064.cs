@@ -32,6 +32,18 @@ internal static class ShareXModChromeRecipeCaptureEntryV064
             // The screenshot remains valid even if advisory ledger output fails.
         }
 
+        try
+        {
+            // Deliberately post-capture: SHA-256 reads saved files only after scrolling, repair,
+            // appendices and Position Ledger have finished, so it cannot make the live capture loop
+            // stutter. Native originals are already hashed by their collectors and are optional here.
+            await ShareXModCaptureIntegrityManifest.TryWriteAsync(result, settings);
+        }
+        catch
+        {
+            // Integrity output is advisory and must never invalidate an otherwise valid screenshot.
+        }
+
         return result;
     }
 }

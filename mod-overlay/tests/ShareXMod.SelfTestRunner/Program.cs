@@ -20,7 +20,8 @@ Assembly assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(assemblyPat
 string[] suites =
 {
     "ShareX.ScreenCaptureLib.ShareXModRecipePlannerSelfTests",
-    "ShareX.ScreenCaptureLib.ShareXModRecipeAnchorSelfTests"
+    "ShareX.ScreenCaptureLib.ShareXModRecipeAnchorSelfTests",
+    "ShareX.ScreenCaptureLib.ShareXModCaptureIntegritySelfTests"
 };
 
 foreach (string suite in suites)

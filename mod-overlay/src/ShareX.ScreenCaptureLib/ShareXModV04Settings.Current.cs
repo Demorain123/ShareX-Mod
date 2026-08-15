@@ -40,6 +40,13 @@ internal sealed partial class ShareXModV04Settings
     public double CaptureRecipeHorizontalCaptureOverlapRatio { get; set; } = 0.15;
     public int CaptureRecipeHorizontalMaxPanels { get; set; } = 80;
 
+    // Post-capture output integrity. SHA-256 is calculated only after capture/repair/ledger work is
+    // finished, so hashing never sits in the scrolling hot path. Native originals already carry
+    // collector-level hashes and are excluded by default to avoid hashing large assets twice.
+    public bool CaptureIntegrityManifestEnabled { get; set; } = true;
+    public bool CaptureIntegrityIncludeNativeAssets { get; set; } = false;
+    public int CaptureIntegrityMaxFiles { get; set; } = 10000;
+
     // Chrome connection broker. Non-loopback CDP is denied by default.
     public bool ChromeAllowNonLoopbackCdp { get; set; } = false;
     public int ChromeConnectionProbeTimeoutMs { get; set; } = 1200;

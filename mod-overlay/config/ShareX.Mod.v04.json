@@ -56,6 +56,10 @@
   "captureRecipeTemplateRouterMinSelectionScore": 0.55,
   "captureRecipeTemplateRouterMinUniquenessGap": 0.08,
 
+  "captureIntegrityManifestEnabled": true,
+  "captureIntegrityIncludeNativeAssets": false,
+  "captureIntegrityMaxFiles": 10000,
+
   "captureRecipeInferDynamicFeed": true,
   "captureRecipeDynamicFeedGrowthThresholdCss": 120,
   "captureRecipeDynamicFeedMaxSteps": 400,

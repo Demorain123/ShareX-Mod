@@ -17,23 +17,15 @@ internal static class ShareXModVerticalFallbackMatcher
         combined = null;
         scrollDelta = 0;
         score = double.MaxValue;
-
         if (result == null || previousFrame == null || currentFrame == null ||
             previousFrame.Width != currentFrame.Width || previousFrame.Height != currentFrame.Height ||
             result.Width != currentFrame.Width) return false;
 
         if (ShareXModAnchorMatcher.TryEstimateScrollDelta(previousFrame, currentFrame, out ShareXModAnchorMatch anchorMatch))
-        {
-            scrollDelta = anchorMatch.ScrollDelta;
-            score = anchorMatch.Score;
-        }
-        else if (!TryEstimateScrollDelta(previousFrame, currentFrame, settings, out scrollDelta, out score))
-        {
-            return false;
-        }
+        { scrollDelta = anchorMatch.ScrollDelta; score = anchorMatch.Score; }
+        else if (!TryEstimateScrollDelta(previousFrame, currentFrame, settings, out scrollDelta, out score)) return false;
 
         if (scrollDelta <= 0 || scrollDelta >= currentFrame.Height) return false;
-
         Bitmap newResult = new(result.Width, result.Height + scrollDelta, PixelFormat.Format32bppArgb);
         using (Graphics g = Graphics.FromImage(newResult))
         {
@@ -45,53 +37,23 @@ internal static class ShareXModVerticalFallbackMatcher
                 new Rectangle(0, currentFrame.Height - scrollDelta, currentFrame.Width, scrollDelta),
                 GraphicsUnit.Pixel);
         }
-
         combined = newResult;
         return true;
     }
 
-    /// <summary>
-    /// Exposes the existing central-body matcher to v0.1.7 without constructing a legacy mosaic.
-    /// This is intentionally an estimator only: the resolved delta is always consumed by the
-    /// raw-frame delayed compositor, so fixed/sticky handling is never bypassed.
-    /// </summary>
-    internal static bool TryEstimateScrollDeltaOnly(
-        Bitmap previousFrame,
-        Bitmap currentFrame,
-        ShareXModRobustScrollingSettings settings,
-        out int scrollDelta,
-        out double score)
+    internal static bool TryEstimateScrollDeltaOnly(Bitmap previousFrame, Bitmap currentFrame,
+        ShareXModRobustScrollingSettings settings, out int scrollDelta, out double score)
     {
-        scrollDelta = 0;
-        score = double.MaxValue;
-        if (previousFrame == null || currentFrame == null ||
-            previousFrame.Width != currentFrame.Width || previousFrame.Height != currentFrame.Height)
-        {
-            return false;
-        }
+        scrollDelta = 0; score = double.MaxValue;
+        if (!Compatible(previousFrame, currentFrame)) return false;
         return TryEstimateScrollDelta(previousFrame, currentFrame, settings, out scrollDelta, out score);
     }
 
-    /// <summary>
-    /// Validates a temporal scroll-delta prior against this exact raw-frame pair. The prior is
-    /// accepted only when the same central-body evidence metric that powers the fallback matcher
-    /// passes the configured threshold. This prevents a stale prior from silently corrupting output.
-    /// </summary>
-    internal static bool TryValidateSpecificDelta(
-        Bitmap previousFrame,
-        Bitmap currentFrame,
-        ShareXModRobustScrollingSettings settings,
-        int delta,
-        out double score)
+    internal static bool TryValidateSpecificDelta(Bitmap previousFrame, Bitmap currentFrame,
+        ShareXModRobustScrollingSettings settings, int delta, out double score)
     {
         score = double.MaxValue;
-        if (previousFrame == null || currentFrame == null ||
-            previousFrame.Width != currentFrame.Width || previousFrame.Height != currentFrame.Height ||
-            delta <= 0 || delta >= currentFrame.Height)
-        {
-            return false;
-        }
-
+        if (!Compatible(previousFrame, currentFrame) || delta <= 0 || delta >= currentFrame.Height) return false;
         PixelBuffer previous = PixelBuffer.FromBitmap(previousFrame);
         PixelBuffer current = PixelBuffer.FromBitmap(currentFrame);
         try
@@ -99,24 +61,49 @@ internal static class ShareXModVerticalFallbackMatcher
             score = CalculateScore(previous, current, previousFrame.Width, previousFrame.Height, delta, 16, 16);
             return score <= settings.FallbackMaxMeanDifference;
         }
-        finally
+        finally { previous.Dispose(); current.Dispose(); }
+    }
+
+    internal static bool TryEstimateNearDelta(Bitmap previousFrame, Bitmap currentFrame,
+        ShareXModRobustScrollingSettings settings, int priorDelta, out int bestDelta, out double bestScore)
+    {
+        bestDelta = 0; bestScore = double.MaxValue;
+        if (!Compatible(previousFrame, currentFrame) || priorDelta <= 0 || priorDelta >= currentFrame.Height) return false;
+
+        int tolerance = Math.Clamp(Math.Max(48, priorDelta / 8), 48, Math.Max(48, currentFrame.Height / 5));
+        int minDelta = Math.Max(1, priorDelta - tolerance);
+        int maxDelta = Math.Min(currentFrame.Height - 1, priorDelta + tolerance);
+        PixelBuffer previous = PixelBuffer.FromBitmap(previousFrame);
+        PixelBuffer current = PixelBuffer.FromBitmap(currentFrame);
+        try
         {
-            previous.Dispose();
-            current.Dispose();
+            const int coarse = 8;
+            for (int delta = minDelta; delta <= maxDelta; delta += coarse)
+            {
+                double candidate = CalculateScore(previous, current, previousFrame.Width, previousFrame.Height, delta, 20, 18);
+                if (candidate < bestScore) { bestScore = candidate; bestDelta = delta; }
+            }
+            if (bestDelta == 0) return false;
+            int refineStart = Math.Max(minDelta, bestDelta - coarse);
+            int refineEnd = Math.Min(maxDelta, bestDelta + coarse);
+            for (int delta = refineStart; delta <= refineEnd; delta++)
+            {
+                double candidate = CalculateScore(previous, current, previousFrame.Width, previousFrame.Height, delta, 16, 16);
+                if (candidate < bestScore) { bestScore = candidate; bestDelta = delta; }
+            }
+            return bestScore <= settings.FallbackMaxMeanDifference;
         }
+        finally { previous.Dispose(); current.Dispose(); }
     }
 
     private static bool TryEstimateScrollDelta(Bitmap previousFrame, Bitmap currentFrame,
         ShareXModRobustScrollingSettings settings, out int bestDelta, out double bestScore)
     {
-        bestDelta = 0;
-        bestScore = double.MaxValue;
-        int width = previousFrame.Width;
-        int height = previousFrame.Height;
+        bestDelta = 0; bestScore = double.MaxValue;
+        int width = previousFrame.Width, height = previousFrame.Height;
         int minDelta = Math.Clamp(settings.FallbackMinScrollDelta, 1, Math.Max(1, height - 1));
         int maxDelta = Math.Clamp((int)(height * settings.FallbackMaxScrollDeltaRatio), minDelta, height - 1);
         int coarseStep = Math.Max(2, settings.FallbackCoarseStep);
-
         PixelBuffer previous = PixelBuffer.FromBitmap(previousFrame);
         PixelBuffer current = PixelBuffer.FromBitmap(currentFrame);
         try
@@ -127,7 +114,6 @@ internal static class ShareXModVerticalFallbackMatcher
                 if (candidate < bestScore) { bestScore = candidate; bestDelta = delta; }
             }
             if (bestDelta == 0) return false;
-
             int refineStart = Math.Max(minDelta, bestDelta - coarseStep);
             int refineEnd = Math.Min(maxDelta, bestDelta + coarseStep);
             for (int delta = refineStart; delta <= refineEnd; delta++)
@@ -137,34 +123,27 @@ internal static class ShareXModVerticalFallbackMatcher
             }
             return bestScore <= settings.FallbackMaxMeanDifference;
         }
-        finally
-        {
-            previous.Dispose();
-            current.Dispose();
-        }
+        finally { previous.Dispose(); current.Dispose(); }
     }
+
+    private static bool Compatible(Bitmap a, Bitmap b) => a != null && b != null && a.Width == b.Width && a.Height == b.Height;
 
     private static double CalculateScore(PixelBuffer previous, PixelBuffer current, int width, int height,
         int delta, int xStep, int yStep)
     {
         int overlap = height - delta;
         if (overlap < Math.Max(64, height / 8)) return double.MaxValue;
-
         int marginX = Math.Min(width / 3, Math.Max(40, width / 6));
         int usableWidth = width - marginX * 2;
         if (usableWidth < 96) return double.MaxValue;
-
         const int tileCount = 8;
         List<double> movingTileScores = new(tileCount);
-
         for (int tile = 0; tile < tileCount; tile++)
         {
             int tileLeft = marginX + usableWidth * tile / tileCount;
             int tileRight = marginX + usableWidth * (tile + 1) / tileCount;
-            long shiftedDiff = 0;
-            long samePositionDiff = 0;
+            long shiftedDiff = 0, samePositionDiff = 0;
             int samples = 0;
-
             for (int y = 0; y < overlap; y += yStep)
             {
                 int previousY = y + delta;
@@ -178,13 +157,11 @@ internal static class ShareXModVerticalFallbackMatcher
                     samples += 3;
                 }
             }
-
             if (samples == 0) continue;
             double movement = samePositionDiff / (double)samples;
             double shifted = shiftedDiff / (double)samples;
             if (movement >= 1.25) movingTileScores.Add(shifted);
         }
-
         if (movingTileScores.Count < 3) return double.MaxValue;
         movingTileScores.Sort();
         int take = Math.Min(5, movingTileScores.Count);
@@ -203,7 +180,6 @@ internal static class ShareXModVerticalFallbackMatcher
         private int Stride { get; }
         private PixelBuffer(Bitmap normalized, byte[] bytes, int stride) { Normalized = normalized; Bytes = bytes; Stride = stride; }
         public int RowOffset(int y) => y * Stride;
-
         public static PixelBuffer FromBitmap(Bitmap source)
         {
             Bitmap normalized = new(source.Width, source.Height, PixelFormat.Format32bppArgb);
@@ -219,7 +195,6 @@ internal static class ShareXModVerticalFallbackMatcher
             }
             finally { normalized.UnlockBits(data); }
         }
-
         public void Dispose() => Normalized.Dispose();
     }
 }

@@ -3,8 +3,8 @@ name: Build LongCapture Standalone
 on:
   push:
     branches:
-      - "standalone/longcapture-v0.1-work"
-      - "standalone/longcapture-v0.1"
+      - "standalone/longcapture-v0.1.1-work"
+      - "standalone/longcapture-v0.1.1"
     paths:
       - "LongCapture.Standalone/**"
       - "ShareX.ScreenCaptureLib/**"
@@ -13,7 +13,7 @@ on:
       - ".github/workflows/longcapture-standalone.yml"
   pull_request:
     branches:
-      - "standalone/longcapture-v0.1"
+      - "standalone/longcapture-v0.1.1"
     paths:
       - "LongCapture.Standalone/**"
       - "ShareX.ScreenCaptureLib/**"
@@ -73,6 +73,13 @@ jobs:
             throw "Standalone source still contains placeholder-only capture UI."
           }
 
+          $ui = Get-Content "LongCapture.Standalone\StandaloneUiPolish.cs" -Raw
+          foreach ($required in @("AutoScaleMode.Dpi", "AutoScroll = true", "MaximumSize", "ValidateReadiness", "ValidateButtons")) {
+            if ($ui -notmatch [regex]::Escape($required)) {
+              throw "Responsive UI hardening is missing required guard: $required"
+            }
+          }
+
       - name: Verify preinstalled .NET 10
         shell: pwsh
         run: |
@@ -103,7 +110,7 @@ jobs:
           $version = (Get-Content "artifacts\LongCapture\ShareX.Mod.VERSION.json" -Raw | ConvertFrom-Json).version
           Write-Host "Bundled ShareX-Mod engine version=$version"
 
-      - name: Run LongCapture packaged-engine self-test
+      - name: Run packaged engine and responsive UI self-test
         shell: pwsh
         run: |
           $p = Start-Process -FilePath (Resolve-Path "artifacts\LongCapture\LongCapture.exe") -ArgumentList "--self-test" -Wait -PassThru
@@ -121,11 +128,11 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force -Path "Output" | Out-Null
-          $zip = "Output\LongCapture-standalone-v0.1-dev-x64.zip"
+          $zip = "Output\LongCapture-standalone-v0.1.1-dev-x64.zip"
           if (Test-Path $zip) { Remove-Item $zip -Force }
           Compress-Archive -Path "artifacts\LongCapture\*" -DestinationPath $zip -CompressionLevel Optimal
           $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
-          Set-Content -LiteralPath "Output\LongCapture-standalone-v0.1-dev-x64.sha256.txt" -Value "$hash  LongCapture-standalone-v0.1-dev-x64.zip"
+          Set-Content -LiteralPath "Output\LongCapture-standalone-v0.1.1-dev-x64.sha256.txt" -Value "$hash  LongCapture-standalone-v0.1.1-dev-x64.zip"
           Write-Host "SHA256=$hash"
           "sha256=$hash" >> $env:GITHUB_OUTPUT
 
@@ -135,7 +142,7 @@ jobs:
           $ErrorActionPreference = "Stop"
           $temp = Join-Path $env:RUNNER_TEMP "longcapture-standalone-zipcheck"
           if (Test-Path $temp) { Remove-Item $temp -Recurse -Force }
-          Expand-Archive -LiteralPath "Output\LongCapture-standalone-v0.1-dev-x64.zip" -DestinationPath $temp -Force
+          Expand-Archive -LiteralPath "Output\LongCapture-standalone-v0.1.1-dev-x64.zip" -DestinationPath $temp -Force
           foreach ($name in @("LongCapture.exe", "ShareX.ScreenCaptureLib.dll", "ShareX.Mod.v04.json", "ShareX.Mod.VERSION.json")) {
             if (-not (Test-Path (Join-Path $temp $name))) { throw "ZIP missing $name" }
           }
@@ -146,7 +153,7 @@ jobs:
       - name: Upload standalone portable
         uses: actions/upload-artifact@v7
         with:
-          name: LongCapture-standalone-v0.1-dev-x64
+          name: LongCapture-standalone-v0.1.1-dev-x64
           path: |
-            Output\LongCapture-standalone-v0.1-dev-x64.zip
-            Output\LongCapture-standalone-v0.1-dev-x64.sha256.txt
+            Output\LongCapture-standalone-v0.1.1-dev-x64.zip
+            Output\LongCapture-standalone-v0.1.1-dev-x64.sha256.txt

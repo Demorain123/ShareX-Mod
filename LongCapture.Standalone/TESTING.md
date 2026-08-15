@@ -5,21 +5,25 @@
 解压到一个全新的目录后，**先不要直接开始网页/应用真实测试**。
 
 1. 双击 `1-RUN-AUTOMATED-TESTS.cmd`。
-2. 脚本会调用这个 portable 包自己的 `LongCapture.exe --automation-test`，而不是依赖源码或 .NET SDK。
+2. 默认运行 **QUICK 功能验收**，调用 portable 包自己的 `LongCapture.exe --automation-test`，不依赖源码或 .NET SDK。
 3. 等待最终结果：`AUTOMATED ACCEPTANCE: PASS` 或 `FAIL`。
-4. 如果是 `FAIL`：停止，不要继续真实测试。保留最新的 `AutomationReports\<时间>\`、LongCapture log，以及需要时的 `Export diagnostics` ZIP。
-5. 只有 `PASS_AUTOMATED` 才进入下面 Test 1–6。交互模式通过后会自动打开本文件。
+4. 如果是 `FAIL`：停止，不要继续真实测试。保留最新 `AutomationReports\<时间>\`、LongCapture log，以及需要时的 `Export diagnostics` ZIP。
+5. 只有 `PASS_AUTOMATED` 才进入下面 Test 1–6。通过后会自动打开本文件。
 
-自动化阶段会真实覆盖：portable 文件/配置完整性、LongCapture shell、Avalonia overlay、F8 风格 Start/Stop 捕获链、HWND target、LongCapture 自身 UI capture exclusion、target resize/minimize/close 恢复、100/125/150/200% 布局压力、anchor/repeated-pattern、sticky/fixed、lazy-load、Recipe/Integrity/Router/Pagination 回归、CaptureSession + Export diagnostics ZIP round-trip，以及同一最终程序连续 10 次真实 capture smoke 和内存增长门槛。
+QUICK 自动化阶段覆盖：portable 文件/配置完整性、LongCapture shell、Avalonia overlay、真实 F8 风格 Start/Stop 捕获链、HWND target、LongCapture 自身 UI capture exclusion、target resize/minimize/close 恢复、100/125/150/200% 布局压力、anchor/repeated-pattern、sticky/fixed、lazy-load、Recipe/Integrity/Router/Pagination 回归、CaptureSession + Export diagnostics ZIP round-trip，以及在 core self-test 后再执行一次真实 capture smoke，确认第二次捕获也能正常启动/结束。
+
+**10 次连续 capture + memory growth 属于可选 Deep 压力测试，不再阻塞每次真实测试。** 需要时执行：`1-RUN-AUTOMATED-TESTS.cmd --deep`。
 
 报告中 `MANUAL_REQUIRED` **不是失败**；它表示无法用 deterministic fixture 诚实替代的真实环境项，例如真实网站最终像素、Smart Web live session、Teach/Run Recipe live interaction、多显示器/GPU/动画/无限 feed，以及尚未完成的日常 Chrome 已登录 DOM/CDP Smart Web 复用。
 
-This guide is shipped with the portable build only after the automated release-candidate gates pass. The tests below are for real Windows/browser differences that deterministic automation cannot faithfully reproduce.
+This guide is shipped with the portable build only after the Quick automated acceptance gate passes. The tests below are the critical next layer for real Windows/browser differences that deterministic automation cannot faithfully reproduce.
 
 ## What changed in v0.1.3 RC2
 
 - Added a package-resident double-click automated acceptance gate and machine-readable per-run reports.
-- CI executes the same `1-RUN-AUTOMATED-TESTS.cmd --ci` path that the user double-clicks, including again after extracting the final ZIP.
+- Default one-click mode is QUICK: functional coverage first, then move directly to real-world testing.
+- Optional `--deep` retains the 10-run capture/memory stress loop for stability investigation without delaying normal handoff.
+- CI executes the same default `1-RUN-AUTOMATED-TESTS.cmd --ci` path that the user double-clicks, including again after extracting the final ZIP.
 - Independent `LongCapture.exe` remains the only user entry point; `ShareX.exe` is not required.
 - Capture target can be locked to an existing visible top-level window by title/HWND, with the ShareX region/window picker retained as fallback.
 - LongCapture windows are excluded from capture where Windows supports `WDA_EXCLUDEFROMCAPTURE`, and capture start uses a quiet period so LongCapture UI/notifications do not contaminate the first frame.
@@ -100,13 +104,13 @@ Expected: required safety checkpoints cannot be silently disabled; replay fails 
 
 ## Regression checklist
 
-- Step 0 one-click automation is PASS before manual testing.
+- Step 0 QUICK one-click automation is PASS before manual testing.
 - F8 starts and stops globally.
 - `LongCapture.exe` launches without `ShareX.exe`.
 - No clipped important text/buttons at normal Windows scaling.
 - `Open output folder`, `Export diagnostics` and Quality are visible and usable.
 - A failed/minimized/closed target does not poison the next capture.
-- Multiple sequential captures do not show obvious unbounded memory growth.
+- If stability is suspicious, run `1-RUN-AUTOMATED-TESTS.cmd --deep` for the 10-run memory/stress loop.
 - Very long output still uses the existing segmented/oversized-image path when selected by the engine.
 - Image Appendix continues to use original browser resources when available; it must not upscale a screenshot crop and call it the original image.
 

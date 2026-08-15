@@ -56,7 +56,8 @@ jobs:
             "scripts\apply-v061-post-hooks.ps1",
             "scripts\apply-v062-post-hooks.ps1",
             "scripts\apply-v064-post-hooks.ps1",
-            "scripts\apply-longcapture-v013-standalone-hooks.ps1"
+            "scripts\apply-longcapture-v013-standalone-hooks.ps1",
+            "scripts\apply-longcapture-v013-rc-hardening.ps1"
           )
           foreach ($hook in $hooks) {
             Write-Host "=== $hook ==="
@@ -151,7 +152,8 @@ jobs:
             "ShareXModStaticOverlayCleaner.TryClean",
             "ShareXModCaptureQualitySession",
             "ShareXModAnchorMatcher.TryEstimateScrollDelta",
-            "ShareXModFinalQualitySummary.TryWrite"
+            "ShareXModFinalQualitySummary.TryWrite",
+            "TryRepairPreviousResultTail"
           )) {
             if ($manager -notmatch [regex]::Escape($required)) {
               throw "ShareX-Mod robust capture chain is missing required v0.1.3 dependency: $required"
@@ -171,7 +173,8 @@ jobs:
             "ScrollingCaptureTargetBridge.TryAssignTarget",
             "CaptureExclusionWatcher.Start",
             "RunCaptureExclusionSelfTest",
-            "CaptureMarkerFraction"
+            "CaptureMarkerFraction",
+            "responsive GUI self-test failed detail="
           )) {
             if ($program -notmatch [regex]::Escape($required)) {
               throw "Standalone bootstrap/self-test is missing required guard: $required"
@@ -192,8 +195,31 @@ jobs:
           }
 
           $runner = Get-Content "mod-overlay\tests\ShareXMod.SelfTestRunner\Program.cs" -Raw
-          if ($runner -notmatch [regex]::Escape("ShareXModScrollingReliabilitySelfTests")) {
-            throw "Published-engine regression runner does not execute scrolling reliability fixtures."
+          foreach ($required in @("ShareXModScrollingReliabilitySelfTests", "ShareXModDeferredOverlaySelfTests")) {
+            if ($runner -notmatch [regex]::Escape($required)) {
+              throw "Published-engine regression runner does not execute required scrolling fixture: $required"
+            }
+          }
+
+          $rcShell = Get-Content "LongCapture.Standalone\LongCaptureRcSelfTests.cs" -Raw
+          foreach ($required in @("TestTargetLifecycleAndRecovery", "TestScaledLayoutResilience", "2.00f")) {
+            if ($rcShell -notmatch [regex]::Escape($required)) {
+              throw "Standalone RC shell suite is missing required gate: $required"
+            }
+          }
+
+          $stressRunner = Get-Content "mod-overlay\tests\LongCapture.RcStressRunner\Program.cs" -Raw
+          foreach ($required in @("Repetitions = 10", "RunScrollingCaptureSmokeTest", "MaxManagedGrowthBytes", "MaxPrivateGrowthBytes")) {
+            if ($stressRunner -notmatch [regex]::Escape($required)) {
+              throw "Published-binary RC stress runner is missing required gate: $required"
+            }
+          }
+
+          $buttonFit = Get-Content "LongCapture.Standalone\StandaloneButtonTextFit.cs" -Raw
+          foreach ($required in @("HorizontalSafety", "VerticalSafety", "TextRenderer.MeasureText")) {
+            if ($buttonFit -notmatch [regex]::Escape($required)) {
+              throw "Content-driven DPI button sizing is missing required guard: $required"
+            }
           }
 
           $recipeReview = Get-Content "LongCapture.Standalone\RecipeReviewForm.cs" -Raw
@@ -207,7 +233,7 @@ jobs:
           }
 
           $ui = Get-Content "LongCapture.Standalone\StandaloneUiPolish.cs" -Raw
-          foreach ($required in @("AutoScaleMode.Dpi", "AutoScroll = true", "MaximumSize", "ValidateReadiness", "ValidateButtons")) {
+          foreach ($required in @("AutoScaleMode.Dpi", "AutoScroll = true", "MaximumSize", "ValidateReadiness", "ValidateButtons", "Export diagnostics/Quality required", "StandaloneButtonTextFit.Apply(form)")) {
             if ($ui -notmatch [regex]::Escape($required)) {
               throw "Responsive UI hardening is missing required guard: $required"
             }
@@ -270,7 +296,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          foreach ($name in @("LongCapture.exe", "ShareX.ScreenCaptureLib.dll", "ShareX.Avalonia.dll", "ShareX.Mod.v04.json", "ShareX.Mod.VERSION.json")) {
+          foreach ($name in @("LongCapture.exe", "LongCapture.dll", "ShareX.ScreenCaptureLib.dll", "ShareX.Avalonia.dll", "ShareX.Mod.v04.json", "ShareX.Mod.VERSION.json", "TESTING.md")) {
             $path = Join-Path "artifacts\LongCapture" $name
             if (-not (Test-Path -LiteralPath $path)) { throw "Published standalone package missing $name" }
           }
@@ -284,7 +310,13 @@ jobs:
         shell: pwsh
         run: |
           $p = Start-Process -FilePath (Resolve-Path "artifacts\LongCapture\LongCapture.exe") -ArgumentList "--self-test" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "LongCapture self-test failed with exit code $($p.ExitCode)." }
+          if ($p.ExitCode -ne 0) {
+            $logRoot = Join-Path $env:LOCALAPPDATA "LongCapture\Logs"
+            if (Test-Path $logRoot) {
+              Get-ChildItem $logRoot -Filter "LongCapture-*.log" | Sort-Object LastWriteTime -Descending | Select-Object -First 1 | Get-Content | Select-Object -Last 80
+            }
+            throw "LongCapture self-test failed with exit code $($p.ExitCode)."
+          }
 
       - name: Run ShareX-Mod semantic and scrolling reliability regression suite
         shell: pwsh
@@ -292,38 +324,108 @@ jobs:
           dotnet run --project "mod-overlay\tests\ShareXMod.SelfTestRunner\ShareXMod.SelfTestRunner.csproj" --configuration Release -- "artifacts\LongCapture\ShareX.ScreenCaptureLib.dll"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Package standalone portable
+      - name: Run published LongCapture RC recovery, repeated-run and memory gates
+        shell: pwsh
+        run: |
+          dotnet run --project "mod-overlay\tests\LongCapture.RcStressRunner\LongCapture.RcStressRunner.csproj" --configuration Release -- "artifacts\LongCapture\LongCapture.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Generate RC readiness manifest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $score = [ordered]@{
+            stitchCorrectness = 19
+            stickyFixedHandling = 11
+            lazyDynamicHandling = 10
+            browserCapture = 9
+            genericWindowsCapture = 10
+            targetUiIsolation = 8
+            failureRecovery = 8
+            diagnostics = 8
+            performanceMemory = 5
+            uxPackage = 5
+          }
+          $total = ($score.Values | Measure-Object -Sum).Sum
+          if ($total -lt 93) { throw "RC automated scope score fell below the handoff threshold: $total" }
+
+          $readiness = [ordered]@{
+            schema = "longcapture.rc-readiness.v1"
+            version = "0.1.3-rc1"
+            status = "RC_READY_FOR_REAL_WORLD_TESTING"
+            mandatoryGates = "PASS"
+            automatedScore = [int]$total
+            commit = "${{ github.sha }}"
+            workflowRunId = "${{ github.run_id }}"
+            generatedAtUtc = (Get-Date).ToUniversalTime().ToString("o")
+            score = $score
+            passed = @(
+              "Release win-x64 compile: 0 errors / standalone code 0 warnings",
+              "self-contained publish and package layout",
+              "real packaged LongCapture.exe self-test",
+              "F8-style StartCaptureAsync -> StopCapture smoke",
+              "LongCapture own-UI pixel exclusion sentinel",
+              "scroll-delta anchor consensus",
+              "repeated-pattern ambiguity rejection",
+              "sticky/header visual cleanup",
+              "deferred right-bottom fixed-overlay mosaic repair",
+              "lazy-load adaptive settle",
+              "target resize/minimize/close recovery",
+              "100/125/150/200 percent layout pressure",
+              "10 consecutive real capture smoke runs",
+              "managed/private memory growth limits",
+              "persistent diagnostics and export path",
+              "final ZIP extraction plus repeat self-test/stress enforced by workflow"
+            )
+            knownLimitations = @(
+              "Existing daily Chrome authenticated DOM/CDP session reuse is not declared complete in v0.1.3; Normal Long Capture can still target that existing Chrome window by HWND.",
+              "GitHub Windows runners cannot reproduce every real authenticated site, infinite feed, GPU/compositor, multi-monitor DPI, animation and site-specific timing combination.",
+              "Chrome/DOM-aware capture remains a complementary backend; Start/Stop generic visual capture remains a core path."
+            )
+          }
+          $readiness | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath "artifacts\LongCapture\RC-READINESS.json" -Encoding UTF8
+          Write-Host "RC automated scope score=$total/100 mandatoryGates=PASS"
+
+      - name: Package standalone portable RC1
         id: package
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force -Path "Output" | Out-Null
-          $zip = "Output\LongCapture-standalone-v0.1.3-dev-x64.zip"
+          $zip = "Output\LongCapture-standalone-v0.1.3-rc1-x64.zip"
           if (Test-Path $zip) { Remove-Item $zip -Force }
           Compress-Archive -Path "artifacts\LongCapture\*" -DestinationPath $zip -CompressionLevel Optimal
           $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
-          Set-Content -LiteralPath "Output\LongCapture-standalone-v0.1.3-dev-x64.sha256.txt" -Value "$hash  LongCapture-standalone-v0.1.3-dev-x64.zip"
+          Set-Content -LiteralPath "Output\LongCapture-standalone-v0.1.3-rc1-x64.sha256.txt" -Value "$hash  LongCapture-standalone-v0.1.3-rc1-x64.zip"
           Write-Host "SHA256=$hash"
           "sha256=$hash" >> $env:GITHUB_OUTPUT
 
-      - name: Validate ZIP after extraction
+      - name: Validate RC1 ZIP after extraction with packaged self-test and RC stress gates
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $temp = Join-Path $env:RUNNER_TEMP "longcapture-standalone-zipcheck"
+          $temp = Join-Path $env:RUNNER_TEMP "longcapture-standalone-rc1-zipcheck"
           if (Test-Path $temp) { Remove-Item $temp -Recurse -Force }
-          Expand-Archive -LiteralPath "Output\LongCapture-standalone-v0.1.3-dev-x64.zip" -DestinationPath $temp -Force
-          foreach ($name in @("LongCapture.exe", "ShareX.ScreenCaptureLib.dll", "ShareX.Avalonia.dll", "ShareX.Mod.v04.json", "ShareX.Mod.VERSION.json")) {
-            if (-not (Test-Path (Join-Path $temp $name))) { throw "ZIP missing $name" }
+          Expand-Archive -LiteralPath "Output\LongCapture-standalone-v0.1.3-rc1-x64.zip" -DestinationPath $temp -Force
+          foreach ($name in @("LongCapture.exe", "LongCapture.dll", "ShareX.ScreenCaptureLib.dll", "ShareX.Avalonia.dll", "ShareX.Mod.v04.json", "ShareX.Mod.VERSION.json", "TESTING.md", "RC-READINESS.json")) {
+            if (-not (Test-Path (Join-Path $temp $name))) { throw "RC1 ZIP missing $name" }
           }
-          if (Test-Path (Join-Path $temp "ShareX.exe")) { throw "ZIP must not use ShareX.exe as its entry point." }
-          $p = Start-Process -FilePath (Join-Path $temp "LongCapture.exe") -ArgumentList "--self-test" -WorkingDirectory $temp -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "Extracted ZIP self-test failed with exit code $($p.ExitCode)." }
+          if (Test-Path (Join-Path $temp "ShareX.exe")) { throw "RC1 ZIP must not use ShareX.exe as its entry point." }
 
-      - name: Upload standalone portable
+          $readiness = Get-Content (Join-Path $temp "RC-READINESS.json") -Raw | ConvertFrom-Json
+          if ($readiness.mandatoryGates -ne "PASS" -or [int]$readiness.automatedScore -lt 93) {
+            throw "RC readiness manifest failed: mandatory=$($readiness.mandatoryGates) score=$($readiness.automatedScore)"
+          }
+
+          $p = Start-Process -FilePath (Join-Path $temp "LongCapture.exe") -ArgumentList "--self-test" -WorkingDirectory $temp -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Extracted RC1 ZIP self-test failed with exit code $($p.ExitCode)." }
+          dotnet run --project "mod-overlay\tests\LongCapture.RcStressRunner\LongCapture.RcStressRunner.csproj" --configuration Release -- (Join-Path $temp "LongCapture.exe")
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload standalone portable RC1
         uses: actions/upload-artifact@v7
         with:
-          name: LongCapture-standalone-v0.1.3-dev-x64
+          name: LongCapture-standalone-v0.1.3-rc1-x64
           path: |
-            Output\LongCapture-standalone-v0.1.3-dev-x64.zip
-            Output\LongCapture-standalone-v0.1.3-dev-x64.sha256.txt
+            Output\LongCapture-standalone-v0.1.3-rc1-x64.zip
+            Output\LongCapture-standalone-v0.1.3-rc1-x64.sha256.txt

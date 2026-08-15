@@ -217,6 +217,22 @@ internal static class ShareXModAdaptiveSettleV042
                 }
             }
 
+            // Blank/loaded detection used to measure only horizontal neighbours. A page made of
+            // horizontal text/card bands can therefore contain substantial real structure while
+            // still looking "globally blank" to that one-axis metric. Include vertical edges too;
+            // a genuinely blank placeholder remains near zero in both directions, while loaded
+            // rows, cards and images gain the complexity they should have.
+            for (int y = 1; y < height; y++)
+            {
+                int rowIndex = y * width;
+                int previousRowIndex = (y - 1) * width;
+                for (int x = 0; x < width; x++)
+                {
+                    edgeSum += Math.Abs(fingerprint[rowIndex + x] - fingerprint[previousRowIndex + x]);
+                    edgeCount++;
+                }
+            }
+
             complexity = edgeCount > 0 ? edgeSum / (double)edgeCount : 0;
 
             for (int top = bottomStart; top + tileHeight <= height; top += tileHeight)
@@ -246,6 +262,17 @@ internal static class ShareXModAdaptiveSettleV042
                             }
 
                             prev = value;
+                        }
+                    }
+
+                    for (int y = 1; y < tileHeight; y++)
+                    {
+                        int rowIndex = (top + y) * width + left;
+                        int previousRowIndex = (top + y - 1) * width + left;
+                        for (int x = 0; x < tileWidth; x++)
+                        {
+                            localEdges += Math.Abs(fingerprint[rowIndex + x] - fingerprint[previousRowIndex + x]);
+                            edges++;
                         }
                     }
 

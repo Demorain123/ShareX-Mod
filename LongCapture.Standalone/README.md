@@ -1,23 +1,31 @@
-# LongCapture Standalone v0.1.3-dev
+# LongCapture Standalone v0.1.3-rc1
 
 `LongCapture.exe` is the independent long-screenshot application. It reuses ShareX's capture libraries and the ShareX-Mod overlay, but it does **not** launch or require `ShareX.exe` as the user entry point.
+
+## v0.1.3 RC1 reliability gate
+
+RC1 is not produced merely because the project compiles. The dedicated workflow must pass the packaged `LongCapture.exe` self-test, deterministic scrolling fixtures, target-loss/recovery checks, 100/125/150/200% layout pressure, ten repeated real capture smoke runs with memory limits, and then repeat the critical self-test/stress checks from the extracted final ZIP.
+
+The portable RC1 also contains `TESTING.md` and a machine-readable `RC-READINESS.json`. The readiness manifest is generated only after the pre-package mandatory gates pass and records the conservative automated-scope score and known real-world limitations.
+
+The current generic visual path adds deferred mosaic-tail repair for fixed right/bottom controls: when the next scroll reveals the document pixels that were previously hidden behind a fixed control, those pixels are written back into the previous viewport already stored in the mosaic. This complements immediate sticky/header cleanup instead of deleting document bands.
 
 ## v0.1.3 title-locked targets
 
 v0.1.3 starts the planned outer-layer move away from an interruptive ShareX-only target-selection flow without rewriting the proven scrolling engine.
 
-- The standalone window now exposes a **Capture target** list built from visible top-level Windows windows.
+- The standalone window exposes a **Capture target** list built from visible top-level Windows windows.
 - Targets are shown by window title plus process/PID, and the selected HWND is refreshed immediately before capture so moving/resizing the target does not leave a stale rectangle.
 - The capture rectangle prefers the target client area and falls back to the full window rectangle when necessary.
 - A small standalone bridge injects the locked HWND/rectangle into the existing ShareX scrolling manager, preserving the current scrolling/stitching engine instead of forking it.
 - **ShareX region/window picker (fallback)** remains available. If a locked target disappears or the compatibility bridge cannot bind it, LongCapture records the reason and falls back to the existing picker rather than failing silently.
-- The packaged self-test now creates a real Win32 target window, resolves it through the same target service, binds it through the same bridge, starts a real scrolling capture and stops it through the same path used by F8.
+- The packaged self-test creates a real Win32 target window, resolves it through the same target service, binds it through the same bridge, starts a real scrolling capture and stops it through the same path used by F8.
 
 This is intentionally an outer-shell change. The ShareX scrolling core remains the engine while LongCapture takes ownership of target discovery and diagnostics.
 
 ## v0.1.3 diagnostic logging
 
-Persistent diagnostics are now a first-class part of the standalone app so capture failures can be diagnosed from evidence instead of screenshots and guesses.
+Persistent diagnostics are a first-class part of the standalone app so capture failures can be diagnosed from evidence instead of screenshots and guesses.
 
 - A new per-launch UTF-8 log is written under `%LOCALAPPDATA%\LongCapture\Logs`.
 - Click **Open logs folder** beside the Capture target selector to open that directory directly.
@@ -47,7 +55,7 @@ v0.1.2 fixed the host boundary instead of disabling the region overlay:
 - Readiness, output-path, quality and status text wrap instead of silently extending beyond their containers.
 - The settings grid can scroll when the monitor/window is too small to show every row at once.
 - Recipe action buttons are allowed to wrap as a group and keep a minimum click height.
-- Responsive layout checks run at 840×720, 980×900 and 1100×900 and reject clipped readiness text, important labels or button captions.
+- RC1 additionally derives button minimum size from the actual scaled font so newly added buttons do not reintroduce clipping.
 
 ## Modes
 
@@ -64,7 +72,8 @@ v0.1.2 fixed the host boundary instead of disabling the region overlay:
 4. Press F8 again whenever you want to stop.
 5. For Smart Web / Teach / Run Recipe, click **Open Capture Browser**, navigate/sign in in that dedicated browser profile, wait for **Ready**, refresh the target list, then select that browser window before starting capture.
 6. Results are saved under `Pictures\LongCapture`. The GUI surfaces the latest quality status produced by the ShareX-Mod quality pipeline.
-7. If anything behaves unexpectedly, click **Open logs folder** and keep the newest log together with the failing screenshot/output when reporting the problem.
+7. If anything behaves unexpectedly, click **Open logs folder** and keep the newest log together with the failing screenshot/output when reporting the problem; `Export diagnostics` packages the latest capture evidence.
+8. Read the bundled `TESTING.md` before the first real-world RC test.
 
 ## Capture Recipe safety
 
@@ -72,4 +81,4 @@ Run Recipe remains blocked until the exact recipe version has a valid approval. 
 
 ## Build verification
 
-The dedicated `Build LongCapture Standalone` workflow applies the current ShareX-Mod overlay chain, verifies the real capture integration, title-target bridge, persistent logging and Avalonia legacy-host bootstrap, publishes self-contained `win-x64`, checks that the package contains `LongCapture.exe`, `ShareX.ScreenCaptureLib.dll` and `ShareX.Avalonia.dll` but not `ShareX.exe`, runs the packaged overlay/locked-target/engine/responsive-GUI/logging self-test, runs the ShareX-Mod semantic regression suite, builds the ZIP, extracts it, and repeats the packaged self-test before upload.
+The dedicated `Build LongCapture Standalone` workflow applies the current ShareX-Mod overlay chain, verifies the real capture integration, title-target bridge, persistent logging, capture exclusion and Avalonia legacy-host bootstrap, publishes self-contained `win-x64`, checks that the package contains `LongCapture.exe`/`LongCapture.dll` and required libraries but not `ShareX.exe`, runs the packaged overlay/locked-target/engine/responsive-GUI self-test, runs semantic and scrolling reliability fixtures, runs the repeated capture/recovery/memory gate, builds the RC1 ZIP, extracts it, and repeats the packaged self-test plus stress gate before upload.

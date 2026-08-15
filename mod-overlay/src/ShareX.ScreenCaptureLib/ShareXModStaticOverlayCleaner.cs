@@ -20,13 +20,83 @@ internal static class ShareXModStaticOverlayCleaner
 
     public static ShareXModOverlayCleanResult? TryClean(Bitmap before, Bitmap after, int scrollDelta)
     {
-        if (before == null || after == null ||
-            before.Width != after.Width || before.Height != after.Height ||
-            scrollDelta <= 8 || scrollDelta >= after.Height - 8)
+        if (!CanAnalyze(before, after, scrollDelta)) return null;
+
+        List<Rectangle> stableEdgeRegions = FindStableEdgeRegions(before, after, scrollDelta);
+        List<Rectangle> repairs = new();
+        foreach (Rectangle rect in stableEdgeRegions)
         {
-            return null;
+            // Repair the current frame when the same logical document pixels were already
+            // visible lower down in the previous frame. This is ideal for sticky headers and
+            // floating controls whose underlying content exists at Y + scrollDelta.
+            if (rect.Bottom + scrollDelta <= before.Height)
+            {
+                repairs.Add(rect);
+            }
         }
 
+        if (repairs.Count == 0) return null;
+
+        Bitmap cleaned = (Bitmap)after.Clone();
+        using Graphics graphics = Graphics.FromImage(cleaned);
+        ConfigureCopyGraphics(graphics);
+
+        foreach (Rectangle rect in repairs)
+        {
+            Rectangle source = new(rect.X, rect.Y + scrollDelta, rect.Width, rect.Height);
+            graphics.DrawImage(before, rect, source, GraphicsUnit.Pixel);
+        }
+
+        return new ShareXModOverlayCleanResult(cleaned, repairs.Count);
+    }
+
+    /// <summary>
+    /// Repairs fixed/sticky pixels that could not be reconstructed in the current frame because
+    /// they sit too close to the viewport bottom. One frame later those logical pixels have moved
+    /// upward and become visible, so they can be written back into the previous viewport already
+    /// present at the tail of the mosaic. This complements TryClean rather than replacing it.
+    /// </summary>
+    public static int TryRepairPreviousResultTail(Bitmap result, Bitmap before, Bitmap after, int scrollDelta)
+    {
+        if (result == null || !CanAnalyze(before, after, scrollDelta) ||
+            result.Width != before.Width || result.Height < before.Height)
+        {
+            return 0;
+        }
+
+        List<Rectangle> stableEdgeRegions = FindStableEdgeRegions(before, after, scrollDelta);
+        int previousViewportTop = result.Height - before.Height;
+        int repaired = 0;
+
+        using Graphics graphics = Graphics.FromImage(result);
+        ConfigureCopyGraphics(graphics);
+
+        foreach (Rectangle rect in stableEdgeRegions)
+        {
+            // A previous-frame pixel at screen Y maps to screen Y-scrollDelta in the new frame.
+            // This reverse source is especially important for fixed footers/right-bottom widgets,
+            // where TryClean cannot use before[Y+scrollDelta] because that coordinate is off-screen.
+            int sourceY = rect.Y - scrollDelta;
+            if (sourceY < 0 || sourceY + rect.Height > after.Height) continue;
+
+            Rectangle destination = new(rect.X, previousViewportTop + rect.Y, rect.Width, rect.Height);
+            if (destination.Top < 0 || destination.Bottom > result.Height) continue;
+
+            Rectangle source = new(rect.X, sourceY, rect.Width, rect.Height);
+            graphics.DrawImage(after, destination, source, GraphicsUnit.Pixel);
+            repaired++;
+        }
+
+        return repaired;
+    }
+
+    private static bool CanAnalyze(Bitmap before, Bitmap after, int scrollDelta) =>
+        before != null && after != null &&
+        before.Width == after.Width && before.Height == after.Height &&
+        scrollDelta > 8 && scrollDelta < after.Height - 8;
+
+    private static List<Rectangle> FindStableEdgeRegions(Bitmap before, Bitmap after, int scrollDelta)
+    {
         byte[] previousProbe = CreateLumaProbe(before);
         byte[] currentProbe = CreateLumaProbe(after);
         int probeDelta = Math.Max(1, (int)Math.Round(scrollDelta * (ProbeHeight / (double)after.Height)));
@@ -40,8 +110,8 @@ internal static class ShareXModStaticOverlayCleaner
         {
             for (int tx = 0; tx < cols; tx++)
             {
-                // First release is conservative: only repair screen-edge chrome where fixed/sticky
-                // controls are common. This avoids changing low-motion document content in the body.
+                // Be deliberately conservative: auto-repair only screen-edge chrome where
+                // sticky/fixed controls are common. Body motion is left to the stitch matcher.
                 double centerX = (tx + 0.5) / cols;
                 double centerY = (ty + 0.5) / rows;
                 bool edgeChrome = centerX <= 0.22 || centerX >= 0.78 ||
@@ -50,8 +120,6 @@ internal static class ShareXModStaticOverlayCleaner
 
                 int currentTop = ty * TileHeight;
                 int currentLeft = tx * TileWidth;
-                int shiftedPreviousTop = currentTop + probeDelta;
-                if (shiftedPreviousTop + TileHeight > ProbeHeight) continue;
 
                 double sameScreenDifference = TileDifference(
                     previousProbe, currentTop, currentLeft,
@@ -60,18 +128,34 @@ internal static class ShareXModStaticOverlayCleaner
                 // Fixed UI should be almost identical at the same screen coordinate.
                 if (sameScreenDifference > 2.5) continue;
 
-                double shiftedDifference = TileDifference(
-                    currentProbe, currentTop, currentLeft,
-                    previousProbe, shiftedPreviousTop, currentLeft);
+                bool hasShiftEvidence = false;
 
-                // The previous frame at Y + scrollDelta represents the same logical document
-                // coordinate. It should be visibly different from the fixed overlay.
-                if (shiftedDifference < 4.0) continue;
+                int shiftedPreviousTop = currentTop + probeDelta;
+                if (shiftedPreviousTop + TileHeight <= ProbeHeight)
+                {
+                    double forwardDifference = TileDifference(
+                        currentProbe, currentTop, currentLeft,
+                        previousProbe, shiftedPreviousTop, currentLeft);
+                    hasShiftEvidence |= forwardDifference >= 4.0;
+                }
+
+                int shiftedCurrentTop = currentTop - probeDelta;
+                if (shiftedCurrentTop >= 0)
+                {
+                    double reverseDifference = TileDifference(
+                        previousProbe, currentTop, currentLeft,
+                        currentProbe, shiftedCurrentTop, currentLeft);
+                    hasShiftEvidence |= reverseDifference >= 4.0;
+                }
+
+                // Requiring at least one valid translated comparison lets us identify bottom-edge
+                // overlays too, instead of silently skipping them because Y+delta is off-screen.
+                if (!hasShiftEvidence) continue;
 
                 candidate[ty, tx] = true;
 
-                // A textured tile (text/icon/border inside the control) seeds the overlay mask.
-                // Flat neighboring button background is added in a second pass.
+                // Text/icon/border texture seeds the mask; flat neighboring button/background
+                // tiles are admitted only when adjacent to a seed in the second pass.
                 double overlayComplexity = TileComplexity(currentProbe, currentTop, currentLeft);
                 if (overlayComplexity >= 1.0)
                 {
@@ -80,8 +164,7 @@ internal static class ShareXModStaticOverlayCleaner
             }
         }
 
-        List<Rectangle> repairs = new();
-
+        List<Rectangle> regions = new();
         for (int ty = 0; ty < rows; ty++)
         {
             for (int tx = 0; tx < cols; tx++)
@@ -112,30 +195,18 @@ internal static class ShareXModStaticOverlayCleaner
                 top = Math.Clamp(top, 0, after.Height - 1);
                 right = Math.Clamp(right, left + 1, after.Width);
                 bottom = Math.Clamp(bottom, top + 1, after.Height);
-
-                Rectangle rect = Rectangle.FromLTRB(left, top, right, bottom);
-                if (rect.Bottom + scrollDelta <= before.Height)
-                {
-                    repairs.Add(rect);
-                }
+                regions.Add(Rectangle.FromLTRB(left, top, right, bottom));
             }
         }
 
-        if (repairs.Count == 0) return null;
+        return regions;
+    }
 
-        Bitmap cleaned = (Bitmap)after.Clone();
-        using Graphics graphics = Graphics.FromImage(cleaned);
+    private static void ConfigureCopyGraphics(Graphics graphics)
+    {
         graphics.CompositingMode = CompositingMode.SourceCopy;
         graphics.InterpolationMode = InterpolationMode.NearestNeighbor;
         graphics.PixelOffsetMode = PixelOffsetMode.None;
-
-        foreach (Rectangle rect in repairs)
-        {
-            Rectangle source = new(rect.X, rect.Y + scrollDelta, rect.Width, rect.Height);
-            graphics.DrawImage(before, rect, source, GraphicsUnit.Pixel);
-        }
-
-        return new ShareXModOverlayCleanResult(cleaned, repairs.Count);
     }
 
     private static byte[] CreateLumaProbe(Bitmap source)

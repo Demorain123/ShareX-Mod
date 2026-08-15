@@ -22,7 +22,6 @@ $manager = Join-Path $repoRoot "ShareX.ScreenCaptureLib\ScrollingCaptureManager.
 $automation = Join-Path $repoRoot "LongCapture.Standalone\AutomationTestRunner.cs"
 $qualitySummary = Join-Path $repoRoot "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModFinalQualitySummary.cs"
 
-# Reset temporal state for each live capture.
 Replace-Literal -Path $manager `
   -Old @'
                 bestIgnoreBottomOffset = 0;
@@ -36,11 +35,10 @@ Replace-Literal -Path $manager `
 '@ `
   -Marker 'ShareXModAnchorContinuityV017.ResetLive();'
 
-# v0.1.6 used the delayed compositor only when the strict anchor matcher succeeded, then silently
-# fell through to legacy CombineImagesAsync on every rejected transition. Real Linux.do evidence
-# showed 7 anchor failures and 7 legacy-sized additions. v0.1.7 resolves each transition first and
-# sends direct/fallback/prior-validated deltas through the SAME delayed compositor. If none can be
-# validated, stop with PartiallySuccessful instead of manufacturing a corrupted mosaic.
+# Real v0.1.6 Linux.do evidence contained seven strict-anchor rejections. Every one bypassed the
+# delayed fixed-overlay compositor through the old CombineImagesAsync fallback. v0.1.7 removes that
+# split path: direct anchor, validated vertical fallback, and validated temporal prior all feed the
+# same raw-frame delayed compositor. If no transition can be validated, stop instead of corrupting.
 Replace-Literal -Path $manager `
   -Old @'
                             ShareXModReplayDiagnostics.RecordAnchor(modHasAnchor, modAnchor);
@@ -78,7 +76,6 @@ Replace-Literal -Path $manager `
 
                             if (Result == null)
                             {
-                                // Initial viewport is not a stitch transition and needs no matcher.
                                 newResult = (Bitmap)lastScreenshot.Clone();
                                 status = ScrollingCaptureStatus.Successful;
                             }
@@ -118,13 +115,11 @@ Replace-Literal -Path $manager `
                                 if (newResult == null)
                                 {
                                     status = ScrollingCaptureStatus.PartiallySuccessful;
-                                    ShareXModCaptureSessionContext.AppendEvent("v017-unresolved-transition-stop");
                                 }
                             }
 '@ `
   -Marker 'bool modV017Resolved = ShareXModAnchorContinuityV017.TryResolve('
 
-# A fallback is valid but less certain than multi-anchor agreement; unresolved is blocking.
 Replace-Literal -Path $qualitySummary `
   -Old @'
             int semanticRangeCount = 0;

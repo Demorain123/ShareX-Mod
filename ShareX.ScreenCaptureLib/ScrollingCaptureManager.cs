@@ -25,6 +25,7 @@
 
 using ShareX.HelpersLib;
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -47,6 +48,7 @@ namespace ShareX.ScreenCaptureLib
         private int bestMatchCount, bestMatchIndex, bestIgnoreBottomOffset;
         private WindowInfo selectedWindow;
         private Rectangle selectedRectangle;
+        private int frameIndex;
 
         public ScrollingCaptureManager(ScrollingCaptureOptions options)
         {
@@ -89,7 +91,15 @@ namespace ShareX.ScreenCaptureLib
                 bestMatchCount = 0;
                 bestMatchIndex = 0;
                 bestIgnoreBottomOffset = 0;
+                frameIndex = 0;
                 Reset();
+
+                Emit(new ScrollingCaptureTelemetryEvent
+                {
+                    Kind = ScrollingCaptureTelemetryKind.CaptureStarted,
+                    CaptureRectangle = selectedRectangle,
+                    Message = $"scrollMethod={Options.ScrollMethod}; scrollAmount={Options.ScrollAmount}; adaptiveSettle={Options.AdaptiveSettle}; suppressStationary={Options.SuppressStationaryOverlays}"
+                });
 
                 ScrollingCaptureRegionWindow regionWindow = null;
 
@@ -103,14 +113,14 @@ namespace ShareX.ScreenCaptureLib
                 {
                     selectedWindow.Activate();
 
-                    await Task.Delay(Options.StartDelay);
+                    await Task.Delay(Math.Max(0, Options.StartDelay));
 
                     if (Options.AutoScrollTop)
                     {
                         InputHelpers.SendKeyPress(VirtualKeyCode.HOME);
                         NativeMethods.SendMessage(selectedWindow.Handle, (int)WindowsMessages.VSCROLL, (int)ScrollBarCommands.SB_TOP, 0);
 
-                        await Task.Delay(Options.ScrollDelay);
+                        await Task.Delay(Math.Max(0, Options.ScrollDelay));
                     }
 
                     Screenshot screenshot = new Screenshot()
@@ -121,33 +131,30 @@ namespace ShareX.ScreenCaptureLib
                     while (!stopRequested)
                     {
                         lastScreenshot = screenshot.CaptureRectangle(selectedRectangle);
+                        frameIndex++;
+                        EmitFrame(lastScreenshot);
+                        Emit(new ScrollingCaptureTelemetryEvent
+                        {
+                            Kind = ScrollingCaptureTelemetryKind.FrameCaptured,
+                            FrameIndex = frameIndex,
+                            CaptureRectangle = selectedRectangle,
+                            ResultHeightBefore = Result?.Height ?? 0,
+                            Message = $"frame={lastScreenshot.Width}x{lastScreenshot.Height}"
+                        });
 
                         if (CompareLastTwoImages())
                         {
+                            Emit(new ScrollingCaptureTelemetryEvent
+                            {
+                                Kind = ScrollingCaptureTelemetryKind.Warning,
+                                FrameIndex = frameIndex,
+                                CaptureRectangle = selectedRectangle,
+                                Message = "current frame is pixel-identical to previous frame; treating as no further visual progress"
+                            });
                             break;
                         }
 
-                        switch (Options.ScrollMethod)
-                        {
-                            case ScrollMethod.MouseWheel:
-                                InputHelpers.SendMouseWheel(-120 * Options.ScrollAmount);
-                                break;
-                            case ScrollMethod.DownArrow:
-                                for (int i = 0; i < Options.ScrollAmount; i++)
-                                {
-                                    InputHelpers.SendKeyPress(VirtualKeyCode.DOWN);
-                                }
-                                break;
-                            case ScrollMethod.PageDown:
-                                InputHelpers.SendKeyPress(VirtualKeyCode.NEXT);
-                                break;
-                            case ScrollMethod.ScrollMessage:
-                                for (int i = 0; i < Options.ScrollAmount; i++)
-                                {
-                                    NativeMethods.SendMessage(selectedWindow.Handle, (int)WindowsMessages.VSCROLL, (int)ScrollBarCommands.SB_LINEDOWN, 0);
-                                }
-                                break;
-                        }
+                        IssueScroll();
 
                         Stopwatch timer = Stopwatch.StartNew();
 
@@ -182,11 +189,18 @@ namespace ShareX.ScreenCaptureLib
                             lastScreenshot = null;
                         }
 
-                        int delay = Options.ScrollDelay - (int)timer.ElapsedMilliseconds;
-
-                        if (delay > 0)
+                        if (Options.AdaptiveSettle)
                         {
-                            await Task.Delay(delay);
+                            await WaitForVisualSettleAsync(screenshot, (int)timer.ElapsedMilliseconds);
+                        }
+                        else
+                        {
+                            int delay = Options.ScrollDelay - (int)timer.ElapsedMilliseconds;
+
+                            if (delay > 0)
+                            {
+                                await Task.Delay(delay);
+                            }
                         }
                     }
                 }
@@ -196,6 +210,14 @@ namespace ShareX.ScreenCaptureLib
 
                     Reset(true);
                     IsCapturing = false;
+                    Emit(new ScrollingCaptureTelemetryEvent
+                    {
+                        Kind = ScrollingCaptureTelemetryKind.CaptureCompleted,
+                        FrameIndex = frameIndex,
+                        ResultHeightAfter = Result?.Height ?? 0,
+                        CaptureRectangle = selectedRectangle,
+                        Message = $"status={status}; stopRequested={stopRequested}"
+                    });
                 }
             }
 
@@ -213,6 +235,169 @@ namespace ShareX.ScreenCaptureLib
         public bool SelectWindow()
         {
             return RegionCaptureTasks.GetRectangleRegion(out selectedRectangle, out selectedWindow, new RegionCaptureOptions());
+        }
+
+        private void IssueScroll()
+        {
+            switch (Options.ScrollMethod)
+            {
+                case ScrollMethod.MouseWheel:
+                    InputHelpers.SendMouseWheel(-120 * Options.ScrollAmount);
+                    break;
+                case ScrollMethod.DownArrow:
+                    for (int i = 0; i < Options.ScrollAmount; i++)
+                    {
+                        InputHelpers.SendKeyPress(VirtualKeyCode.DOWN);
+                    }
+                    break;
+                case ScrollMethod.PageDown:
+                    InputHelpers.SendKeyPress(VirtualKeyCode.NEXT);
+                    break;
+                case ScrollMethod.ScrollMessage:
+                    for (int i = 0; i < Options.ScrollAmount; i++)
+                    {
+                        NativeMethods.SendMessage(selectedWindow.Handle, (int)WindowsMessages.VSCROLL, (int)ScrollBarCommands.SB_LINEDOWN, 0);
+                    }
+                    break;
+            }
+
+            Emit(new ScrollingCaptureTelemetryEvent
+            {
+                Kind = ScrollingCaptureTelemetryKind.ScrollIssued,
+                FrameIndex = frameIndex,
+                CaptureRectangle = selectedRectangle,
+                Message = $"method={Options.ScrollMethod}; amount={Options.ScrollAmount}"
+            });
+        }
+
+        private async Task WaitForVisualSettleAsync(Screenshot screenshot, int alreadyElapsedMilliseconds)
+        {
+            int minimumDelay = Math.Max(0, Options.ScrollDelay);
+            int maxDelay = Math.Max(minimumDelay, Options.AdaptiveSettleMaxDelay);
+            int probeInterval = Math.Max(40, Options.AdaptiveSettleProbeInterval);
+            int requiredStable = Math.Max(1, Options.AdaptiveSettleStableSamples);
+            double threshold = Math.Max(0.0001, Math.Min(0.25, Options.AdaptiveSettleChangedFraction));
+
+            int waited = Math.Max(0, alreadyElapsedMilliseconds);
+            int remainingMinimum = minimumDelay - waited;
+            if (remainingMinimum > 0)
+            {
+                await Task.Delay(remainingMinimum);
+                waited += remainingMinimum;
+            }
+
+            if (stopRequested) return;
+
+            Bitmap previousProbe = null;
+            int stableSamples = 0;
+            double lastChangedFraction = 1.0;
+
+            try
+            {
+                previousProbe = screenshot.CaptureRectangle(selectedRectangle);
+
+                while (!stopRequested && waited < maxDelay)
+                {
+                    int interval = Math.Min(probeInterval, maxDelay - waited);
+                    if (interval <= 0) break;
+                    await Task.Delay(interval);
+                    waited += interval;
+
+                    using Bitmap currentProbe = screenshot.CaptureRectangle(selectedRectangle);
+                    lastChangedFraction = ComputeChangedFraction(previousProbe, currentProbe);
+                    bool stable = lastChangedFraction <= threshold;
+                    stableSamples = stable ? stableSamples + 1 : 0;
+
+                    Emit(new ScrollingCaptureTelemetryEvent
+                    {
+                        Kind = ScrollingCaptureTelemetryKind.SettleProbe,
+                        FrameIndex = frameIndex,
+                        WaitedMilliseconds = waited,
+                        ChangedFraction = lastChangedFraction,
+                        Confidence = Math.Max(0.0, 1.0 - Math.Min(1.0, lastChangedFraction / threshold)),
+                        CaptureRectangle = selectedRectangle,
+                        Message = $"stableSamples={stableSamples}/{requiredStable}; threshold={threshold:F4}"
+                    });
+
+                    previousProbe.Dispose();
+                    previousProbe = (Bitmap)currentProbe.Clone();
+
+                    if (stableSamples >= requiredStable)
+                    {
+                        Emit(new ScrollingCaptureTelemetryEvent
+                        {
+                            Kind = ScrollingCaptureTelemetryKind.SettleCompleted,
+                            FrameIndex = frameIndex,
+                            WaitedMilliseconds = waited,
+                            ChangedFraction = lastChangedFraction,
+                            TimedOut = false,
+                            CaptureRectangle = selectedRectangle,
+                            Message = "visual settle guard reached stable sample requirement"
+                        });
+                        return;
+                    }
+                }
+
+                if (!stopRequested)
+                {
+                    Emit(new ScrollingCaptureTelemetryEvent
+                    {
+                        Kind = ScrollingCaptureTelemetryKind.SettleCompleted,
+                        FrameIndex = frameIndex,
+                        WaitedMilliseconds = waited,
+                        ChangedFraction = lastChangedFraction,
+                        TimedOut = true,
+                        CaptureRectangle = selectedRectangle,
+                        Message = "visual settle guard hit maximum wait; continuing with warning"
+                    });
+                }
+            }
+            finally
+            {
+                previousProbe?.Dispose();
+            }
+        }
+
+        private static unsafe double ComputeChangedFraction(Bitmap first, Bitmap second)
+        {
+            if (first == null || second == null || first.Width != second.Width || first.Height != second.Height)
+            {
+                return 1.0;
+            }
+
+            Rectangle bounds = new Rectangle(0, 0, first.Width, first.Height);
+            BitmapData firstData = first.LockBits(bounds, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            BitmapData secondData = second.LockBits(bounds, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+
+            try
+            {
+                int marginX = Math.Max(2, first.Width / 20);
+                int marginY = Math.Max(2, first.Height / 20);
+                int sampleStep = Math.Max(6, Math.Min(first.Width, first.Height) / 120);
+                long changed = 0;
+                long total = 0;
+
+                for (int y = marginY; y < first.Height - marginY; y += sampleStep)
+                {
+                    byte* rowA = (byte*)firstData.Scan0 + y * firstData.Stride;
+                    byte* rowB = (byte*)secondData.Scan0 + y * secondData.Stride;
+                    for (int x = marginX; x < first.Width - marginX; x += sampleStep)
+                    {
+                        byte* a = rowA + x * 4;
+                        byte* b = rowB + x * 4;
+                        int difference = Math.Abs(a[0] - b[0]) + Math.Abs(a[1] - b[1]) + Math.Abs(a[2] - b[2]);
+                        if (difference > 36) changed++;
+                        total++;
+                    }
+                }
+
+                return total == 0 ? 0.0 : changed / (double)total;
+            }
+            finally
+            {
+                first.UnlockBits(firstData);
+                second.UnlockBits(secondData);
+            }
         }
 
         private bool IsScrollReachedBottom(IntPtr handle)
@@ -249,10 +434,20 @@ namespace ShareX.ScreenCaptureLib
             if (result == null)
             {
                 status = ScrollingCaptureStatus.Successful;
-
+                Emit(new ScrollingCaptureTelemetryEvent
+                {
+                    Kind = ScrollingCaptureTelemetryKind.StitchComputed,
+                    FrameIndex = frameIndex,
+                    ResultHeightBefore = 0,
+                    ResultHeightAfter = currentImage.Height,
+                    Confidence = 1.0,
+                    CaptureRectangle = selectedRectangle,
+                    Message = "seed frame"
+                });
                 return (Bitmap)currentImage.Clone();
             }
 
+            int resultHeightBefore = result.Height;
             int matchCount = 0;
             int matchIndex = 0;
             int matchLimit = currentImage.Height / 2;
@@ -343,6 +538,13 @@ namespace ShareX.ScreenCaptureLib
                         bestIgnoreBottomOffset = ignoreBottomOffset;
                     }
 
+                    int stationaryTileCount = 0;
+                    int stationaryArea = 0;
+                    if (Options.SuppressStationaryOverlays && previousScreenshot != null && previousScreenshot.Size == currentImage.Size)
+                    {
+                        SuppressStationaryOverlaysInResult(result, previousScreenshot, currentImage, matchHeight, out stationaryTileCount, out stationaryArea);
+                    }
+
                     Bitmap newResult = new Bitmap(result.Width, result.Height - ignoreBottomOffset + matchHeight);
 
                     using (Graphics g = Graphics.FromImage(newResult))
@@ -365,13 +567,214 @@ namespace ShareX.ScreenCaptureLib
                         status = ScrollingCaptureStatus.Successful;
                     }
 
+                    double confidenceDenominator = Math.Max(8.0, Math.Min(matchLimit, Math.Max(8, currentImage.Height / 16)));
+                    double confidence = Math.Min(1.0, matchCount / confidenceDenominator);
+                    if (bestGuess) confidence = Math.Min(confidence, 0.35);
+
+                    Emit(new ScrollingCaptureTelemetryEvent
+                    {
+                        Kind = ScrollingCaptureTelemetryKind.StitchComputed,
+                        FrameIndex = frameIndex,
+                        ResultHeightBefore = resultHeightBefore,
+                        ResultHeightAfter = newResult.Height,
+                        EstimatedScrollPixels = matchHeight,
+                        MatchRows = matchCount,
+                        Confidence = confidence,
+                        UsedBestGuess = bestGuess,
+                        StationaryTileCount = stationaryTileCount,
+                        StationaryPixelArea = stationaryArea,
+                        CaptureRectangle = selectedRectangle,
+                        Message = $"ignoreBottom={ignoreBottomOffset}; matchIndex={matchIndex}"
+                    });
+
+                    if (stationaryTileCount > 0)
+                    {
+                        Emit(new ScrollingCaptureTelemetryEvent
+                        {
+                            Kind = ScrollingCaptureTelemetryKind.StationaryOverlayDetected,
+                            FrameIndex = frameIndex,
+                            EstimatedScrollPixels = matchHeight,
+                            StationaryTileCount = stationaryTileCount,
+                            StationaryPixelArea = stationaryArea,
+                            CaptureRectangle = selectedRectangle,
+                            Message = "high-confidence stationary textured tiles were removed from the preceding viewport before append"
+                        });
+                    }
+
+                    if (confidence < 0.35 || bestGuess)
+                    {
+                        Emit(new ScrollingCaptureTelemetryEvent
+                        {
+                            Kind = ScrollingCaptureTelemetryKind.Warning,
+                            FrameIndex = frameIndex,
+                            EstimatedScrollPixels = matchHeight,
+                            MatchRows = matchCount,
+                            Confidence = confidence,
+                            UsedBestGuess = bestGuess,
+                            CaptureRectangle = selectedRectangle,
+                            Message = bestGuess ? "stitch used historical best-guess fallback" : "stitch confidence is low"
+                        });
+                    }
+
                     return newResult;
                 }
             }
 
             status = ScrollingCaptureStatus.Failed;
+            Emit(new ScrollingCaptureTelemetryEvent
+            {
+                Kind = ScrollingCaptureTelemetryKind.Warning,
+                FrameIndex = frameIndex,
+                ResultHeightBefore = resultHeightBefore,
+                MatchRows = matchCount,
+                CaptureRectangle = selectedRectangle,
+                Message = "no usable vertical overlap was found; capture stopped instead of emitting a guessed stitch"
+            });
 
             return null;
+        }
+
+        private unsafe void SuppressStationaryOverlaysInResult(
+            Bitmap result,
+            Bitmap previousFrame,
+            Bitmap currentFrame,
+            int scrollPixels,
+            out int stationaryTileCount,
+            out int stationaryArea)
+        {
+            stationaryTileCount = 0;
+            stationaryArea = 0;
+            if (scrollPixels <= 0 || scrollPixels >= currentFrame.Height) return;
+            if (result.Height < previousFrame.Height) return;
+
+            const int tile = 40;
+            const int sample = 8;
+            const double sameThreshold = 7.0;
+            const double translatedThreshold = 18.0;
+            const double textureThreshold = 13.0;
+
+            Rectangle bounds = new Rectangle(0, 0, previousFrame.Width, previousFrame.Height);
+            BitmapData previousData = previousFrame.LockBits(bounds, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            BitmapData currentData = currentFrame.LockBits(bounds, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            var detected = new List<Rectangle>();
+
+            try
+            {
+                int leftMargin = Math.Max(0, previousFrame.Width / 100);
+                int rightLimit = previousFrame.Width - leftMargin;
+                for (int y = scrollPixels; y < previousFrame.Height - 4; y += tile)
+                {
+                    int height = Math.Min(tile, previousFrame.Height - y);
+                    int sourceY = y - scrollPixels;
+                    if (sourceY < 0 || sourceY + height > currentFrame.Height) continue;
+
+                    for (int x = leftMargin; x < rightLimit - 4; x += tile)
+                    {
+                        int width = Math.Min(tile, rightLimit - x);
+                        double sameDifference = 0;
+                        double translatedDifference = 0;
+                        double texture = 0;
+                        int samples = 0;
+
+                        for (int sy = 4; sy < height; sy += sample)
+                        {
+                            byte* previousRow = (byte*)previousData.Scan0 + (y + sy) * previousData.Stride;
+                            byte* currentSameRow = (byte*)currentData.Scan0 + (y + sy) * currentData.Stride;
+                            byte* currentTranslatedRow = (byte*)currentData.Scan0 + (sourceY + sy) * currentData.Stride;
+                            for (int sx = 4; sx < width; sx += sample)
+                            {
+                                byte* p = previousRow + (x + sx) * 4;
+                                byte* same = currentSameRow + (x + sx) * 4;
+                                byte* translated = currentTranslatedRow + (x + sx) * 4;
+                                sameDifference += PixelDifference(p, same);
+                                translatedDifference += PixelDifference(p, translated);
+
+                                if (sx + 2 < width)
+                                {
+                                    byte* neighbor = previousRow + (x + sx + 2) * 4;
+                                    texture += PixelDifference(p, neighbor);
+                                }
+                                samples++;
+                            }
+                        }
+
+                        if (samples == 0) continue;
+                        sameDifference /= samples;
+                        translatedDifference /= samples;
+                        texture /= samples;
+
+                        // A stationary overlay is screen-stable but does not obey the
+                        // page's vertical translation. Requiring texture prevents blank
+                        // backgrounds from being mistaken for fixed controls.
+                        if (sameDifference <= sameThreshold &&
+                            translatedDifference >= translatedThreshold &&
+                            texture >= textureThreshold)
+                        {
+                            detected.Add(new Rectangle(x, y, width, height));
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                previousFrame.UnlockBits(previousData);
+                currentFrame.UnlockBits(currentData);
+            }
+
+            if (detected.Count == 0) return;
+
+            int previousViewportTop = result.Height - previousFrame.Height;
+            using Graphics graphics = Graphics.FromImage(result);
+            graphics.CompositingMode = CompositingMode.SourceCopy;
+            graphics.InterpolationMode = InterpolationMode.NearestNeighbor;
+
+            foreach (Rectangle tileRect in detected)
+            {
+                Rectangle source = new Rectangle(tileRect.X, tileRect.Y - scrollPixels, tileRect.Width, tileRect.Height);
+                Rectangle destination = new Rectangle(tileRect.X, previousViewportTop + tileRect.Y, tileRect.Width, tileRect.Height);
+                if (destination.Top < 0 || destination.Bottom > result.Height) continue;
+
+                graphics.DrawImage(currentFrame, destination, source, GraphicsUnit.Pixel);
+                stationaryTileCount++;
+                stationaryArea += tileRect.Width * tileRect.Height;
+            }
+        }
+
+        private static unsafe double PixelDifference(byte* a, byte* b)
+        {
+            return (Math.Abs(a[0] - b[0]) + Math.Abs(a[1] - b[1]) + Math.Abs(a[2] - b[2])) / 3.0;
+        }
+
+        private void EmitFrame(Bitmap bitmap)
+        {
+            if (Options.FrameSink == null || bitmap == null) return;
+            try
+            {
+                Options.FrameSink(new ScrollingCaptureFrameEvent
+                {
+                    FrameIndex = frameIndex,
+                    Timestamp = DateTimeOffset.Now,
+                    CaptureRectangle = selectedRectangle,
+                    Frame = bitmap
+                });
+            }
+            catch
+            {
+                // Diagnostics must never become a capture failure path.
+            }
+        }
+
+        private void Emit(ScrollingCaptureTelemetryEvent value)
+        {
+            if (Options.TelemetrySink == null) return;
+            try
+            {
+                Options.TelemetrySink(value);
+            }
+            catch
+            {
+                // Diagnostics must never become a capture failure path.
+            }
         }
     }
 }

@@ -35,7 +35,7 @@ $main = Join-Path $repoRoot "LongCapture.Standalone\MainForm.cs"
 $program = Join-Path $repoRoot "LongCapture.Standalone\Program.cs"
 $manager = Join-Path $repoRoot "ShareX.ScreenCaptureLib\ScrollingCaptureManager.cs"
 $automation = Join-Path $repoRoot "LongCapture.Standalone\AutomationTestRunner.cs"
-$qualitySummary = Join-Path $repoRoot "ShareX.ScreenCaptureLib\ShareXModFinalQualitySummary.cs"
+$qualitySummary = Join-Path $repoRoot "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModFinalQualitySummary.cs"
 
 # --- Debug UI policy ---------------------------------------------------------
 # Normal Debug intentionally exposes only the real LongCapture GUI/HUD while the temporary
@@ -119,12 +119,12 @@ Replace-Literal -Path $main `
         CaptureExclusion.SetDebugCaptureUi(debugCaptureUi.Checked, "capture-request");
         CaptureExclusion.SetIncludeInternalDebugWindows(
             debugCaptureUi.Checked && includeInternalDebugWindows.Checked,
-            "capture-request");
+            "capture-request-internal-window-policy");
         ShareXModReplayDiagnostics.Configure(debugCaptureUi.Checked);
         if (debugCaptureUi.Checked)
         {
 '@ `
-    -Marker 'ShareXModReplayDiagnostics.Configure(debugCaptureUi.Checked);'
+    -Marker 'capture-request-internal-window-policy'
 
 Replace-Literal -Path $main `
     -Old @'

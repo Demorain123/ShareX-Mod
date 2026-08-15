@@ -98,10 +98,9 @@ internal static class Program
 
             // Go beyond constructor-only tests: create a real Win32 target window,
             // inject it into the same ScrollingCaptureManager used after interactive
-            // region selection, then run StartCaptureAsync through overlay creation,
-            // target activation, screen capture, one scroll input, image comparison,
-            // result production and cleanup. A static target naturally terminates
-            // after the second identical frame, so this remains deterministic in CI.
+            // region selection, start a real capture, then exercise the same StopCapture
+            // path used by F8. This covers overlay creation, target activation, screen
+            // capture, scroll input, result production and cleanup without human input.
             int captureSmoke = RunScrollingCaptureSmokeTest();
             if (captureSmoke != 0) return captureSmoke;
 
@@ -172,6 +171,22 @@ internal static class Program
         selectedRectangleField.SetValue(manager, targetRectangle);
 
         var captureTask = service.StartCaptureAsync();
+
+        // Let at least one frame pass through the real capture pipeline, then request
+        // a manual stop exactly as LongCapture's F8 handler does. Do not depend on
+        // auto-bottom detection here because ShareX-Mod intentionally applies adaptive
+        // settle/boundary logic that can wait longer on a synthetic static window.
+        Stopwatch warmup = Stopwatch.StartNew();
+        while (!captureTask.IsCompleted && warmup.Elapsed < TimeSpan.FromMilliseconds(900))
+        {
+            Application.DoEvents();
+            Thread.Sleep(10);
+        }
+        if (!captureTask.IsCompleted)
+        {
+            service.StopCapture();
+        }
+
         Stopwatch timeout = Stopwatch.StartNew();
         while (!captureTask.IsCompleted && timeout.Elapsed < TimeSpan.FromSeconds(8))
         {

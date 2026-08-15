@@ -3,20 +3,22 @@ name: Build LongCapture Standalone
 on:
   push:
     branches:
-      - "standalone/longcapture-v0.1.1-work"
-      - "standalone/longcapture-v0.1.1"
+      - "standalone/longcapture-v0.1.2-work"
+      - "standalone/longcapture-v0.1.2"
     paths:
       - "LongCapture.Standalone/**"
       - "ShareX.ScreenCaptureLib/**"
+      - "ShareX.Avalonia/**"
       - "mod-overlay/**"
       - "scripts/**"
       - ".github/workflows/longcapture-standalone.yml"
   pull_request:
     branches:
-      - "standalone/longcapture-v0.1.1"
+      - "standalone/longcapture-v0.1.2"
     paths:
       - "LongCapture.Standalone/**"
       - "ShareX.ScreenCaptureLib/**"
+      - "ShareX.Avalonia/**"
       - "mod-overlay/**"
       - "scripts/**"
       - ".github/workflows/longcapture-standalone.yml"
@@ -73,6 +75,18 @@ jobs:
             throw "Standalone source still contains placeholder-only capture UI."
           }
 
+          $program = Get-Content "LongCapture.Standalone\Program.cs" -Raw
+          foreach ($required in @("AvaloniaBootstrapper.EnsureInitialized", "ScrollingCaptureRegionWindow", "overlay.Show()", "ShowRegion = true")) {
+            if ($program -notmatch [regex]::Escape($required)) {
+              throw "F8 capture bootstrap regression guard is missing: $required"
+            }
+          }
+
+          $bootstrapper = Get-Content "ShareX.Avalonia\Integration\AvaloniaBootstrapper.cs" -Raw
+          if ($bootstrapper -notmatch [regex]::Escape("SetupWithoutStarting")) {
+            throw "Legacy-host Avalonia bootstrap path is missing."
+          }
+
           $ui = Get-Content "LongCapture.Standalone\StandaloneUiPolish.cs" -Raw
           foreach ($required in @("AutoScaleMode.Dpi", "AutoScroll = true", "MaximumSize", "ValidateReadiness", "ValidateButtons")) {
             if ($ui -notmatch [regex]::Escape($required)) {
@@ -100,7 +114,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          foreach ($name in @("LongCapture.exe", "ShareX.ScreenCaptureLib.dll", "ShareX.Mod.v04.json", "ShareX.Mod.VERSION.json")) {
+          foreach ($name in @("LongCapture.exe", "ShareX.ScreenCaptureLib.dll", "ShareX.Avalonia.dll", "ShareX.Mod.v04.json", "ShareX.Mod.VERSION.json")) {
             $path = Join-Path "artifacts\LongCapture" $name
             if (-not (Test-Path -LiteralPath $path)) { throw "Published standalone package missing $name" }
           }
@@ -110,7 +124,7 @@ jobs:
           $version = (Get-Content "artifacts\LongCapture\ShareX.Mod.VERSION.json" -Raw | ConvertFrom-Json).version
           Write-Host "Bundled ShareX-Mod engine version=$version"
 
-      - name: Run packaged engine and responsive UI self-test
+      - name: Run packaged F8 bootstrap, engine and responsive UI self-test
         shell: pwsh
         run: |
           $p = Start-Process -FilePath (Resolve-Path "artifacts\LongCapture\LongCapture.exe") -ArgumentList "--self-test" -Wait -PassThru
@@ -128,11 +142,11 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force -Path "Output" | Out-Null
-          $zip = "Output\LongCapture-standalone-v0.1.1-dev-x64.zip"
+          $zip = "Output\LongCapture-standalone-v0.1.2-dev-x64.zip"
           if (Test-Path $zip) { Remove-Item $zip -Force }
           Compress-Archive -Path "artifacts\LongCapture\*" -DestinationPath $zip -CompressionLevel Optimal
           $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
-          Set-Content -LiteralPath "Output\LongCapture-standalone-v0.1.1-dev-x64.sha256.txt" -Value "$hash  LongCapture-standalone-v0.1.1-dev-x64.zip"
+          Set-Content -LiteralPath "Output\LongCapture-standalone-v0.1.2-dev-x64.sha256.txt" -Value "$hash  LongCapture-standalone-v0.1.2-dev-x64.zip"
           Write-Host "SHA256=$hash"
           "sha256=$hash" >> $env:GITHUB_OUTPUT
 
@@ -142,8 +156,8 @@ jobs:
           $ErrorActionPreference = "Stop"
           $temp = Join-Path $env:RUNNER_TEMP "longcapture-standalone-zipcheck"
           if (Test-Path $temp) { Remove-Item $temp -Recurse -Force }
-          Expand-Archive -LiteralPath "Output\LongCapture-standalone-v0.1.1-dev-x64.zip" -DestinationPath $temp -Force
-          foreach ($name in @("LongCapture.exe", "ShareX.ScreenCaptureLib.dll", "ShareX.Mod.v04.json", "ShareX.Mod.VERSION.json")) {
+          Expand-Archive -LiteralPath "Output\LongCapture-standalone-v0.1.2-dev-x64.zip" -DestinationPath $temp -Force
+          foreach ($name in @("LongCapture.exe", "ShareX.ScreenCaptureLib.dll", "ShareX.Avalonia.dll", "ShareX.Mod.v04.json", "ShareX.Mod.VERSION.json")) {
             if (-not (Test-Path (Join-Path $temp $name))) { throw "ZIP missing $name" }
           }
           if (Test-Path (Join-Path $temp "ShareX.exe")) { throw "ZIP must not use ShareX.exe as its entry point." }
@@ -153,7 +167,7 @@ jobs:
       - name: Upload standalone portable
         uses: actions/upload-artifact@v7
         with:
-          name: LongCapture-standalone-v0.1.1-dev-x64
+          name: LongCapture-standalone-v0.1.2-dev-x64
           path: |
-            Output\LongCapture-standalone-v0.1.1-dev-x64.zip
-            Output\LongCapture-standalone-v0.1.1-dev-x64.sha256.txt
+            Output\LongCapture-standalone-v0.1.2-dev-x64.zip
+            Output\LongCapture-standalone-v0.1.2-dev-x64.sha256.txt

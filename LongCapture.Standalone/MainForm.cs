@@ -28,7 +28,6 @@ internal sealed class MainForm : Form
     private readonly Button browseRecipeButton = new();
     private readonly Button refreshTargetsButton = new();
     private readonly Button openLogsButton = new();
-    private readonly Button exportDiagnosticsButton = new();
     private readonly ComboBox modeSelector = new();
     private readonly ComboBox targetSelector = new();
     private readonly TextBox recipePath = new();
@@ -42,7 +41,6 @@ internal sealed class MainForm : Form
     private readonly ToolStripMenuItem trayStopItem = new("Stop capture (F8)");
 
     private ScrollingCaptureService? activeService;
-    private CaptureSessionQuality? latestSessionQuality;
     private bool captureBusy;
     private bool hotkeyRegistered;
     private readonly string outputDirectory;
@@ -74,7 +72,7 @@ internal sealed class MainForm : Form
 
         var subtitle = new Label
         {
-            Text = "Independent long screenshot workspace — adaptive settle, fixed/sticky suppression, flight recorder, Smart Web and Capture Recipes",
+            Text = "Independent long screenshot workspace — title-locked targets, ShareX capture engine, quality guard, Smart Web and Capture Recipes",
             Dock = DockStyle.Top,
             Height = 42,
             Padding = new Padding(20, 0, 0, 8)
@@ -214,11 +212,6 @@ internal sealed class MainForm : Form
         var openOutputButton = new Button { Text = "Open output folder", Dock = DockStyle.Left, Width = 150 };
         openOutputButton.Click += (_, _) => OpenOutputDirectory();
 
-        exportDiagnosticsButton.Text = "Export diagnostics";
-        exportDiagnosticsButton.Dock = DockStyle.Left;
-        exportDiagnosticsButton.Width = 150;
-        exportDiagnosticsButton.Click += (_, _) => ExportDiagnostics();
-
         qualityLabel.Text = "Quality: waiting for a capture.";
         qualityLabel.Dock = DockStyle.Fill;
         qualityLabel.AutoEllipsis = true;
@@ -239,7 +232,7 @@ internal sealed class MainForm : Form
         var actionPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 12, 0, 0) };
         qualityLabel.Dock = DockStyle.Bottom;
         qualityLabel.Height = 36;
-        actionPanel.Controls.Add(exportDiagnosticsButton);
+        openOutputButton.Location = new Point(0, 8);
         actionPanel.Controls.Add(openOutputButton);
         actionPanel.Controls.Add(qualityLabel);
         actionPanel.Controls.Add(captureButton);
@@ -464,7 +457,7 @@ internal sealed class MainForm : Form
         catch (Exception ex)
         {
             LongCaptureLog.Error("Capture Browser launch failed", ex);
-            MessageBox.Show(this, ex.Message, "Capture Browser", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            throw;
         }
         finally
         {
@@ -540,35 +533,23 @@ internal sealed class MainForm : Form
                 : "Select the Capture Browser window or desired capture region...")
             : $"Locking capture to: {requestedTarget.Title}";
 
-        int settle = (int)scrollDelay.Value;
         var options = new ScrollingCaptureOptions
         {
             StartDelay = (int)startDelay.Value,
-            ScrollDelay = settle,
+            ScrollDelay = (int)scrollDelay.Value,
             ScrollAmount = (int)scrollAmount.Value,
             ScrollMethod = Enum.TryParse(scrollMethod.SelectedItem?.ToString(), out ScrollMethod method) ? method : ScrollMethod.MouseWheel,
             AutoScrollTop = autoScrollTop.Checked,
             AutoIgnoreBottomEdge = true,
             AutoUpload = false,
-            ShowRegion = true,
-            AdaptiveSettle = true,
-            AdaptiveSettleProbeInterval = 100,
-            AdaptiveSettleStableSamples = 2,
-            AdaptiveSettleMaxDelay = Math.Min(4500, Math.Max(1800, settle * 5)),
-            AdaptiveSettleChangedFraction = 0.012,
-            SuppressStationaryOverlays = true
+            ShowRegion = true
         };
 
         string targetSummary = requestedTarget is null
             ? "ShareX-picker-fallback"
             : $"hwnd={requestedTarget.HandleHex} pid={requestedTarget.ProcessId} title={LongCaptureLog.OneLine(requestedTarget.Title)}";
         LongCaptureLog.Info(
-            $"capture requested mode={mode} target={targetSummary} startDelay={options.StartDelay} scrollDelay={options.ScrollDelay} scrollAmount={options.ScrollAmount} scrollMethod={options.ScrollMethod} autoScrollTop={options.AutoScrollTop} adaptiveSettle={options.AdaptiveSettle} settleMax={options.AdaptiveSettleMaxDelay} stationarySuppression={options.SuppressStationaryOverlays}");
-
-        CaptureSessionRecorder? recorder = null;
-        ScrollingCaptureStatus completionStatus = ScrollingCaptureStatus.Failed;
-        string? completionPath = null;
-        Size? completionSize = null;
+            $"capture requested mode={mode} target={targetSummary} startDelay={options.StartDelay} scrollDelay={options.ScrollDelay} scrollAmount={options.ScrollAmount} scrollMethod={options.ScrollMethod} autoScrollTop={options.AutoScrollTop}");
 
         try
         {
@@ -612,9 +593,6 @@ internal sealed class MainForm : Form
                 LongCaptureLog.Info("ShareX fallback picker selected a capture region/window");
             }
 
-            recorder = new CaptureSessionRecorder(mode.ToString(), targetSummary, options);
-            recorder.Attach(options);
-
             trayStopItem.Enabled = true;
             trayIcon.Visible = true;
 
@@ -625,21 +603,22 @@ internal sealed class MainForm : Form
             LongCaptureLog.Info($"capture UI quiet period completed delayMs={CaptureUiQuietPeriodMs}");
             LongCaptureLog.Info("capture engine start requested");
 
-            completionStatus = await service.StartCaptureAsync();
+            ScrollingCaptureStatus status = await service.StartCaptureAsync();
             trayStopItem.Enabled = false;
             trayIcon.Visible = false;
-            LongCaptureLog.Info($"capture engine completed status={completionStatus}");
+            LongCaptureLog.Info($"capture engine completed status={status}");
 
+            string? savedPath = null;
+            Size? resultSize = null;
             if (service.Result is not null && service.Result.Width > 0 && service.Result.Height > 0)
             {
                 Directory.CreateDirectory(outputDirectory);
-                completionPath = Path.Combine(outputDirectory, $"LongCapture_{DateTime.Now:yyyyMMdd_HHmmssfff}.png");
-                service.Result.Save(completionPath, ImageFormat.Png);
-                completionSize = service.Result.Size;
-                LongCaptureLog.Info($"capture image saved width={completionSize.Value.Width} height={completionSize.Value.Height} path={LongCaptureLog.OneLine(completionPath)}");
+                savedPath = Path.Combine(outputDirectory, $"LongCapture_{DateTime.Now:yyyyMMdd_HHmmssfff}.png");
+                service.Result.Save(savedPath, ImageFormat.Png);
+                resultSize = service.Result.Size;
+                LongCaptureLog.Info($"capture image saved width={resultSize.Value.Width} height={resultSize.Value.Height} path={LongCaptureLog.OneLine(savedPath)}");
             }
 
-            latestSessionQuality = recorder.Complete(completionStatus, completionPath, completionSize);
             ShowMainWindow();
 
             if (mode == LongCaptureStandaloneMode.Teach)
@@ -651,19 +630,15 @@ internal sealed class MainForm : Form
 
             UpdateQualityLabel();
 
-            if (completionPath is not null && completionSize.HasValue)
+            if (savedPath is not null && resultSize.HasValue)
             {
-                statusLabel.Text = $"{completionStatus}: {completionSize.Value.Width} × {completionSize.Value.Height}px — {completionPath}";
+                statusLabel.Text = $"{status}: {resultSize.Value.Width} × {resultSize.Value.Height}px — {savedPath}";
             }
             else
             {
-                statusLabel.Text = $"Capture ended with status {completionStatus}; no usable image was produced.";
-                LongCaptureLog.Warn($"capture produced no usable stitched image status={completionStatus}");
-                MessageBox.Show(this,
-                    "LongCapture did not receive a usable stitched image. The capture-session diagnostics were retained automatically.\n\nApp log: " + LongCaptureLog.CurrentLogPath + "\nSession: " + recorder.SessionDirectory,
-                    "LongCapture",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning);
+                statusLabel.Text = $"Capture ended with status {status}; no usable image was produced.";
+                LongCaptureLog.Warn($"capture produced no usable stitched image status={status}");
+                MessageBox.Show(this, "LongCapture did not receive a usable stitched image. Try a larger scrolling region or a different scroll method.\n\nDiagnostic log: " + LongCaptureLog.CurrentLogPath, "LongCapture", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
         catch (Exception ex)
@@ -673,29 +648,10 @@ internal sealed class MainForm : Form
             ShowMainWindow();
             statusLabel.Text = "Capture failed.";
             LongCaptureLog.Error("capture failed", ex);
-
-            if (recorder is not null)
-            {
-                try
-                {
-                    latestSessionQuality = recorder.Complete(ScrollingCaptureStatus.Failed, completionPath, completionSize);
-                }
-                catch (Exception qualityEx)
-                {
-                    LongCaptureLog.Warn($"failed to finalize capture-session diagnostics type={qualityEx.GetType().Name} message={LongCaptureLog.OneLine(qualityEx.Message)}");
-                }
-            }
-
-            MessageBox.Show(this,
-                ex.Message + "\n\nDiagnostic log: " + LongCaptureLog.CurrentLogPath +
-                (recorder is null ? string.Empty : "\nCapture session: " + recorder.SessionDirectory),
-                "LongCapture capture error",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Error);
+            MessageBox.Show(this, ex.Message + "\n\nDiagnostic log: " + LongCaptureLog.CurrentLogPath, "LongCapture capture error", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         finally
         {
-            recorder?.Dispose();
             activeService = null;
             captureBusy = false;
             captureButton.Text = "Start long capture   (F8)";
@@ -707,14 +663,6 @@ internal sealed class MainForm : Form
 
     private void UpdateQualityLabel()
     {
-        if (latestSessionQuality is not null)
-        {
-            qualityLabel.Text = $"Quality: {latestSessionQuality.Status} · {latestSessionQuality.Score}/100 · frames {latestSessionQuality.TotalFrames} · low-confidence {latestSessionQuality.LowConfidenceStitches} · settle timeouts {latestSessionQuality.SettleTimeouts}";
-            LongCaptureLog.Info(
-                $"flight-recorder quality status={latestSessionQuality.Status} score={latestSessionQuality.Score}/100 frames={latestSessionQuality.TotalFrames} lowConfidence={latestSessionQuality.LowConfidenceStitches} settleTimeouts={latestSessionQuality.SettleTimeouts}");
-            return;
-        }
-
         LongCaptureQualityInfo? quality = LongCaptureStandaloneBridge.FindLatestQualityInfo();
         qualityLabel.Text = quality is null
             ? "Quality: no quality summary was produced for this capture."
@@ -750,7 +698,6 @@ internal sealed class MainForm : Form
         targetSelector.Enabled = enabled;
         refreshTargetsButton.Enabled = enabled;
         openLogsButton.Enabled = true;
-        exportDiagnosticsButton.Enabled = true;
         startDelay.Enabled = enabled;
         scrollDelay.Enabled = enabled;
         scrollAmount.Enabled = enabled;
@@ -815,31 +762,6 @@ internal sealed class MainForm : Form
         {
             LongCaptureLog.Error("failed to open log directory", ex);
             MessageBox.Show(this, ex.Message, "Open logs folder", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-        }
-    }
-
-    private void ExportDiagnostics()
-    {
-        try
-        {
-            Directory.CreateDirectory(outputDirectory);
-            string bundle = CaptureSessionRecorder.ExportLatestBundle(outputDirectory);
-            LongCaptureLog.Info($"diagnostic bundle exported path={LongCaptureLog.OneLine(bundle)}");
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = outputDirectory,
-                UseShellExecute = true
-            });
-            MessageBox.Show(this,
-                "Diagnostic bundle created:\n\n" + bundle + "\n\nReview it before sharing publicly because window titles and local file paths can appear in diagnostics.",
-                "LongCapture diagnostics",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information);
-        }
-        catch (Exception ex)
-        {
-            LongCaptureLog.Error("diagnostic bundle export failed", ex);
-            MessageBox.Show(this, ex.Message, "Export diagnostics", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
     }
 }

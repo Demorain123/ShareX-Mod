@@ -78,6 +78,13 @@ jobs:
       - name: Build Release x64
         run: dotnet build --no-restore --configuration Release -p:Platform=x64 --self-contained true /m:1 ShareX.sln
 
+      - name: Run Recipe planner self-tests
+        shell: pwsh
+        run: |
+          $dll = Resolve-Path "ShareX\bin\Release\win-x64\ShareX.ScreenCaptureLib.dll"
+          dotnet run --project "mod-overlay\tests\ShareXMod.SelfTestRunner\ShareXMod.SelfTestRunner.csproj" --configuration Release -- $dll
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Build portable
         shell: pwsh
         run: |

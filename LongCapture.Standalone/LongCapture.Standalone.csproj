@@ -13,6 +13,7 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\ShareX.Avalonia\ShareX.Avalonia.csproj" />
     <ProjectReference Include="..\ShareX.ScreenCaptureLib\ShareX.ScreenCaptureLib.csproj" />
   </ItemGroup>
   <ItemGroup>

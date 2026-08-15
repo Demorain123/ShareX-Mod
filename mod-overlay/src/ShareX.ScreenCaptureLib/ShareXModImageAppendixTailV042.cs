@@ -10,12 +10,71 @@ using System.Linq;
 
 namespace ShareX.ScreenCaptureLib;
 
+internal readonly record struct ShareXModImageAppendixSlice(
+    Rectangle Source,
+    int DestinationX,
+    int DestinationY,
+    int PageHeight,
+    int Index,
+    int Count);
+
 internal static class ShareXModImageAppendixTailV042
 {
     private static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff"
     };
+
+    private const int Margin = 36;
+    private const int HeaderHeight = 54;
+    private const int MaxPageHeight = 28000;
+
+    internal static IReadOnlyList<ShareXModImageAppendixSlice> PlanSlices(
+        int sourceWidth,
+        int sourceHeight,
+        int targetWidth)
+    {
+        if (sourceWidth < 1 || sourceHeight < 1 || targetWidth < 200)
+        {
+            return Array.Empty<ShareXModImageAppendixSlice>();
+        }
+
+        int availableWidth = Math.Max(1, targetWidth - Margin * 2);
+        int availableHeight = Math.Max(1, MaxPageHeight - HeaderHeight - Margin * 2);
+        int sliceWidth = Math.Max(1, Math.Min(sourceWidth, availableWidth));
+        int sliceHeight = Math.Max(1, Math.Min(sourceHeight, availableHeight));
+        int xParts = (sourceWidth + sliceWidth - 1) / sliceWidth;
+        int yParts = (sourceHeight + sliceHeight - 1) / sliceHeight;
+        int count = checked(xParts * yParts);
+
+        List<ShareXModImageAppendixSlice> slices = new(count);
+        int index = 0;
+
+        for (int yPart = 0; yPart < yParts; yPart++)
+        {
+            int sourceY = yPart * sliceHeight;
+            int currentHeight = Math.Min(sliceHeight, sourceHeight - sourceY);
+
+            for (int xPart = 0; xPart < xParts; xPart++)
+            {
+                int sourceX = xPart * sliceWidth;
+                int currentWidth = Math.Min(sliceWidth, sourceWidth - sourceX);
+                int destinationX = (targetWidth - currentWidth) / 2;
+                int destinationY = HeaderHeight + Margin;
+                int pageHeight = HeaderHeight + Margin * 2 + currentHeight;
+
+                slices.Add(new ShareXModImageAppendixSlice(
+                    new Rectangle(sourceX, sourceY, currentWidth, currentHeight),
+                    destinationX,
+                    destinationY,
+                    pageHeight,
+                    ++index,
+                    count));
+            }
+        }
+
+        return slices;
+    }
 
     public static IReadOnlyList<string> Build(string captureDirectory, int targetWidth)
     {
@@ -32,12 +91,6 @@ internal static class ShareXModImageAppendixTailV042
             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-        const int margin = 36;
-        const int headerHeight = 54;
-        const int maxPageHeight = 28000;
-
-        int availableWidth = Math.Max(1, targetWidth - margin * 2);
-        int availableHeight = Math.Max(1, maxPageHeight - headerHeight - margin * 2);
         int pageIndex = 0;
 
         foreach (string file in files)
@@ -50,69 +103,51 @@ internal static class ShareXModImageAppendixTailV042
                     continue;
                 }
 
-                // Do not shrink a high-resolution appendix just to fit a single tail page.
-                // Preserve native pixels and split the asset into bounded tiles instead.
-                int sliceWidth = Math.Max(1, Math.Min(source.Width, availableWidth));
-                int sliceHeight = Math.Max(1, Math.Min(source.Height, availableHeight));
-                int xParts = (source.Width + sliceWidth - 1) / sliceWidth;
-                int yParts = (source.Height + sliceHeight - 1) / sliceHeight;
-                int sliceCount = xParts * yParts;
-                int sliceIndex = 0;
+                // Preserve native pixels. Planning is separated from rendering so the exact
+                // source coverage can be regression-tested without allocating giant bitmaps.
+                IReadOnlyList<ShareXModImageAppendixSlice> slices =
+                    PlanSlices(source.Width, source.Height, targetWidth);
 
-                for (int yPart = 0; yPart < yParts; yPart++)
+                foreach (ShareXModImageAppendixSlice slice in slices)
                 {
-                    int sourceY = yPart * sliceHeight;
-                    int currentHeight = Math.Min(sliceHeight, source.Height - sourceY);
+                    using Bitmap page = new(targetWidth, slice.PageHeight, PixelFormat.Format32bppArgb);
 
-                    for (int xPart = 0; xPart < xParts; xPart++)
+                    using (Graphics graphics = Graphics.FromImage(page))
                     {
-                        int sourceX = xPart * sliceWidth;
-                        int currentWidth = Math.Min(sliceWidth, source.Width - sourceX);
-                        sliceIndex++;
+                        graphics.Clear(Color.White);
+                        graphics.CompositingMode = CompositingMode.SourceOver;
+                        graphics.InterpolationMode = InterpolationMode.NearestNeighbor;
+                        graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                        graphics.SmoothingMode = SmoothingMode.HighQuality;
 
-                        int pageHeight = headerHeight + margin * 2 + currentHeight;
-                        using Bitmap page = new(targetWidth, pageHeight, PixelFormat.Format32bppArgb);
+                        using Font font = new(
+                            FontFamily.GenericSansSerif,
+                            14,
+                            FontStyle.Regular,
+                            GraphicsUnit.Pixel);
 
-                        using (Graphics graphics = Graphics.FromImage(page))
-                        {
-                            graphics.Clear(Color.White);
-                            graphics.CompositingMode = CompositingMode.SourceOver;
-                            graphics.InterpolationMode = InterpolationMode.NearestNeighbor;
-                            graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
-                            graphics.SmoothingMode = SmoothingMode.HighQuality;
+                        using Brush textBrush = new SolidBrush(Color.FromArgb(70, 70, 70));
 
-                            using Font font = new(
-                                FontFamily.GenericSansSerif,
-                                14,
-                                FontStyle.Regular,
-                                GraphicsUnit.Pixel);
+                        string label = slice.Count == 1
+                            ? $"Image appendix · {Path.GetFileName(file)} · {source.Width}×{source.Height} · native 1:1"
+                            : $"Image appendix · {Path.GetFileName(file)} · {source.Width}×{source.Height} · native slice {slice.Index}/{slice.Count}";
 
-                            using Brush textBrush = new SolidBrush(Color.FromArgb(70, 70, 70));
+                        graphics.DrawString(label, font, textBrush, new PointF(Margin, 18));
 
-                            string label = sliceCount == 1
-                                ? $"Image appendix · {Path.GetFileName(file)} · {source.Width}×{source.Height} · native 1:1"
-                                : $"Image appendix · {Path.GetFileName(file)} · {source.Width}×{source.Height} · native slice {sliceIndex}/{sliceCount}";
-
-                            graphics.DrawString(label, font, textBrush, new PointF(margin, 18));
-
-                            int x = (targetWidth - currentWidth) / 2;
-                            int y = headerHeight + margin;
-
-                            graphics.DrawImage(
-                                source,
-                                new Rectangle(x, y, currentWidth, currentHeight),
-                                new Rectangle(sourceX, sourceY, currentWidth, currentHeight),
-                                GraphicsUnit.Pixel);
-                        }
-
-                        pageIndex++;
-                        string outputPath = Path.Combine(
-                            captureDirectory,
-                            $"appendix_tail_{pageIndex:D4}.png");
-
-                        page.Save(outputPath, ImageFormat.Png);
-                        output.Add(outputPath);
+                        graphics.DrawImage(
+                            source,
+                            new Rectangle(slice.DestinationX, slice.DestinationY, slice.Source.Width, slice.Source.Height),
+                            slice.Source,
+                            GraphicsUnit.Pixel);
                     }
+
+                    pageIndex++;
+                    string outputPath = Path.Combine(
+                        captureDirectory,
+                        $"appendix_tail_{pageIndex:D4}.png");
+
+                    page.Save(outputPath, ImageFormat.Png);
+                    output.Add(outputPath);
                 }
             }
             catch

@@ -14,12 +14,13 @@ internal sealed record ShareXModPaginationIntentDecision(
 
 internal static class ShareXModPaginationIntentClassifier
 {
-    private static readonly HashSet<string> ExactLabels = new(StringComparer.OrdinalIgnoreCase)
+    // Bare "Next" is deliberately excluded. It is common in carousels, onboarding,
+    // comments, image galleries and wizards, so unattended pagination must not infer
+    // page navigation from that word alone.
+    private static readonly HashSet<string> ExactPageLabels = new(StringComparer.OrdinalIgnoreCase)
     {
-        "next",
         "next page",
         "go to next page",
-        "go next",
         "下一页",
         "下一頁",
         "下页",
@@ -27,28 +28,26 @@ internal static class ShareXModPaginationIntentClassifier
         "下一個頁",
         "下一个页面",
         "下一個頁面",
-        "次へ",
         "次のページ",
-        "다음",
         "다음 페이지",
         "page suivante",
-        "suivant",
         "nächste seite",
-        "weiter",
         "página siguiente",
-        "pagina siguiente",
-        "siguiente"
+        "pagina siguiente"
     };
 
-    private static readonly HashSet<string> ExactIdentifiers = new(StringComparer.OrdinalIgnoreCase)
+    // Identifiers must carry explicit page/pager/pagination semantics. Generic ids such
+    // as next/btn-next/button-next are intentionally rejected for the same reason.
+    private static readonly HashSet<string> ExactPageIdentifiers = new(StringComparer.OrdinalIgnoreCase)
     {
-        "next",
         "nextpage",
         "pagenext",
         "paginationnext",
         "pagernext",
-        "btnnext",
-        "buttonnext"
+        "paginationnextpage",
+        "btnnextpage",
+        "buttonnextpage",
+        "nextpagebutton"
     };
 
     public static ShareXModPaginationIntentDecision Classify(ShareXModRecipeLocator locator)
@@ -71,13 +70,13 @@ internal static class ShareXModPaginationIntentClassifier
             string label = NormalizeLabel(raw);
             if (label.Length == 0) continue;
 
-            if (ExactLabels.Contains(label) &&
+            if (ExactPageLabels.Contains(label) &&
                 (interactive || !string.IsNullOrWhiteSpace(locator.AriaLabel)))
             {
                 return new ShareXModPaginationIntentDecision(
                     true,
                     90,
-                    "exact-next-label:" + label);
+                    "exact-page-label:" + label);
             }
         }
 
@@ -89,16 +88,16 @@ internal static class ShareXModPaginationIntentClassifier
                  })
         {
             string identifier = NormalizeIdentifier(candidate.Value);
-            if (identifier.Length > 0 && ExactIdentifiers.Contains(identifier))
+            if (identifier.Length > 0 && ExactPageIdentifiers.Contains(identifier))
             {
                 return new ShareXModPaginationIntentDecision(
                     true,
                     82,
-                    candidate.Name + "-pagination-next");
+                    candidate.Name + "-explicit-page-next");
             }
         }
 
-        return new ShareXModPaginationIntentDecision(false, 0, "no-high-confidence-next-evidence");
+        return new ShareXModPaginationIntentDecision(false, 0, "no-high-confidence-next-page-evidence");
     }
 
     private static bool HasRelNext(string rel)
@@ -142,7 +141,8 @@ internal static class ShareXModPaginationIntentClassifier
             }
             else
             {
-                // Punctuation/symbols (ellipsis, arrows, chevrons) do not alter a textual label.
+                // Punctuation/symbols (ellipsis, arrows, chevrons) do not alter an
+                // otherwise explicit page label, e.g. "Next page ›".
                 if (!previousSpace && builder.Length > 0)
                 {
                     builder.Append(' ');

@@ -1,5 +1,8 @@
 [CmdletBinding()]
-param([switch]$Ci)
+param(
+    [switch]$Ci,
+    [switch]$Deep
+)
 
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
@@ -13,10 +16,14 @@ function Write-Status([string]$Text, [ConsoleColor]$Color = [ConsoleColor]::Gray
 }
 
 try {
+    $profile = if ($Deep) { 'DEEP' } else { 'QUICK' }
     Write-Status '============================================================' Cyan
-    Write-Status ' LongCapture - Automated Acceptance (run before manual test)' Cyan
+    Write-Status " LongCapture - Automated Acceptance [$profile]" Cyan
     Write-Status '============================================================' Cyan
     Write-Status "Package: $root"
+    if (-not $Deep) {
+        Write-Status 'Quick is the default pre-real-test gate. Use --deep only for the optional 10x stress/memory loop.' Yellow
+    }
     Write-Status ''
 
     $required = @(
@@ -35,6 +42,7 @@ try {
 
     New-Item -ItemType Directory -Force -Path $reportDir | Out-Null
     $env:LONGCAPTURE_AUTOMATION_REPORT = $jsonPath
+    $env:LONGCAPTURE_AUTOMATION_PROFILE = if ($Deep) { 'deep' } else { 'quick' }
     try {
         $process = Start-Process -FilePath (Join-Path $root 'LongCapture.exe') `
             -ArgumentList '--automation-test' `
@@ -44,6 +52,7 @@ try {
     }
     finally {
         Remove-Item Env:LONGCAPTURE_AUTOMATION_REPORT -ErrorAction SilentlyContinue
+        Remove-Item Env:LONGCAPTURE_AUTOMATION_PROFILE -ErrorAction SilentlyContinue
     }
 
     if (-not (Test-Path -LiteralPath $jsonPath)) {
@@ -55,6 +64,7 @@ try {
         "LongCapture automated acceptance launcher",
         "Time: $(Get-Date -Format o)",
         "Package: $root",
+        "Profile: $($report.Profile)",
         "ExitCode: $exitCode",
         "Status: $($report.Status)",
         "PASS: $($report.PassedCount)",
@@ -75,14 +85,14 @@ try {
     if ($exitCode -ne 0 -or $report.Status -ne 'PASS_AUTOMATED' -or [int]$report.FailedCount -ne 0) {
         Write-Status 'AUTOMATED ACCEPTANCE: FAIL' Red
         Write-Status 'Stop here. Do NOT start the real-world test yet.' Red
-        Write-Status "Send the newest AutomationReports folder and LongCapture logs/diagnostics for analysis." Yellow
+        Write-Status 'Send the newest AutomationReports folder and LongCapture logs/diagnostics for analysis.' Yellow
         Write-Status "Report: $jsonPath" Yellow
         exit 1
     }
 
     Write-Status 'AUTOMATED ACCEPTANCE: PASS' Green
-    Write-Status ("PASS={0}  FAIL={1}  MANUAL_REQUIRED={2}" -f $report.PassedCount, $report.FailedCount, $report.ManualRequiredCount) Green
-    Write-Status 'Automatable development/regression checks passed. MANUAL_REQUIRED items now move to the real desktop/site test.' Yellow
+    Write-Status ("PROFILE={0}  PASS={1}  FAIL={2}  MANUAL_REQUIRED={3}" -f $report.Profile, $report.PassedCount, $report.FailedCount, $report.ManualRequiredCount) Green
+    Write-Status 'Automatable functional/regression checks passed. Continue immediately with the real desktop/site tests.' Yellow
     Write-Status "Report: $jsonPath"
 
     if (-not $Ci) {

@@ -26,6 +26,7 @@ internal static class CaptureExclusion
 
     private static readonly ConcurrentDictionary<IntPtr, CaptureWindowRole> Roles = new();
     private static volatile bool debugCaptureUi;
+    private static volatile bool includeInternalDebugWindows;
 
     private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
@@ -45,13 +46,21 @@ internal static class CaptureExclusion
     private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 
     public static bool DebugCaptureUi => debugCaptureUi;
+    public static bool IncludeInternalDebugWindows => includeInternalDebugWindows;
     public static uint DesiredAffinity => WDA_EXCLUDEFROMCAPTURE;
 
     public static void SetDebugCaptureUi(bool enabled, string reason)
     {
         debugCaptureUi = enabled;
-        LongCaptureLog.Info($"debug capture mode changed enabled={enabled} reason={LongCaptureLog.OneLine(reason)} policy=role-aware");
+        LongCaptureLog.Info($"debug capture mode changed enabled={enabled} reason={LongCaptureLog.OneLine(reason)} policy=role-aware includeInternal={includeInternalDebugWindows}");
         ApplyToCurrentProcessTopLevelWindows(enabled ? "debug-enabled" : "debug-disabled");
+    }
+
+    public static void SetIncludeInternalDebugWindows(bool enabled, string reason)
+    {
+        includeInternalDebugWindows = enabled;
+        LongCaptureLog.Info($"debug internal-window capture changed enabled={enabled} reason={LongCaptureLog.OneLine(reason)} debug={debugCaptureUi}");
+        ApplyToCurrentProcessTopLevelWindows(enabled ? "internal-debug-enabled" : "internal-debug-disabled");
     }
 
     public static CaptureExclusionResult Apply(Form form, string role)
@@ -63,8 +72,9 @@ internal static class CaptureExclusion
 
     /// <summary>
     /// Used by WinEvent watcher/sweeps. Unknown/transient windows default to AlwaysExcluded so
-    /// temporary Avalonia hosts, selector helpers and blank owner windows can never enter the long
-    /// screenshot merely because Debug is enabled.
+    /// temporary Avalonia hosts, selector helpers and blank owner windows cannot enter the long
+    /// screenshot merely because normal Debug is enabled. The user can explicitly opt in to
+    /// capturing them with the separate include-internal-windows debug option.
     /// </summary>
     public static CaptureExclusionResult Apply(IntPtr hWnd, string role)
     {
@@ -124,9 +134,9 @@ internal static class CaptureExclusion
         CaptureWindowRole windowRole = Roles.TryGetValue(hWnd, out CaptureWindowRole registered)
             ? registered
             : CaptureWindowRole.AlwaysExcluded;
-        uint requested = debugCaptureUi && windowRole == CaptureWindowRole.DebugVisible
-            ? WDA_NONE
-            : WDA_EXCLUDEFROMCAPTURE;
+        bool allowCapture = debugCaptureUi &&
+            (windowRole == CaptureWindowRole.DebugVisible || includeInternalDebugWindows);
+        uint requested = allowCapture ? WDA_NONE : WDA_EXCLUDEFROMCAPTURE;
 
         Marshal.SetLastPInvokeError(0);
         bool applied = SetWindowDisplayAffinity(hWnd, requested);
@@ -142,12 +152,12 @@ internal static class CaptureExclusion
         if (applied)
         {
             LongCaptureLog.Info(
-                $"capture affinity applied role={LongCaptureLog.OneLine(role)} windowRole={windowRole} hwnd=0x{hWnd.ToInt64():X} requested=0x{requested:X8} debug={debugCaptureUi} verified={verifiedText}");
+                $"capture affinity applied role={LongCaptureLog.OneLine(role)} windowRole={windowRole} hwnd=0x{hWnd.ToInt64():X} requested=0x{requested:X8} debug={debugCaptureUi} includeInternal={includeInternalDebugWindows} verified={verifiedText}");
         }
         else
         {
             LongCaptureLog.Warn(
-                $"capture affinity failed role={LongCaptureLog.OneLine(role)} windowRole={windowRole} hwnd=0x{hWnd.ToInt64():X} requested=0x{requested:X8} debug={debugCaptureUi} win32={error}");
+                $"capture affinity failed role={LongCaptureLog.OneLine(role)} windowRole={windowRole} hwnd=0x{hWnd.ToInt64():X} requested=0x{requested:X8} debug={debugCaptureUi} includeInternal={includeInternalDebugWindows} win32={error}");
         }
 
         return new CaptureExclusionResult(hWnd, applied, error, verified, role);
@@ -178,7 +188,7 @@ internal static class CaptureExclusion
         }
 
         LongCaptureLog.Info(
-            $"capture affinity sweep reason={LongCaptureLog.OneLine(reason)} windows={results.Count} applied={applied} failed={results.Count - applied} debug={debugCaptureUi} registeredDebugVisible={debugVisible}");
+            $"capture affinity sweep reason={LongCaptureLog.OneLine(reason)} windows={results.Count} applied={applied} failed={results.Count - applied} debug={debugCaptureUi} includeInternal={includeInternalDebugWindows} registeredDebugVisible={debugVisible}");
         return results;
     }
 }

@@ -2,5 +2,5 @@ namespace LongCapture.Standalone;
 
 internal static class StandaloneVersion
 {
-    public const string Value = "0.1.7-rc1";
+    public const string Value = "0.1.8-rc1";
 }

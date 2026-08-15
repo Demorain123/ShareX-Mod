@@ -36,9 +36,10 @@ internal static class Program
         }
 
         InitializeDesktopUiHosts();
+        using var exclusionWatcher = CaptureExclusionWatcher.Start();
         using var form = new MainForm();
         StandaloneUiPolish.Apply(form);
-        LongCaptureLog.Info("entering WinForms message loop");
+        LongCaptureLog.Info($"entering WinForms message loop exclusionWatcher={exclusionWatcher.IsActive}");
         Application.Run(form);
         LongCaptureLog.Info("WinForms message loop exited");
         return 0;
@@ -146,6 +147,9 @@ internal static class Program
                 }
             }
 
+            int exclusionSmoke = RunCaptureExclusionSelfTest();
+            if (exclusionSmoke != 0) return exclusionSmoke;
+
             // Go beyond constructor-only tests: create a real Win32 target window,
             // resolve it through the same title/HWND target service used by the GUI,
             // bridge it into ShareX's scrolling manager, start a real capture, then
@@ -168,6 +172,125 @@ internal static class Program
         {
             LongCaptureLog.Error("self-test threw an exception", ex);
             return 99;
+        }
+    }
+
+    private static int RunCaptureExclusionSelfTest()
+    {
+        using var background = new Form
+        {
+            Text = "LongCapture exclusion fixture background",
+            StartPosition = FormStartPosition.Manual,
+            Bounds = new Rectangle(520, 120, 360, 260),
+            BackColor = Color.White,
+            ShowInTaskbar = false,
+            FormBorderStyle = FormBorderStyle.FixedToolWindow
+        };
+        background.Show();
+        background.Refresh();
+        Application.DoEvents();
+
+        Rectangle backgroundClient = background.RectangleToScreen(background.ClientRectangle);
+        Rectangle markerBounds = new(
+            backgroundClient.Left + 80,
+            backgroundClient.Top + 70,
+            150,
+            90);
+
+        using var sentinel = new Form
+        {
+            Text = "LongCapture EXCLUSION SENTINEL",
+            StartPosition = FormStartPosition.Manual,
+            Bounds = markerBounds,
+            BackColor = Color.Fuchsia,
+            ShowInTaskbar = false,
+            FormBorderStyle = FormBorderStyle.None,
+            TopMost = true
+        };
+        sentinel.Controls.Add(new Label
+        {
+            Text = "LONGCAPTURE-SENTINEL",
+            AutoSize = true,
+            BackColor = Color.Fuchsia,
+            ForeColor = Color.Black,
+            Location = new Point(8, 8)
+        });
+        sentinel.Show();
+        sentinel.BringToFront();
+        sentinel.Refresh();
+        Application.DoEvents();
+        Thread.Sleep(120);
+
+        double baselineMarker = CaptureMarkerFraction(markerBounds, Color.Fuchsia);
+        CaptureExclusionResult exclusion = CaptureExclusion.Apply(sentinel, "self-test-sentinel");
+        if (!exclusion.Applied)
+        {
+            LongCaptureLog.Warn($"capture exclusion sentinel API failed win32={exclusion.Win32Error}");
+            return 25;
+        }
+
+        sentinel.Refresh();
+        Application.DoEvents();
+        Thread.Sleep(180);
+        double excludedMarker = CaptureMarkerFraction(markerBounds, Color.Fuchsia);
+
+        LongCaptureLog.Info(
+            $"capture exclusion sentinel baselineFraction={baselineMarker:F4} excludedFraction={excludedMarker:F4} verifiedAffinity={(exclusion.VerifiedAffinity.HasValue ? $"0x{exclusion.VerifiedAffinity.Value:X8}" : "unavailable")}");
+
+        // Some non-interactive CI desktops do not expose a real screen surface to
+        // Graphics.CopyFromScreen. In that environment we still require the Win32
+        // affinity API call itself to succeed, but skip the pixel assertion because
+        // there was no observable baseline marker to compare against.
+        if (baselineMarker >= 0.20 && excludedMarker >= 0.05)
+        {
+            LongCaptureLog.Warn("capture exclusion sentinel remained visible in screen-copy validation");
+            return 26;
+        }
+
+        if (baselineMarker < 0)
+        {
+            LongCaptureLog.Warn("capture exclusion pixel validation skipped because screen-copy was unavailable in this environment");
+        }
+        else if (baselineMarker < 0.20)
+        {
+            LongCaptureLog.Warn("capture exclusion pixel validation skipped because the baseline sentinel was not sufficiently visible");
+        }
+
+        sentinel.Close();
+        background.Close();
+        Application.DoEvents();
+        return 0;
+    }
+
+    private static double CaptureMarkerFraction(Rectangle bounds, Color marker)
+    {
+        try
+        {
+            using var bitmap = new Bitmap(bounds.Width, bounds.Height);
+            using (Graphics graphics = Graphics.FromImage(bitmap))
+            {
+                graphics.CopyFromScreen(bounds.Location, Point.Empty, bounds.Size);
+            }
+
+            long matches = 0;
+            long samples = 0;
+            for (int y = 2; y < bitmap.Height; y += 4)
+            {
+                for (int x = 2; x < bitmap.Width; x += 4)
+                {
+                    Color pixel = bitmap.GetPixel(x, y);
+                    int distance = Math.Abs(pixel.R - marker.R) + Math.Abs(pixel.G - marker.G) + Math.Abs(pixel.B - marker.B);
+                    if (distance <= 30) matches++;
+                    samples++;
+                }
+            }
+
+            return samples == 0 ? 0 : matches / (double)samples;
+        }
+        catch (Exception ex)
+        {
+            LongCaptureLog.Warn($"screen-copy marker sampling unavailable type={ex.GetType().Name} message={LongCaptureLog.OneLine(ex.Message)}");
+            return -1;
         }
     }
 

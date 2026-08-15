@@ -82,6 +82,7 @@ internal static class ShareXModCaptureRecipeCompiler
             "Every page starts with at least the demonstrated visible viewport as a capture range.",
             "Repeated vertical scrolling is normalized into content coverage ranges.",
             "Vertical ranges can carry semantic top/bottom boundary anchors plus offsets, allowing them to follow later layout shifts like document-relative placeholders.",
+            "Next Page actions use high-confidence pagination semantics instead of arbitrary 'next' substring matches.",
             "Next Page actions form recorded page-instance boundaries even when an SPA keeps the same URL.",
             "Element actions keep semantic locators and geometry only as fallback evidence.",
             "Replay must re-resolve locators and verify post-action page state before continuing."
@@ -94,7 +95,7 @@ internal static class ShareXModCaptureRecipeCompiler
 
         return new ShareXModCaptureRecipe(
             "ShareX-Mod Capture Recipe",
-            "0.10.1-dev",
+            "0.10.4-dev",
             ShareXModCaptureSessionContext.CurrentSessionId,
             DateTimeOffset.Now,
             "semantic-user-demonstration",
@@ -281,7 +282,9 @@ internal static class ShareXModCaptureRecipeCompiler
             if (item.Kind.Equals("click", StringComparison.OrdinalIgnoreCase) &&
                 item.Target != null && item.Trusted)
             {
-                ShareXModCaptureRecipeStepKind kind = LooksLikeNextPage(item.Target)
+                ShareXModPaginationIntentDecision pagination =
+                    ShareXModPaginationIntentClassifier.Classify(item.Target);
+                ShareXModCaptureRecipeStepKind kind = pagination.IsNextPage
                     ? ShareXModCaptureRecipeStepKind.NextPage
                     : ShareXModCaptureRecipeStepKind.ExpandOrActivate;
 
@@ -295,7 +298,13 @@ internal static class ShareXModCaptureRecipeCompiler
                     item.Target.DocumentX + item.Target.Width,
                     item.Target,
                     true,
-                    new[] { "trusted-user-click", kind == ShareXModCaptureRecipeStepKind.NextPage ? "pagination-candidate" : "semantic-activation" },
+                    new[]
+                    {
+                        "trusted-user-click",
+                        pagination.IsNextPage
+                            ? "pagination-candidate:" + pagination.Reason
+                            : "semantic-activation"
+                    },
                     kind == ShareXModCaptureRecipeStepKind.NextPage
                         ? "stop-and-ask-if-navigation-unverified"
                         : "skip-and-report-if-locator-missing"));
@@ -339,21 +348,8 @@ internal static class ShareXModCaptureRecipeCompiler
         return remaining <= Math.Max(96, viewport * 0.35);
     }
 
-    internal static bool LooksLikeNextPage(ShareXModRecipeLocator locator)
-    {
-        string text = string.Join(" ", new[]
-        {
-            locator.Text, locator.AriaLabel, locator.Rel, locator.Id, locator.Name
-        }).ToLowerInvariant();
-
-        return locator.Rel.Equals("next", StringComparison.OrdinalIgnoreCase) ||
-               text.Contains("next page", StringComparison.Ordinal) ||
-               text.Contains("next", StringComparison.Ordinal) ||
-               text.Contains("下一页", StringComparison.Ordinal) ||
-               text.Contains("下页", StringComparison.Ordinal) ||
-               text.Contains("下一個", StringComparison.Ordinal) ||
-               text.Contains("下一個頁", StringComparison.Ordinal);
-    }
+    internal static bool LooksLikeNextPage(ShareXModRecipeLocator locator) =>
+        ShareXModPaginationIntentClassifier.Classify(locator).IsNextPage;
 
     internal static string LocatorFingerprint(
         string tag, string id, string testId, string role, string aria,

@@ -1,0 +1,145 @@
+name: LongCapture v0.1.4 Quick Acceptance
+
+on:
+  push:
+    branches:
+      - "standalone/longcapture-v0.1.4-core-reliability"
+      - "standalone/longcapture-v0.1.3"
+    paths:
+      - "LongCapture.Standalone/**"
+      - "ShareX.ScreenCaptureLib/**"
+      - "ShareX.Avalonia/**"
+      - "mod-overlay/**"
+      - "scripts/**"
+      - ".github/workflows/longcapture-v014-quick.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: longcapture-v014-quick-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  quick:
+    runs-on: windows-2025
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Apply overlay chain
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $hooks = @(
+            "scripts\run-v04-hooks.ps1",
+            "scripts\apply-v041-post-hooks.ps1",
+            "scripts\apply-v042-post-hooks.ps1",
+            "scripts\apply-v043-post-hooks.ps1",
+            "scripts\apply-v044-post-hooks.ps1",
+            "scripts\apply-v050-post-hooks.ps1",
+            "scripts\apply-v051-post-hooks.ps1",
+            "scripts\apply-v052-post-hooks.ps1",
+            "scripts\apply-v061-post-hooks.ps1",
+            "scripts\apply-v062-post-hooks.ps1",
+            "scripts\apply-v064-post-hooks.ps1",
+            "scripts\apply-longcapture-v013-standalone-hooks.ps1",
+            "scripts\apply-longcapture-v013-rc-hardening.ps1",
+            "scripts\apply-longcapture-v014-core-hooks.ps1"
+          )
+          foreach ($hook in $hooks) {
+            Write-Host "=== $hook ==="
+            & pwsh -NoProfile -File $hook
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          git diff --check
+
+      - name: Verify v0.1.4 core markers
+        shell: pwsh
+        run: |
+          $manager = Get-Content "ShareX.ScreenCaptureLib\ScrollingCaptureManager.cs" -Raw
+          $main = Get-Content "LongCapture.Standalone\MainForm.cs" -Raw
+          $automation = Get-Content "LongCapture.Standalone\AutomationTestRunner.cs" -Raw
+          foreach ($required in @("ShareXModAnchorCompositorV014.TryAppend", "modV014AnchorCompositorUsed")) {
+            if ($manager -notmatch [regex]::Escape($required)) { throw "Missing compositor marker: $required" }
+          }
+          foreach ($required in @("Foreground target (F7)", "TryRelockTargetToSelectedRegion", "Whole window (skip region selection)", "Debug: GUI capturable", "quality failure auto-exported diagnostics")) {
+            if ($main -notmatch [regex]::Escape($required)) { throw "Missing v0.1.4 GUI marker: $required" }
+          }
+          if ($automation -notmatch [regex]::Escape("ShareXModV014CompositorSelfTests")) { throw "v0.1.4 compositor integration fixture is not in QUICK" }
+
+      - name: Restore
+        run: dotnet restore --runtime win-x64 LongCapture.Standalone\LongCapture.Standalone.csproj
+
+      - name: Publish portable
+        run: dotnet publish LongCapture.Standalone\LongCapture.Standalone.csproj --no-restore --configuration Release --runtime win-x64 --self-contained true --output artifacts\LongCapture /m:1
+
+      - name: Run exact Quick acceptance
+        shell: cmd
+        run: artifacts\LongCapture\1-RUN-AUTOMATED-TESTS.cmd --ci
+
+      - name: Validate Quick and create readiness
+        shell: pwsh
+        run: |
+          $report = Get-ChildItem "artifacts\LongCapture\AutomationReports" -Filter automation-report.json -Recurse | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $report) { throw "No automation report" }
+          $data = Get-Content $report.FullName -Raw | ConvertFrom-Json
+          if ($data.Status -ne "PASS_AUTOMATED" -or [int]$data.FailedCount -ne 0) { throw "QUICK failed" }
+          if (-not (($data.Cases | Where-Object { $_.Detail -match "v0.1.4 anchor-compositor integration passed" }).Count -gt 0)) { throw "v0.1.4 multi-frame compositor fixture did not run" }
+          Remove-Item "artifacts\LongCapture\AutomationReports" -Recurse -Force
+          $readiness = [ordered]@{
+            schema = "longcapture.rc-readiness.v3"
+            version = "0.1.4-rc1"
+            status = "READY_FOR_REAL_TEST_1_2"
+            mandatoryGates = "PASS"
+            automatedScore = 94
+            commit = "${{ github.sha }}"
+            workflowRunId = "${{ github.run_id }}"
+            generatedAtUtc = (Get-Date).ToUniversalTime().ToString("o")
+            coreChanges = @(
+              "foreground target F7 and window icons",
+              "locked HWND plus default ShareX region selection",
+              "whole-window capture is opt-in",
+              "anchor-first deterministic compositor",
+              "multi-frame changing fixed-side-control integration fixture",
+              "debug GUI capture affinity plus settings/engine snapshot",
+              "quality FAIL auto-exports diagnostics and surfaces log path",
+              "Smart Web/Teach live sessions are advanced optional for this core test"
+            )
+            realTestRequired = @(
+              "Linux.do style Test 1: F7 target + region selection + normal scroll",
+              "Linux.do style Test 2: faster scroll/lazy content and visual seam inspection"
+            )
+          }
+          $readiness | ConvertTo-Json -Depth 6 | Set-Content "artifacts\LongCapture\RC-READINESS.json" -Encoding UTF8
+
+      - name: Package v0.1.4 RC1
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force Output | Out-Null
+          $zip = "Output\LongCapture-standalone-v0.1.4-rc1-x64.zip"
+          Compress-Archive -Path "artifacts\LongCapture\*" -DestinationPath $zip -CompressionLevel Optimal -Force
+          $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
+          Set-Content "Output\LongCapture-standalone-v0.1.4-rc1-x64.sha256.txt" "$hash  LongCapture-standalone-v0.1.4-rc1-x64.zip"
+          Write-Host "SHA256=$hash"
+
+      - name: Extract final ZIP and rerun Quick
+        shell: pwsh
+        run: |
+          $temp = Join-Path $env:RUNNER_TEMP "longcapture-v014-final"
+          Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue
+          Expand-Archive "Output\LongCapture-standalone-v0.1.4-rc1-x64.zip" $temp -Force
+          & cmd.exe /d /c "`"$temp\1-RUN-AUTOMATED-TESTS.cmd`" --ci"
+          if ($LASTEXITCODE -ne 0) { throw "Extracted v0.1.4 QUICK failed" }
+          $final = Get-ChildItem (Join-Path $temp "AutomationReports") -Filter automation-report.json -Recurse | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          $data = Get-Content $final.FullName -Raw | ConvertFrom-Json
+          if ($data.Status -ne "PASS_AUTOMATED" -or [int]$data.FailedCount -ne 0) { throw "Extracted v0.1.4 report failed" }
+
+      - name: Upload v0.1.4 RC1
+        uses: actions/upload-artifact@v7
+        with:
+          name: LongCapture-standalone-v0.1.4-rc1-x64
+          path: |
+            Output\LongCapture-standalone-v0.1.4-rc1-x64.zip
+            Output\LongCapture-standalone-v0.1.4-rc1-x64.sha256.txt

@@ -5,16 +5,21 @@ on:
     branches:
       - "**"
 
+concurrency:
+  group: sharex-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
   build:
     name: Build
-    runs-on: windows-latest
+    runs-on: windows-2025
 
     strategy:
       fail-fast: false
+      max-parallel: 3
       matrix:
         configuration:
           - Release
@@ -37,10 +42,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v5
-        with:
-          dotnet-version: 9.0.x
+      - name: Verify preinstalled .NET 10
+        shell: pwsh
+        run: |
+          $sdks = @(dotnet --list-sdks)
+          $sdks | ForEach-Object { Write-Host $_ }
+          if (-not ($sdks | Where-Object { $_ -match '^10\.0\.' })) {
+            throw "GitHub runner does not expose a .NET 10 SDK."
+          }
+          dotnet --version
 
       - name: Set PLATFORM & RUNTIME_ID
         run: |

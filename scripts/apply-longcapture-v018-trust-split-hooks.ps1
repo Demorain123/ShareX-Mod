@@ -21,6 +21,7 @@ function Replace-Literal {
 $manager = Join-Path $repoRoot "ShareX.ScreenCaptureLib\ScrollingCaptureManager.cs"
 $automation = Join-Path $repoRoot "LongCapture.Standalone\AutomationTestRunner.cs"
 $qualitySummary = Join-Path $repoRoot "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModFinalQualitySummary.cs"
+$replayDiagnostics = Join-Path $repoRoot "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModReplayDiagnostics.cs"
 
 # Reset v0.1.8 state together with the previous-generation state. The v0.1.6 compositor is no
 # longer used for pixels but is reset so its legacy telemetry cannot leak between test sessions.
@@ -284,6 +285,103 @@ Replace-Literal -Path $qualitySummary `
 '@ `
   -Marker 'trustSplitV018.PixelOverlayRepairEnabled'
 
+# Offline replay must exercise the same v0.1.8 transition and append-only compositor used live.
+Replace-Literal -Path $replayDiagnostics `
+  -Old @'
+        using var replay = new ShareXModDelayedCompositorV016.Session();
+        ShareXModAnchorContinuityV017.ResetLive();
+'@ `
+  -New @'
+        using var replay = new ShareXModTrustSplitCompositorV018.Session();
+        ShareXModAnchorContinuityV017.ResetLive();
+        ShareXModTransitionResolverV018.ResetLive();
+'@ `
+  -Marker 'using var replay = new ShareXModTrustSplitCompositorV018.Session();'
+
+Replace-Literal -Path $replayDiagnostics `
+  -Old @'
+                int delta = 0;
+                if (recordedResolutions.TryGetValue(i, out int savedResolution) && savedResolution > 0)
+                {
+                    delta = savedResolution;
+                }
+                else if (recordedAnchors.TryGetValue(i, out int savedAnchor) && savedAnchor > 0)
+                {
+                    delta = savedAnchor;
+                    ShareXModAnchorContinuityV017.TryResolve(previous, current, true,
+                        new ShareXModAnchorMatch(savedAnchor, 0, 3), out _, out _, out _);
+                }
+                else if (!ShareXModAnchorContinuityV017.TryResolve(previous, current, false, default,
+                             out delta, out _, out _))
+                {
+                    throw new InvalidOperationException($"Replay could not safely resolve scroll delta for frame {i}; legacy mosaic fallback is intentionally disabled.");
+                }
+
+                if (delta <= 0 || delta >= current.Height)
+                    throw new InvalidOperationException($"Replay resolved invalid scroll delta for frame {i}: {delta}.");
+
+                Bitmap? next = replay.TryAppend(result, previous, current, delta);
+                if (next is null) throw new InvalidOperationException($"Replay compositor rejected frame {i} with delta={delta}.");
+                result.Dispose();
+                result = next;
+                previous.Dispose();
+                previous = (Bitmap)current.Clone();
+'@ `
+  -New @'
+                int delta = 0;
+                bool holdReliableReference = false;
+                if (recordedResolutions.TryGetValue(i, out int savedResolution) && savedResolution > 0)
+                {
+                    delta = savedResolution;
+                }
+                else
+                {
+                    bool hasSavedAnchor = recordedAnchors.TryGetValue(i, out int savedAnchor) && savedAnchor > 0;
+                    ShareXModAnchorMatch replayAnchor = hasSavedAnchor
+                        ? new ShareXModAnchorMatch(savedAnchor, 0, 3)
+                        : default;
+                    bool resolved = ShareXModTransitionResolverV018.TryResolve(
+                        previous, current, hasSavedAnchor, replayAnchor,
+                        out delta, out string replaySource, out double replayScore, out holdReliableReference);
+                    if (!resolved)
+                    {
+                        if (holdReliableReference) continue;
+                        throw new InvalidOperationException($"Replay could not safely resolve frame {i}; source={replaySource}, score={replayScore:F2}. Legacy mosaic fallback is disabled.");
+                    }
+                }
+
+                if (delta <= 0 || delta >= current.Height)
+                    throw new InvalidOperationException($"Replay resolved invalid scroll delta for frame {i}: {delta}.");
+
+                Bitmap? next = replay.TryAppend(result, previous, current, delta);
+                if (next is null) throw new InvalidOperationException($"Replay compositor rejected frame {i} with delta={delta}.");
+                result.Dispose();
+                result = next;
+                previous.Dispose();
+                previous = (Bitmap)current.Clone();
+'@ `
+  -Marker 'bool holdReliableReference = false;'
+
+Replace-Literal -Path $replayDiagnostics `
+  -Old '            outputPath ??= Path.Combine(root, $"LongCapture-Replay-v017-{DateTime.Now:yyyyMMdd-HHmmss}.png");' `
+  -New '            outputPath ??= Path.Combine(root, $"LongCapture-Replay-v018-{DateTime.Now:yyyyMMdd-HHmmss}.png");' `
+  -Marker 'LongCapture-Replay-v018-'
+
+Replace-Literal -Path $replayDiagnostics `
+  -Old '                version = "0.1.7",' `
+  -New '                version = "0.1.8",' `
+  -Marker 'version = "0.1.8",'
+
+Replace-Literal -Path $replayDiagnostics `
+  -Old @'
+            ShareXModAnchorContinuityV017.ResetLive();
+'@ `
+  -New @'
+            ShareXModTransitionResolverV018.ResetLive();
+            ShareXModAnchorContinuityV017.ResetLive();
+'@ `
+  -Marker 'ShareXModTransitionResolverV018.ResetLive();'
+
 Replace-Literal -Path $automation `
   -Old '        "ShareX.ScreenCaptureLib.ShareXModV017AnchorContinuitySelfTests",' `
   -New @'
@@ -293,8 +391,6 @@ Replace-Literal -Path $automation `
   -Marker '"ShareX.ScreenCaptureLib.ShareXModV018TrustSplitSelfTests",'
 
 # Structural invariants matter more than comments/tests that merely claim fail-closed behavior.
-# Apply-chain CI and local CheckOnly both reject any generated manager that still exposes the old
-# fallback or destructive v0.1.6 compositor as a live output path.
 if (-not $CheckOnly) {
     $managerText = [IO.File]::ReadAllText($manager)
     foreach ($forbidden in @(

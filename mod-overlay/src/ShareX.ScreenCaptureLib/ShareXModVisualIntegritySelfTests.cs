@@ -5,7 +5,6 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
-using System.Linq;
 
 namespace ShareX.ScreenCaptureLib;
 
@@ -212,7 +211,7 @@ internal static class ShareXModVisualIntegritySelfTests
         graphics.FillRectangle(Brushes.White, rect);
         for (int x = rect.Left; x < rect.Right; x += 8)
         {
-            using Brush brush = ((x - rect.Left) / 8) % 2 == 0 ? Brushes.Black : Brushes.LightGray;
+            Brush brush = ((x - rect.Left) / 8) % 2 == 0 ? Brushes.Black : Brushes.LightGray;
             graphics.FillRectangle(brush, x, rect.Top, Math.Min(8, rect.Right - x), rect.Height);
         }
         graphics.DrawRectangle(Pens.Black, rect.Left, rect.Top, rect.Width - 1, rect.Height - 1);

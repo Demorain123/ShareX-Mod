@@ -25,6 +25,7 @@ internal static class ShareXModPaginationIntentSelfTests
         AssertNotNext(Locator("A", "", "", "link", "", "", "Next.js", "/docs", ""), "Next.js");
         AssertNotNext(Locator("BUTTON", "", "", "button", "", "", "Next comment", "", ""), "Next comment");
         AssertNotNext(Locator("BUTTON", "", "", "button", "", "", "Next image", "", ""), "Next image");
+        AssertNotNext(Locator("BUTTON", "", "", "button", "", "", "Next slide", "", ""), "Next slide");
         AssertNotNext(Locator("A", "whats-next", "", "link", "", "", "What's next?", "/future", ""), "What's next");
         AssertNotNext(Locator("DIV", "", "", "", "", "", "Next page", "", ""), "non-interactive Next page text");
         AssertNotNext(Locator("BUTTON", "", "", "button", "", "", "Go next", "", ""), "ambiguous Go next");

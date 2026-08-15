@@ -34,6 +34,7 @@ function Replace-Literal {
 $ui = Join-Path $repoRoot "LongCapture.Standalone\StandaloneUiPolish.cs"
 $program = Join-Path $repoRoot "LongCapture.Standalone\Program.cs"
 $manager = Join-Path $repoRoot "ShareX.ScreenCaptureLib\ScrollingCaptureManager.cs"
+$settle = Join-Path $repoRoot "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModAdaptiveSettleV042.cs"
 
 # v0.1.3 added Export diagnostics after the original UI hardening was written. Preserve every
 # auxiliary action button instead of assuming there can only ever be one non-capture button.
@@ -213,6 +214,14 @@ Replace-Literal -Path $manager `
                             {
 '@ `
     -Marker "TryRepairPreviousResultTail("
+
+# The 54px settle probe previously used 6px-high bottom tiles, leaving only about three vertical
+# sampling bands. Refine to 3px so a mostly-unloaded lower viewport cannot be accepted merely
+# because one coarse band straddles already-loaded content.
+Replace-Literal -Path $settle `
+    -Old "            const int tileHeight = 6;" `
+    -New "            const int tileHeight = 3;" `
+    -Marker "const int tileHeight = 3;"
 
 if ($CheckOnly) {
     Write-Host "LongCapture v0.1.3 RC hardening compatibility passed." -ForegroundColor Green

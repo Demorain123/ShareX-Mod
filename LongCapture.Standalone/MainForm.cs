@@ -18,7 +18,14 @@ internal sealed class MainForm : Form
     private const uint VK_F8 = 0x77;
 
     private readonly Label statusLabel = new();
+    private readonly Label readinessLabel = new();
+    private readonly Label qualityLabel = new();
     private readonly Button captureButton = new();
+    private readonly Button browserButton = new();
+    private readonly Button reviewButton = new();
+    private readonly Button browseRecipeButton = new();
+    private readonly ComboBox modeSelector = new();
+    private readonly TextBox recipePath = new();
     private readonly NumericUpDown startDelay = new();
     private readonly NumericUpDown scrollDelay = new();
     private readonly NumericUpDown scrollAmount = new();
@@ -45,24 +52,24 @@ internal sealed class MainForm : Form
 
         Text = "LongCapture Standalone v0.1-dev";
         StartPosition = FormStartPosition.CenterScreen;
-        MinimumSize = new Size(720, 520);
-        Size = new Size(800, 600);
+        MinimumSize = new Size(760, 690);
+        Size = new Size(900, 760);
         Font = new Font("Segoe UI", 10F);
 
         var title = new Label
         {
             Text = "LongCapture",
             Dock = DockStyle.Top,
-            Height = 60,
+            Height = 58,
             Font = new Font("Segoe UI Semibold", 22F),
-            Padding = new Padding(18, 12, 0, 0)
+            Padding = new Padding(18, 10, 0, 0)
         };
 
         var subtitle = new Label
         {
-            Text = "Independent scrolling capture — ShareX capture engine, no ShareX.exe launch required",
+            Text = "Independent long screenshot workspace — ShareX capture engine, quality guard, Smart Web and Capture Recipes",
             Dock = DockStyle.Top,
-            Height = 38,
+            Height = 42,
             Padding = new Padding(20, 0, 0, 8)
         };
 
@@ -71,12 +78,51 @@ internal sealed class MainForm : Form
             Dock = DockStyle.Fill,
             Padding = new Padding(20),
             ColumnCount = 2,
-            RowCount = 8
+            RowCount = 12
         };
         body.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 180));
         body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        for (int i = 0; i < 7; i++) body.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+        for (int i = 0; i < 11; i++) body.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
         body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        modeSelector.DropDownStyle = ComboBoxStyle.DropDownList;
+        modeSelector.Items.AddRange(new object[]
+        {
+            "Normal Long Capture",
+            "Smart Web Capture",
+            "Teach Capture",
+            "Run Recipe"
+        });
+        modeSelector.SelectedIndex = 0;
+        modeSelector.Dock = DockStyle.Fill;
+        modeSelector.SelectionChangeCommitted += async (_, _) => await RefreshModeUiAsync();
+
+        browserButton.Text = "Open Capture Browser";
+        browserButton.Dock = DockStyle.Left;
+        browserButton.Width = 175;
+        browserButton.Click += async (_, _) => await LaunchCaptureBrowserAsync();
+
+        var readinessPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false };
+        var probeButton = new Button { Text = "Check readiness", Width = 130, Height = 32 };
+        probeButton.Click += async (_, _) => await RefreshReadinessAsync(showDialogOnFailure: false);
+        readinessLabel.AutoSize = true;
+        readinessLabel.Padding = new Padding(8, 7, 0, 0);
+        readinessPanel.Controls.Add(probeButton);
+        readinessPanel.Controls.Add(readinessLabel);
+
+        recipePath.Dock = DockStyle.Fill;
+        recipePath.PlaceholderText = "Latest recipe is selected automatically";
+        recipePath.Text = LongCaptureStandaloneBridge.GetLatestRecipePath();
+
+        var recipePanel = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false };
+        browseRecipeButton.Text = "Browse recipe";
+        browseRecipeButton.Width = 120;
+        browseRecipeButton.Click += (_, _) => BrowseRecipe();
+        reviewButton.Text = "Review / approve";
+        reviewButton.Width = 140;
+        reviewButton.Click += (_, _) => ReviewRecipe();
+        recipePanel.Controls.Add(browseRecipeButton);
+        recipePanel.Controls.Add(reviewButton);
 
         startDelay.Minimum = 0;
         startDelay.Maximum = 10000;
@@ -109,7 +155,7 @@ internal sealed class MainForm : Form
         outputLabel.TextAlign = ContentAlignment.MiddleLeft;
 
         captureButton.Text = "Start long capture   (F8)";
-        captureButton.Height = 54;
+        captureButton.Height = 56;
         captureButton.Dock = DockStyle.Top;
         captureButton.Font = new Font("Segoe UI Semibold", 12F);
         captureButton.Click += async (_, _) => await ToggleCaptureAsync();
@@ -117,17 +163,31 @@ internal sealed class MainForm : Form
         var openOutputButton = new Button { Text = "Open output folder", Dock = DockStyle.Left, Width = 150 };
         openOutputButton.Click += (_, _) => OpenOutputDirectory();
 
-        AddRow(body, 0, "Start delay (ms)", startDelay);
-        AddRow(body, 1, "Scroll settle (ms)", scrollDelay);
-        AddRow(body, 2, "Scroll amount", scrollAmount);
-        AddRow(body, 3, "Scroll method", scrollMethod);
-        AddRow(body, 4, "Start position", autoScrollTop);
-        AddRow(body, 5, "Output", outputLabel);
-        AddRow(body, 6, "", openOutputButton);
+        qualityLabel.Text = "Quality: waiting for a capture.";
+        qualityLabel.Dock = DockStyle.Fill;
+        qualityLabel.AutoEllipsis = true;
+        qualityLabel.TextAlign = ContentAlignment.MiddleLeft;
 
-        var actionPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 18, 0, 0) };
+        AddRow(body, 0, "Capture mode", modeSelector);
+        AddRow(body, 1, "Browser", browserButton);
+        AddRow(body, 2, "Readiness", readinessPanel);
+        AddRow(body, 3, "Recipe", recipePath);
+        AddRow(body, 4, "Recipe actions", recipePanel);
+        AddRow(body, 5, "Start delay (ms)", startDelay);
+        AddRow(body, 6, "Scroll settle (ms)", scrollDelay);
+        AddRow(body, 7, "Scroll amount", scrollAmount);
+        AddRow(body, 8, "Scroll method", scrollMethod);
+        AddRow(body, 9, "Start position", autoScrollTop);
+        AddRow(body, 10, "Output", outputLabel);
+
+        var actionPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 12, 0, 0) };
+        qualityLabel.Dock = DockStyle.Bottom;
+        qualityLabel.Height = 36;
+        openOutputButton.Location = new Point(0, 8);
+        actionPanel.Controls.Add(openOutputButton);
+        actionPanel.Controls.Add(qualityLabel);
         actionPanel.Controls.Add(captureButton);
-        body.Controls.Add(actionPanel, 0, 7);
+        body.Controls.Add(actionPanel, 0, 11);
         body.SetColumnSpan(actionPanel, 2);
 
         statusLabel.Text = "Ready. Press F8 or click Start long capture.";
@@ -148,6 +208,8 @@ internal sealed class MainForm : Form
         Controls.Add(subtitle);
         Controls.Add(title);
         Controls.Add(statusLabel);
+
+        Shown += async (_, _) => await RefreshModeUiAsync();
     }
 
     protected override void OnHandleCreated(EventArgs e)
@@ -174,14 +236,8 @@ internal sealed class MainForm : Form
     {
         if (m.Msg == WM_HOTKEY && m.WParam.ToInt32() == HotkeyId)
         {
-            if (captureBusy)
-            {
-                RequestStop();
-            }
-            else
-            {
-                BeginInvoke(new Action(() => _ = ToggleCaptureAsync()));
-            }
+            if (captureBusy) RequestStop();
+            else BeginInvoke(new Action(() => _ = ToggleCaptureAsync()));
             return;
         }
         base.WndProc(ref m);
@@ -198,6 +254,14 @@ internal sealed class MainForm : Form
         base.Dispose(disposing);
     }
 
+    private LongCaptureStandaloneMode SelectedMode => modeSelector.SelectedIndex switch
+    {
+        1 => LongCaptureStandaloneMode.SmartWeb,
+        2 => LongCaptureStandaloneMode.Teach,
+        3 => LongCaptureStandaloneMode.RunRecipe,
+        _ => LongCaptureStandaloneMode.Normal
+    };
+
     private static void AddRow(TableLayoutPanel body, int row, string label, Control control)
     {
         body.Controls.Add(new Label
@@ -209,6 +273,110 @@ internal sealed class MainForm : Form
         body.Controls.Add(control, 1, row);
     }
 
+    private async Task RefreshModeUiAsync()
+    {
+        LongCaptureStandaloneMode mode = SelectedMode;
+        bool browserMode = mode != LongCaptureStandaloneMode.Normal;
+        bool recipeMode = mode is LongCaptureStandaloneMode.Teach or LongCaptureStandaloneMode.RunRecipe;
+        bool runMode = mode == LongCaptureStandaloneMode.RunRecipe;
+
+        browserButton.Enabled = browserMode && !captureBusy;
+        recipePath.Enabled = runMode && !captureBusy;
+        browseRecipeButton.Enabled = runMode && !captureBusy;
+        reviewButton.Enabled = runMode && !captureBusy;
+
+        if (recipeMode && string.IsNullOrWhiteSpace(recipePath.Text))
+        {
+            recipePath.Text = LongCaptureStandaloneBridge.GetLatestRecipePath();
+        }
+
+        LongCaptureStandaloneBridge.ConfigureMode(mode, runMode ? recipePath.Text : null);
+        await RefreshReadinessAsync(showDialogOnFailure: false);
+    }
+
+    private async Task<bool> RefreshReadinessAsync(bool showDialogOnFailure)
+    {
+        LongCaptureStandaloneMode mode = SelectedMode;
+        string? recipe = mode == LongCaptureStandaloneMode.RunRecipe ? recipePath.Text : null;
+        LongCaptureStandaloneReadiness readiness = await LongCaptureStandaloneBridge.ProbeAsync(mode, recipe);
+        readinessLabel.Text = readiness.Ready ? "Ready · " + readiness.Detail : "Not ready · " + readiness.Detail;
+
+        if (!string.IsNullOrWhiteSpace(readiness.RecipePath) && mode == LongCaptureStandaloneMode.RunRecipe)
+        {
+            recipePath.Text = readiness.RecipePath;
+        }
+
+        if (!readiness.Ready && showDialogOnFailure)
+        {
+            MessageBox.Show(this,
+                readiness.Detail + "\n\nFor Smart Web / Teach / Run Recipe, open the Capture Browser first and navigate to the page you want to capture.",
+                "LongCapture is not ready for this mode",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
+
+        return readiness.Ready;
+    }
+
+    private async Task LaunchCaptureBrowserAsync()
+    {
+        browserButton.Enabled = false;
+        readinessLabel.Text = "Starting Capture Browser...";
+        try
+        {
+            LongCaptureBrowserLaunchResult result = await LongCaptureStandaloneBridge.LaunchCaptureBrowserAsync();
+            readinessLabel.Text = result.Started ? "Capture Browser ready · " + result.Detail : "Capture Browser failed · " + result.Detail;
+            if (!result.Started)
+            {
+                MessageBox.Show(this, result.Detail, "Capture Browser", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            else
+            {
+                await Task.Delay(250);
+                await RefreshReadinessAsync(showDialogOnFailure: false);
+            }
+        }
+        finally
+        {
+            browserButton.Enabled = SelectedMode != LongCaptureStandaloneMode.Normal && !captureBusy;
+        }
+    }
+
+    private void BrowseRecipe()
+    {
+        using var dialog = new OpenFileDialog
+        {
+            Filter = "Capture Recipe (capture-recipe.json)|capture-recipe.json|JSON files (*.json)|*.json|All files (*.*)|*.*",
+            CheckFileExists = true,
+            Title = "Select Capture Recipe"
+        };
+        if (dialog.ShowDialog(this) == DialogResult.OK)
+        {
+            recipePath.Text = dialog.FileName;
+            LongCaptureStandaloneBridge.ConfigureMode(LongCaptureStandaloneMode.RunRecipe, dialog.FileName);
+            _ = RefreshReadinessAsync(showDialogOnFailure: false);
+        }
+    }
+
+    private void ReviewRecipe()
+    {
+        string path = recipePath.Text;
+        if (string.IsNullOrWhiteSpace(path)) path = LongCaptureStandaloneBridge.GetLatestRecipePath();
+        LongCaptureRecipeReviewInfo? info = LongCaptureStandaloneBridge.LoadRecipeReview(path);
+        if (info is null)
+        {
+            MessageBox.Show(this, "No valid Capture Recipe could be loaded.", "Recipe review", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        using var review = new RecipeReviewForm(info);
+        if (review.ShowDialog(this) == DialogResult.OK)
+        {
+            recipePath.Text = info.RecipePath;
+            _ = RefreshReadinessAsync(showDialogOnFailure: false);
+        }
+    }
+
     private async Task ToggleCaptureAsync()
     {
         if (captureBusy)
@@ -217,10 +385,19 @@ internal sealed class MainForm : Form
             return;
         }
 
+        LongCaptureStandaloneMode mode = SelectedMode;
+        if (!await RefreshReadinessAsync(showDialogOnFailure: true)) return;
+
+        LongCaptureStandaloneBridge.ConfigureMode(
+            mode,
+            mode == LongCaptureStandaloneMode.RunRecipe ? recipePath.Text : null);
+
         captureBusy = true;
         SetControlsEnabled(false);
         captureButton.Text = "Stop capture   (F8)";
-        statusLabel.Text = "Select the scrolling window or region...";
+        statusLabel.Text = mode == LongCaptureStandaloneMode.Normal
+            ? "Select the scrolling window or region..."
+            : "Select the Capture Browser window or desired capture region...";
 
         var options = new ScrollingCaptureOptions
         {
@@ -269,6 +446,14 @@ internal sealed class MainForm : Form
 
             ShowMainWindow();
 
+            if (mode == LongCaptureStandaloneMode.Teach)
+            {
+                string latest = LongCaptureStandaloneBridge.GetLatestRecipePath();
+                if (!string.IsNullOrWhiteSpace(latest)) recipePath.Text = latest;
+            }
+
+            UpdateQualityLabel();
+
             if (savedPath is not null && resultSize.HasValue)
             {
                 statusLabel.Text = $"{status}: {resultSize.Value.Width} × {resultSize.Value.Height}px — {savedPath}";
@@ -293,7 +478,16 @@ internal sealed class MainForm : Form
             captureBusy = false;
             captureButton.Text = "Start long capture   (F8)";
             SetControlsEnabled(true);
+            await RefreshModeUiAsync();
         }
+    }
+
+    private void UpdateQualityLabel()
+    {
+        LongCaptureQualityInfo? quality = LongCaptureStandaloneBridge.FindLatestQualityInfo();
+        qualityLabel.Text = quality is null
+            ? "Quality: no quality summary was produced for this capture."
+            : $"Quality: {quality.Status} / {quality.Confidence} · integrity {quality.IntegrityScore}/100 · {quality.SummaryPath}";
     }
 
     private void RequestStop()
@@ -307,11 +501,26 @@ internal sealed class MainForm : Form
 
     private void SetControlsEnabled(bool enabled)
     {
+        modeSelector.Enabled = enabled;
         startDelay.Enabled = enabled;
         scrollDelay.Enabled = enabled;
         scrollAmount.Enabled = enabled;
         scrollMethod.Enabled = enabled;
         autoScrollTop.Enabled = enabled;
+        if (enabled)
+        {
+            browserButton.Enabled = SelectedMode != LongCaptureStandaloneMode.Normal;
+            recipePath.Enabled = SelectedMode == LongCaptureStandaloneMode.RunRecipe;
+            browseRecipeButton.Enabled = SelectedMode == LongCaptureStandaloneMode.RunRecipe;
+            reviewButton.Enabled = SelectedMode == LongCaptureStandaloneMode.RunRecipe;
+        }
+        else
+        {
+            browserButton.Enabled = false;
+            recipePath.Enabled = false;
+            browseRecipeButton.Enabled = false;
+            reviewButton.Enabled = false;
+        }
     }
 
     private void ShowMainWindow()

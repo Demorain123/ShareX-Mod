@@ -115,7 +115,9 @@ internal static class ShareXModCaptureRecipeCompiler
         foreach (ShareXModRecipeRawEvent item in ordered)
         {
             bool newDocumentPage = item.Kind.Equals("page", StringComparison.OrdinalIgnoreCase);
-            if (newDocumentPage && current.Any(x => !x.Kind.Equals("page", StringComparison.OrdinalIgnoreCase)))
+            if (newDocumentPage && current.Any(x =>
+                    !x.Kind.Equals("page", StringComparison.OrdinalIgnoreCase) &&
+                    !x.Kind.Equals("anchor-snapshot", StringComparison.OrdinalIgnoreCase)))
             {
                 Flush();
             }
@@ -244,10 +246,9 @@ internal static class ShareXModCaptureRecipeCompiler
                 continue;
             }
 
-            if (item.Kind.Equals("page", StringComparison.OrdinalIgnoreCase))
+            if (item.Kind.Equals("page", StringComparison.OrdinalIgnoreCase) ||
+                item.Kind.Equals("anchor-snapshot", StringComparison.OrdinalIgnoreCase))
             {
-                // A DOMContentLoaded page sample can fill anchors missing from the very early
-                // addScriptToEvaluateOnNewDocument sample without creating another range.
                 if (verticalStartAnchor == null) CaptureStartAnchor(item);
                 if (verticalEndAnchor == null) CaptureEndAnchor(item);
                 continue;

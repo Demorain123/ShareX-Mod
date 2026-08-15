@@ -388,7 +388,7 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
       role: el.getAttribute('role') || '',
       ariaLabel: el.getAttribute('aria-label') || '',
       name: el.getAttribute('name') || '',
-      text: cleanText(el.innerText || el.textContent || ''),
+      text: cleanText(el.textContent || ''),
       href: el.href || el.getAttribute('href') || '',
       rel: el.getAttribute('rel') || '',
       type: el.getAttribute('type') || '',
@@ -399,56 +399,43 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
     };
   };
 
-  // Constant-size viewport sampling: at most three x positions and a short ancestor walk for each
-  // edge. This deliberately avoids querySelectorAll/DOMSnapshot during interactive scrolling.
+  const anchorSelector = 'article,section,h1,h2,h3,h4,h5,h6,p,li,figure,figcaption,img,table,blockquote,pre,details,summary,a,button,[data-testid],[data-test-id],[data-test],[role],[aria-label],[id]';
+
+  // Edge sampling is deliberately constant-size. For each boundary we inspect at most three
+  // elementFromPoint results and one closest semantic ancestor per point; there is no full-DOM scan.
   const semanticAnchorNear = viewportY => {
     const width = Math.max(1, innerWidth || document.documentElement?.clientWidth || 1);
     const height = Math.max(1, innerHeight || document.documentElement?.clientHeight || 1);
     const y = Math.max(1, Math.min(height - 2, viewportY));
-    const xs = [width * 0.20, width * 0.50, width * 0.80];
-    const semanticTags = new Set([
-      'ARTICLE','SECTION','H1','H2','H3','H4','H5','H6','P','LI','FIGURE','FIGCAPTION',
-      'IMG','TABLE','BLOCKQUOTE','PRE','DETAILS','SUMMARY','A','BUTTON'
-    ]);
-
+    const xs = [width * 0.50, width * 0.24, width * 0.76];
     let best = null;
     let bestScore = -1e9;
 
-    const consider = start => {
-      let el = start;
-      for (let depth = 0; depth < 4 && el instanceof Element; depth++, el = el.parentElement) {
-        const rect = el.getBoundingClientRect();
-        if (rect.width < 24 || rect.height < 12) continue;
-        const style = getComputedStyle(el);
-        if (style.display === 'none' || style.visibility === 'hidden' ||
-            style.position === 'fixed' || style.position === 'sticky') continue;
-
-        const info = targetInfo(el);
-        if (!info) continue;
-        const meaningful = semanticTags.has(info.tag) || info.id || info.testId || info.role ||
-                           info.ariaLabel || info.text;
-        if (!meaningful) continue;
-
-        let score = 0;
-        if (info.id) score += 45;
-        if (info.testId) score += 50;
-        if (info.role) score += 22;
-        if (info.ariaLabel) score += 28;
-        if (semanticTags.has(info.tag)) score += 18;
-        if (info.text) score += Math.min(24, 6 + info.text.length / 20);
-        score -= Math.abs((rect.top + rect.height * 0.5) - y) / 40;
-        score -= depth * 2;
-
-        if (score > bestScore) {
-          bestScore = score;
-          best = el;
-        }
-      }
-    };
-
     for (const x of xs) {
-      const stack = document.elementsFromPoint(x, y).slice(0, 8);
-      for (const el of stack) consider(el);
+      const hit = document.elementFromPoint(x, y);
+      const candidate = hit instanceof Element ? hit.closest(anchorSelector) : null;
+      if (!(candidate instanceof Element)) continue;
+
+      const rect = candidate.getBoundingClientRect();
+      if (rect.width < 24 || rect.height < 12) continue;
+      const style = getComputedStyle(candidate);
+      if (style.display === 'none' || style.visibility === 'hidden' ||
+          style.position === 'fixed' || style.position === 'sticky') continue;
+
+      const info = targetInfo(candidate);
+      if (!info) continue;
+      let score = 0;
+      if (info.testId) score += 55;
+      if (info.id) score += 48;
+      if (info.ariaLabel) score += 30;
+      if (info.role) score += 24;
+      if (info.text) score += Math.min(20, 5 + info.text.length / 24);
+      score -= Math.abs((rect.top + rect.height * 0.5) - y) / 45;
+
+      if (score > bestScore) {
+        bestScore = score;
+        best = candidate;
+      }
     }
 
     return best ? targetInfo(best) : null;
@@ -463,7 +450,13 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
   };
 
   const push = event => {
-    const anchors = viewportAnchors();
+    const shouldSample = event.kind === 'page' ||
+                         event.kind === 'anchor-snapshot' ||
+                         event.kind === 'click' ||
+                         event.isDocumentScroller === true;
+    const anchors = shouldSample
+      ? viewportAnchors()
+      : { viewportTopAnchor: null, viewportBottomAnchor: null };
     const full = {
       ...event,
       ...anchors,
@@ -489,7 +482,7 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
   push({ kind: 'page', trusted: true, isDocumentScroller: true });
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () =>
-      push({ kind: 'page', trusted: true, isDocumentScroller: true }), { once: true });
+      push({ kind: 'anchor-snapshot', trusted: true, isDocumentScroller: true }), { once: true });
   }
 
   document.addEventListener('click', event => {
@@ -512,9 +505,7 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
                                rawTarget === document.documentElement ||
                                rawTarget === document.body;
 
-    if (state.scrollTimers.has(rawTarget)) {
-      clearTimeout(state.scrollTimers.get(rawTarget));
-    }
+    if (state.scrollTimers.has(rawTarget)) clearTimeout(state.scrollTimers.get(rawTarget));
 
     const timer = setTimeout(() => {
       state.scrollTimers.delete(rawTarget);
@@ -537,7 +528,7 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
     state.scrollTimers.set(rawTarget, timer);
   }, true);
 
-  return { installed: true, maxEvents: state.maxEvents, semanticBoundarySampling: true };
+  return { installed: true, maxEvents: state.maxEvents, semanticBoundarySampling: 'constant-size-v2' };
 })()
 """;
     }

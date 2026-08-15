@@ -49,6 +49,7 @@ jobs:
             "scripts\apply-longcapture-v015-fixed-overlay-hooks.ps1",
             "scripts\apply-longcapture-v016-replay-compositor-hooks.ps1",
             "scripts\apply-longcapture-v017-anchor-continuity-hooks.ps1",
+            "scripts\apply-longcapture-v018-precut.ps1",
             "scripts\apply-longcapture-v018-trust-split-hooks.ps1",
             "scripts\apply-longcapture-v018-rc-evidence.ps1"
           )

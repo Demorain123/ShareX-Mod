@@ -92,7 +92,7 @@ internal static class CaptureTargetService
         var result = new List<CaptureTargetDescriptor>();
         int ownPid = Environment.ProcessId;
 
-        EnumWindowsProc callback = (hWnd, _) =>
+        EnumWindowsProc callback = (hWnd, lParam) =>
         {
             try
             {
@@ -100,7 +100,7 @@ internal static class CaptureTargetService
                 GetWindowThreadProcessId(hWnd, out uint rawPid);
                 if (rawPid == 0 || rawPid == ownPid) return true;
 
-                if (!TryCreateTarget(hWnd, out CaptureTargetDescriptor? target, out _)) return true;
+                if (!TryCreateTarget(hWnd, out CaptureTargetDescriptor? target, out string _detail) || target is null) return true;
                 result.Add(target);
             }
             catch

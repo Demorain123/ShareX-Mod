@@ -84,6 +84,12 @@ internal sealed class RecipeReviewForm : Form
         Controls.Add(buttons);
     }
 
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        CaptureExclusion.Apply(this, "recipe-review-form");
+    }
+
     private void StepsOnItemCheck(object? sender, ItemCheckEventArgs e)
     {
         if (e.Index < 0 || e.Index >= info.Steps.Length) return;

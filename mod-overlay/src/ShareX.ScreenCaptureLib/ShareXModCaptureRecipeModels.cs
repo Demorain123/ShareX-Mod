@@ -58,11 +58,6 @@ internal sealed record ShareXModCaptureRecipeStep(
     string[] Evidence,
     string FailurePolicy)
 {
-    // Keep Required out of the positional constructor so old recorded recipes and every existing
-    // constructor remain compatible. Requiredness is derived from semantic intent/failure policy.
-    // Page checkpoints/ranges/navigation are safety-critical. User-demonstrated expansions can be
-    // optional when their policy explicitly says to skip; horizontal content is retained unless a
-    // future recipe explicitly marks it skippable.
     [JsonIgnore]
     public bool Required => Kind switch
     {
@@ -113,4 +108,11 @@ internal sealed record ShareXModRecipeRawEvent(
     double ClientWidth,
     double ClientHeight,
     bool IsDocumentScroller,
-    bool Trusted);
+    bool Trusted)
+{
+    // These are lightweight semantic samples near the visible top/bottom edges. They are captured
+    // only from a few viewport points, not by scanning the whole DOM, and let compiled vertical
+    // ranges behave like document-relative placeholders when content above them later shifts.
+    public ShareXModRecipeLocator? ViewportTopAnchor { get; init; }
+    public ShareXModRecipeLocator? ViewportBottomAnchor { get; init; }
+}

@@ -41,10 +41,7 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
         ShareXModChromeCdpClient client,
         ShareXModV04Settings settings)
     {
-        if (!settings.CaptureRecipeRecordingEnabled)
-        {
-            return null;
-        }
+        if (!settings.CaptureRecipeRecordingEnabled) return null;
 
         try
         {
@@ -66,21 +63,16 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
 
     public async Task<string?> StopAndWriteAsync()
     {
-        if (stopped)
-        {
-            return ExistingRecipePath();
-        }
+        if (stopped) return ExistingRecipePath();
 
         stopped = true;
         pollCts.Cancel();
-
         if (pollTask != null)
         {
             try { await pollTask; } catch { }
         }
 
         try { await DrainOnceAsync(CancellationToken.None); } catch { }
-
         client.CdpEventReceived -= OnCdpEvent;
 
         try
@@ -124,7 +116,7 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
                 JsonSerializer.Serialize(new
                 {
                     format = "ShareX-Mod Capture Recipe Raw Events",
-                    version = "0.6.1-dev",
+                    version = "0.10.1-dev",
                     sessionId = ShareXModCaptureSessionContext.CurrentSessionId,
                     created = DateTimeOffset.Now,
                     delivery = "Runtime.bindingCalled with polling fallback",
@@ -144,10 +136,7 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
 
             try
             {
-                await ShareXModCaptureRecipePreflight.ValidateAsync(
-                    client,
-                    recipe,
-                    directory);
+                await ShareXModCaptureRecipePreflight.ValidateAsync(client, recipe, directory);
             }
             catch { }
 
@@ -187,10 +176,7 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
 
     private void OnCdpEvent(string method, JsonElement root)
     {
-        if (!method.Equals("Runtime.bindingCalled", StringComparison.Ordinal))
-        {
-            return;
-        }
+        if (!method.Equals("Runtime.bindingCalled", StringComparison.Ordinal)) return;
 
         try
         {
@@ -203,21 +189,13 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
             }
 
             string? payload = payloadElement.GetString();
-            if (string.IsNullOrWhiteSpace(payload))
-            {
-                return;
-            }
+            if (string.IsNullOrWhiteSpace(payload)) return;
 
             using JsonDocument json = JsonDocument.Parse(payload);
             ShareXModRecipeRawEvent? parsed = ParseRaw(json.RootElement);
-            if (parsed != null)
-            {
-                AddEvent(parsed);
-            }
+            if (parsed != null) AddEvent(parsed);
         }
-        catch
-        {
-        }
+        catch { }
     }
 
     private void AddEvent(ShareXModRecipeRawEvent item)
@@ -230,21 +208,16 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
         lock (sync)
         {
             int limit = Math.Clamp(settings.CaptureRecipeMaxRawEvents, 500, 100000);
-            if (events.Count < limit)
-            {
-                events.Add(sequenced);
-            }
+            if (events.Count < limit) events.Add(sequenced);
         }
     }
 
     private async Task PollLoopAsync(CancellationToken cancellationToken)
     {
         int interval = Math.Clamp(settings.CaptureRecipePollIntervalMs, 150, 2000);
-
         while (!cancellationToken.IsCancellationRequested)
         {
             try { await DrainOnceAsync(cancellationToken); } catch { }
-
             try
             {
                 await Task.Delay(interval, cancellationToken);
@@ -266,14 +239,8 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
 })()
 """;
 
-        using JsonDocument response = await client.EvaluateAsync(
-            expression,
-            false,
-            cancellationToken);
-
-        JsonElement result = response.RootElement
-            .GetProperty("result")
-            .GetProperty("result");
+        using JsonDocument response = await client.EvaluateAsync(expression, false, cancellationToken);
+        JsonElement result = response.RootElement.GetProperty("result").GetProperty("result");
 
         if (!result.TryGetProperty("value", out JsonElement value) ||
             value.ValueKind != JsonValueKind.Array)
@@ -284,10 +251,7 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
         foreach (JsonElement item in value.EnumerateArray())
         {
             ShareXModRecipeRawEvent? parsed = ParseRaw(item);
-            if (parsed != null)
-            {
-                AddEvent(parsed);
-            }
+            if (parsed != null) AddEvent(parsed);
         }
     }
 
@@ -303,12 +267,9 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
                 return null;
             }
 
-            ShareXModRecipeLocator? target = null;
-            if (item.TryGetProperty("target", out JsonElement targetElement) &&
-                targetElement.ValueKind == JsonValueKind.Object)
-            {
-                target = ParseLocator(targetElement);
-            }
+            ShareXModRecipeLocator? target = ParseOptionalLocator(item, "target");
+            ShareXModRecipeLocator? viewportTopAnchor = ParseOptionalLocator(item, "viewportTopAnchor");
+            ShareXModRecipeLocator? viewportBottomAnchor = ParseOptionalLocator(item, "viewportBottomAnchor");
 
             return new ShareXModRecipeRawEvent(
                 0,
@@ -323,12 +284,23 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
                 GetDouble(item, "clientWidth"),
                 GetDouble(item, "clientHeight"),
                 GetBool(item, "isDocumentScroller"),
-                GetBool(item, "trusted"));
+                GetBool(item, "trusted"))
+            {
+                ViewportTopAnchor = viewportTopAnchor,
+                ViewportBottomAnchor = viewportBottomAnchor
+            };
         }
         catch
         {
             return null;
         }
+    }
+
+    private static ShareXModRecipeLocator? ParseOptionalLocator(JsonElement item, string name)
+    {
+        return item.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.Object
+            ? ParseLocator(value)
+            : null;
     }
 
     private static ShareXModRecipePageState ParsePage(JsonElement item)
@@ -359,16 +331,7 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
         string type = GetString(item, "type");
 
         return new ShareXModRecipeLocator(
-            tag,
-            id,
-            testId,
-            role,
-            aria,
-            name,
-            text,
-            href,
-            rel,
-            type,
+            tag, id, testId, role, aria, name, text, href, rel, type,
             GetDouble(item, "documentX"),
             GetDouble(item, "documentY"),
             GetDouble(item, "width"),
@@ -436,9 +399,74 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
     };
   };
 
+  // Constant-size viewport sampling: at most three x positions and a short ancestor walk for each
+  // edge. This deliberately avoids querySelectorAll/DOMSnapshot during interactive scrolling.
+  const semanticAnchorNear = viewportY => {
+    const width = Math.max(1, innerWidth || document.documentElement?.clientWidth || 1);
+    const height = Math.max(1, innerHeight || document.documentElement?.clientHeight || 1);
+    const y = Math.max(1, Math.min(height - 2, viewportY));
+    const xs = [width * 0.20, width * 0.50, width * 0.80];
+    const semanticTags = new Set([
+      'ARTICLE','SECTION','H1','H2','H3','H4','H5','H6','P','LI','FIGURE','FIGCAPTION',
+      'IMG','TABLE','BLOCKQUOTE','PRE','DETAILS','SUMMARY','A','BUTTON'
+    ]);
+
+    let best = null;
+    let bestScore = -1e9;
+
+    const consider = start => {
+      let el = start;
+      for (let depth = 0; depth < 4 && el instanceof Element; depth++, el = el.parentElement) {
+        const rect = el.getBoundingClientRect();
+        if (rect.width < 24 || rect.height < 12) continue;
+        const style = getComputedStyle(el);
+        if (style.display === 'none' || style.visibility === 'hidden' ||
+            style.position === 'fixed' || style.position === 'sticky') continue;
+
+        const info = targetInfo(el);
+        if (!info) continue;
+        const meaningful = semanticTags.has(info.tag) || info.id || info.testId || info.role ||
+                           info.ariaLabel || info.text;
+        if (!meaningful) continue;
+
+        let score = 0;
+        if (info.id) score += 45;
+        if (info.testId) score += 50;
+        if (info.role) score += 22;
+        if (info.ariaLabel) score += 28;
+        if (semanticTags.has(info.tag)) score += 18;
+        if (info.text) score += Math.min(24, 6 + info.text.length / 20);
+        score -= Math.abs((rect.top + rect.height * 0.5) - y) / 40;
+        score -= depth * 2;
+
+        if (score > bestScore) {
+          bestScore = score;
+          best = el;
+        }
+      }
+    };
+
+    for (const x of xs) {
+      const stack = document.elementsFromPoint(x, y).slice(0, 8);
+      for (const el of stack) consider(el);
+    }
+
+    return best ? targetInfo(best) : null;
+  };
+
+  const viewportAnchors = () => {
+    const h = Math.max(1, innerHeight || document.documentElement?.clientHeight || 1);
+    return {
+      viewportTopAnchor: semanticAnchorNear(Math.max(12, h * 0.12)),
+      viewportBottomAnchor: semanticAnchorNear(Math.max(12, h * 0.88))
+    };
+  };
+
   const push = event => {
+    const anchors = viewportAnchors();
     const full = {
       ...event,
+      ...anchors,
       time: performance.now(),
       page: pageState()
     };
@@ -459,6 +487,10 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
 
   window[key] = state;
   push({ kind: 'page', trusted: true, isDocumentScroller: true });
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () =>
+      push({ kind: 'page', trusted: true, isDocumentScroller: true }), { once: true });
+  }
 
   document.addEventListener('click', event => {
     if (!event.isTrusted) return;
@@ -505,7 +537,7 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
     state.scrollTimers.set(rawTarget, timer);
   }, true);
 
-  return { installed: true, maxEvents: state.maxEvents };
+  return { installed: true, maxEvents: state.maxEvents, semanticBoundarySampling: true };
 })()
 """;
     }
@@ -519,10 +551,7 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
     private static string ResolveDirectory()
     {
         string? root = ShareXModCaptureSessionContext.CurrentRootDirectory;
-        if (!string.IsNullOrWhiteSpace(root))
-        {
-            return Path.Combine(root, "capture-recipe");
-        }
+        if (!string.IsNullOrWhiteSpace(root)) return Path.Combine(root, "capture-recipe");
 
         return Path.Combine(
             AppContext.BaseDirectory,
@@ -546,11 +575,7 @@ internal sealed class ShareXModCaptureRecipeRecorder : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        if (!stopped)
-        {
-            await StopAndWriteAsync();
-        }
-
+        if (!stopped) await StopAndWriteAsync();
         client.CdpEventReceived -= OnCdpEvent;
         pollCts.Dispose();
     }

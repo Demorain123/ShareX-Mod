@@ -17,19 +17,27 @@ AssemblyLoadContext.Default.Resolving += (context, name) =>
 };
 
 Assembly assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(assemblyPath);
-Type type = assembly.GetType(
-    "ShareX.ScreenCaptureLib.ShareXModRecipePlannerSelfTests", throwOnError: true)!;
-MethodInfo method = type.GetMethod(
-    "RunOrThrow", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
-    ?? throw new MissingMethodException(type.FullName, "RunOrThrow");
+string[] suites =
+{
+    "ShareX.ScreenCaptureLib.ShareXModRecipePlannerSelfTests",
+    "ShareX.ScreenCaptureLib.ShareXModRecipeAnchorSelfTests"
+};
 
-try
+foreach (string suite in suites)
 {
-    object? result = method.Invoke(null, null);
-    Console.WriteLine(result?.ToString() ?? "ShareX-Mod self-tests completed.");
-}
-catch (TargetInvocationException ex) when (ex.InnerException != null)
-{
-    ExceptionDispatchInfo.Capture(ex.InnerException).Throw();
-    throw;
+    Type type = assembly.GetType(suite, throwOnError: true)!;
+    MethodInfo method = type.GetMethod(
+        "RunOrThrow", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
+        ?? throw new MissingMethodException(type.FullName, "RunOrThrow");
+
+    try
+    {
+        object? result = method.Invoke(null, null);
+        Console.WriteLine(result?.ToString() ?? suite + " completed.");
+    }
+    catch (TargetInvocationException ex) when (ex.InnerException != null)
+    {
+        ExceptionDispatchInfo.Capture(ex.InnerException).Throw();
+        throw;
+    }
 }

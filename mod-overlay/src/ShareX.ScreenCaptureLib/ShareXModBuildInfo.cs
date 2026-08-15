@@ -8,7 +8,7 @@ namespace ShareX.ScreenCaptureLib;
 
 internal static class ShareXModBuildInfo
 {
-    private const string FallbackVersion = "0.10.0-dev";
+    private const string FallbackVersion = "0.10.1-dev";
     private static readonly Lazy<string> VersionValue = new(LoadVersion);
 
     public static string Version => VersionValue.Value;

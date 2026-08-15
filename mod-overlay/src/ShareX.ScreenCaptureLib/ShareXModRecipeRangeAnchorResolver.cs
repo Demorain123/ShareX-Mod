@@ -1,7 +1,6 @@
 #nullable enable
 
 using System;
-using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
 
@@ -20,53 +19,50 @@ internal static class ShareXModRecipeRangeAnchorResolver
         ShareXModChromeCdpClient client,
         ShareXModCaptureRecipeStep step)
     {
-        if (step.Kind != ShareXModCaptureRecipeStepKind.CaptureVerticalRange ||
-            step.Locator == null)
+        if (step.Kind != ShareXModCaptureRecipeStepKind.CaptureVerticalRange || step.Locator == null)
         {
             return step;
         }
 
         double resolvedStart = step.StartY;
         double resolvedEnd = step.EndY;
+        bool startMoved = false;
+        bool endMoved = false;
 
-        ShareXModRecipeResolvedAnchor start =
-            await ResolveAsync(client, step.Locator);
-
+        ShareXModRecipeResolvedAnchor start = await ResolveAsync(client, step.Locator);
         if (start.Resolved &&
             ShareXModRecipeAnchorEvidence.TryGetStartOffset(step.Evidence, out double startOffset))
         {
             resolvedStart = Math.Max(0, start.DocumentY + startOffset);
+            startMoved = true;
         }
 
         if (ShareXModRecipeAnchorEvidence.TryGetEndAnchor(step.Evidence, out ShareXModRecipeLocator? endLocator) &&
             endLocator != null)
         {
-            ShareXModRecipeResolvedAnchor end =
-                await ResolveAsync(client, endLocator);
-
+            ShareXModRecipeResolvedAnchor end = await ResolveAsync(client, endLocator);
             if (end.Resolved &&
                 ShareXModRecipeAnchorEvidence.TryGetEndOffset(step.Evidence, out double endOffset))
             {
                 resolvedEnd = Math.Max(resolvedStart + 1, end.DocumentY + endOffset);
+                endMoved = true;
             }
         }
 
-        // Guard against a pathological locator resolving to a completely unrelated distant
-        // element. Large shifts are allowed, but the resulting range must remain sane.
+        // If only the start placeholder resolves, translate the whole recorded range by the same
+        // delta instead of combining a new start with an old absolute end coordinate.
+        if (startMoved && !endMoved)
+        {
+            double delta = resolvedStart - step.StartY;
+            resolvedEnd = Math.Max(resolvedStart + 1, step.EndY + delta);
+        }
+
         double originalLength = Math.Max(1, step.EndY - step.StartY);
         double resolvedLength = Math.Max(1, resolvedEnd - resolvedStart);
         double ratio = resolvedLength / originalLength;
+        if (ratio < 0.20 || ratio > 5.0) return step;
 
-        if (ratio < 0.20 || ratio > 5.0)
-        {
-            return step;
-        }
-
-        return step with
-        {
-            StartY = resolvedStart,
-            EndY = resolvedEnd
-        };
+        return step with { StartY = resolvedStart, EndY = resolvedEnd };
     }
 
     public static async Task<ShareXModRecipeResolvedAnchor> ResolveAsync(
@@ -125,15 +121,11 @@ internal static class ShareXModRecipeRangeAnchorResolver
     if (wantedText && currentText === wantedText) score += 48;
     else if (wantedText && currentText && (currentText.includes(wantedText) || wantedText.includes(currentText))) score += 20;
 
-    // Geometry is intentionally weak evidence. It only breaks ties between otherwise similar
-    // semantic candidates because layout shifts are exactly what anchors are meant to survive.
     const documentY = r.top + scrollY;
     const dy = Math.abs(documentY - locator.DocumentY);
     score += Math.max(0, 6 - dy / 400);
 
-    if (score > 0) {
-      candidates.push({ score, documentY, tag: el.tagName || '', text });
-    }
+    if (score > 0) candidates.push({ score, documentY, tag: el.tagName || '', text });
   }
 
   candidates.sort((a, b) => b.score - a.score);
@@ -158,9 +150,7 @@ internal static class ShareXModRecipeRangeAnchorResolver
         {
             using JsonDocument response = await client.EvaluateAsync(script, false);
             JsonElement value = response.RootElement
-                .GetProperty("result")
-                .GetProperty("result")
-                .GetProperty("value");
+                .GetProperty("result").GetProperty("result").GetProperty("value");
 
             return new ShareXModRecipeResolvedAnchor(
                 value.TryGetProperty("resolved", out JsonElement resolved) && resolved.ValueKind == JsonValueKind.True,

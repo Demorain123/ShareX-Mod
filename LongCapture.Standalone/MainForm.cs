@@ -16,6 +16,7 @@ internal sealed class MainForm : Form
     private const int WM_HOTKEY = 0x0312;
     private const uint MOD_NOREPEAT = 0x4000;
     private const uint VK_F8 = 0x77;
+    private const int CaptureUiQuietPeriodMs = 350;
     private const string ShareXPickerLabel = "ShareX region/window picker (fallback)";
 
     private readonly Label statusLabel = new();
@@ -270,6 +271,7 @@ internal sealed class MainForm : Form
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
+        CaptureExclusion.Apply(this, "main-form");
         hotkeyRegistered = RegisterHotKey(Handle, HotkeyId, MOD_NOREPEAT, VK_F8);
         if (!hotkeyRegistered)
         {
@@ -593,7 +595,12 @@ internal sealed class MainForm : Form
 
             trayStopItem.Enabled = true;
             trayIcon.Visible = true;
-            trayIcon.ShowBalloonTip(1800, "LongCapture is running", "Press F8 or use the tray menu to stop at any point.", ToolTipIcon.Info);
+
+            CaptureExclusion.ApplyToCurrentProcessTopLevelWindows("pre-capture");
+            LongCaptureLog.Info($"capture UI quiet period started delayMs={CaptureUiQuietPeriodMs}");
+            await Task.Delay(CaptureUiQuietPeriodMs);
+            CaptureExclusion.ApplyToCurrentProcessTopLevelWindows("post-quiet-pre-frame");
+            LongCaptureLog.Info($"capture UI quiet period completed delayMs={CaptureUiQuietPeriodMs}");
             LongCaptureLog.Info("capture engine start requested");
 
             ScrollingCaptureStatus status = await service.StartCaptureAsync();

@@ -35,6 +35,17 @@ internal static class Program
             return code;
         }
 
+        if (args.Any(x => string.Equals(x, "--automation-test", StringComparison.OrdinalIgnoreCase)))
+        {
+            string? reportPath = args
+                .FirstOrDefault(x => x.StartsWith("--automation-report=", StringComparison.OrdinalIgnoreCase))?
+                .Substring("--automation-report=".Length)
+                .Trim('"');
+            int code = AutomationTestRunner.Run(reportPath);
+            LongCaptureLog.Info($"--automation-test completed exitCode={code}");
+            return code;
+        }
+
         InitializeDesktopUiHosts();
         using var exclusionWatcher = CaptureExclusionWatcher.Start();
         using var form = new MainForm();
@@ -80,7 +91,7 @@ internal static class Program
         };
     }
 
-    private static void InitializeDesktopUiHosts()
+    internal static void InitializeDesktopUiHosts()
     {
         ApplicationConfiguration.Initialize();
 
@@ -92,7 +103,7 @@ internal static class Program
         LongCaptureLog.Info("WinForms and Avalonia desktop hosts initialized");
     }
 
-    private static int RunSelfTest()
+    internal static int RunSelfTest()
     {
         try
         {
@@ -294,7 +305,7 @@ internal static class Program
         }
     }
 
-    private static int RunScrollingCaptureSmokeTest()
+    internal static int RunScrollingCaptureSmokeTest()
     {
         using var target = new Form
         {

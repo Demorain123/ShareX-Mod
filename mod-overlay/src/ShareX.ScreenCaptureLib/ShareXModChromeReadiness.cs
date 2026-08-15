@@ -57,9 +57,12 @@ internal static class ShareXModChromeReadiness
                     "No Capture Browser connection · " + connection.Detail);
             }
 
-            string action = mode == ShareXModCaptureMode.RecordRecipe
-                ? "recording"
-                : "reviewed replay";
+            string action = mode switch
+            {
+                ShareXModCaptureMode.RecordRecipe => "recipe recording",
+                ShareXModCaptureMode.SmartWeb => "smart web capture",
+                _ => "reviewed recipe replay"
+            };
 
             return new ShareXModChromeReadinessResult(
                 true,

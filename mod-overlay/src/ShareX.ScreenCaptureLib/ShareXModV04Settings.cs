@@ -137,25 +137,27 @@ internal sealed partial class ShareXModV04Settings
 
     public static ShareXModV04Settings Load()
     {
+        ShareXModV04Settings settings = new();
         string path = Path.Combine(AppContext.BaseDirectory, "ShareX.Mod.v04.json");
-        if (!File.Exists(path))
+
+        if (File.Exists(path))
         {
-            return new ShareXModV04Settings();
+            try
+            {
+                string json = File.ReadAllText(path);
+                settings = JsonSerializer.Deserialize<ShareXModV04Settings>(json, new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true,
+                    ReadCommentHandling = JsonCommentHandling.Skip,
+                    AllowTrailingCommas = true
+                }) ?? new ShareXModV04Settings();
+            }
+            catch
+            {
+                settings = new ShareXModV04Settings();
+            }
         }
 
-        try
-        {
-            string json = File.ReadAllText(path);
-            return JsonSerializer.Deserialize<ShareXModV04Settings>(json, new JsonSerializerOptions
-            {
-                PropertyNameCaseInsensitive = true,
-                ReadCommentHandling = JsonCommentHandling.Skip,
-                AllowTrailingCommas = true
-            }) ?? new ShareXModV04Settings();
-        }
-        catch
-        {
-            return new ShareXModV04Settings();
-        }
+        return ShareXModCaptureModeProfile.Apply(settings);
     }
 }

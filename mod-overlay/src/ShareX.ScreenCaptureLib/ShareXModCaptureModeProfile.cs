@@ -11,9 +11,10 @@ namespace ShareX.ScreenCaptureLib;
 
 internal enum ShareXModCaptureMode
 {
-    Normal,
-    RecordRecipe,
-    RunRecipe
+    Normal = 0,
+    RecordRecipe = 1,
+    RunRecipe = 2,
+    SmartWeb = 3
 }
 
 internal sealed record ShareXModCaptureModeProfileData(
@@ -83,6 +84,13 @@ internal static class ShareXModCaptureModeProfile
         switch (profile.Mode)
         {
             case ShareXModCaptureMode.Normal:
+                settings.CaptureRecipeRecordingEnabled = false;
+                settings.CaptureRecipeAutomationEnabled = false;
+                break;
+
+            case ShareXModCaptureMode.SmartWeb:
+                settings.ChromeEnhancedEnabled = true;
+                settings.ChromeBackgroundCapture = true;
                 settings.CaptureRecipeRecordingEnabled = false;
                 settings.CaptureRecipeAutomationEnabled = false;
                 break;

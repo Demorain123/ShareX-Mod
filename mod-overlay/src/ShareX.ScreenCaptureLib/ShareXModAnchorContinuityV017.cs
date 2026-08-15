@@ -21,11 +21,10 @@ internal readonly record struct ShareXModV017AnchorTelemetry(
 
 /// <summary>
 /// Keeps every accepted transition on the same raw-frame delayed-compositor path. Direct multi-anchor
-/// evidence wins. On a rejection, a recent direct/fallback delta is tried first but must independently
-/// pass the central-body pixel validator for this exact pair. Only then do we run an unconstrained
-/// vertical search. This order prevents periodic/repeated page content from selecting a visually good
-/// but geometrically wrong alias (the first v0.1.7 QUICK deliberately caught 360px being mistaken for 532px).
-/// There is deliberately no legacy mosaic matcher fallback.
+/// evidence wins. Once a capture has a temporal scroll prior, a rejected direct anchor is allowed to
+/// search only near that prior and must validate against this exact raw-frame pair. That prevents
+/// repeated page structures from selecting a far-away visual alias. A full-range vertical fallback is
+/// used only when no prior exists yet. There is deliberately no legacy mosaic matcher fallback.
 /// </summary>
 internal static class ShareXModAnchorContinuityV017
 {
@@ -60,26 +59,46 @@ internal static class ShareXModAnchorContinuityV017
             }
 
             ShareXModRobustScrollingSettings settings = ShareXModRobustScrollingSettings.Load();
-
-            // Mouse-wheel captures are usually highly consistent over neighbouring frames. Try that
-            // known geometry first, but never trust it without validating the current raw pixels.
-            if (TryGetUsablePrior(out int prior) &&
-                ShareXModVerticalFallbackMatcher.TryValidateSpecificDelta(previous, current, settings, prior, out double priorScore))
+            bool hasPrior = TryGetUsablePrior(out int prior);
+            if (hasPrior)
             {
-                delta = prior;
-                score = priorScore;
-                source = "validated-prior";
-                priorValidatedAnchors++;
-                Remember(delta);
-                CompleteResolution(delta, source, score, true);
-                return true;
+                if (ShareXModVerticalFallbackMatcher.TryValidateSpecificDelta(previous, current, settings, prior, out double priorScore))
+                {
+                    delta = prior;
+                    score = priorScore;
+                    source = "validated-prior";
+                    priorValidatedAnchors++;
+                    Remember(delta);
+                    CompleteResolution(delta, source, score, true);
+                    return true;
+                }
+
+                if (ShareXModVerticalFallbackMatcher.TryEstimateNearDelta(previous, current, settings, prior,
+                        out int nearDelta, out double nearScore))
+                {
+                    delta = nearDelta;
+                    score = nearScore;
+                    source = "near-prior-fallback";
+                    fallbackAnchors++;
+                    Remember(delta);
+                    CompleteResolution(delta, source, score, true);
+                    return true;
+                }
+
+                // Once temporal geometry exists, a far-away full-range candidate is more likely to
+                // be a repeated-content alias than a real wheel displacement. Fail closed here.
+                unresolvedTransitions++;
+                source = "prior-neighborhood-unresolved";
+                CompleteResolution(0, source, score, false);
+                return false;
             }
 
-            if (ShareXModVerticalFallbackMatcher.TryEstimateScrollDeltaOnly(previous, current, settings, out int fallbackDelta, out double fallbackScore))
+            if (ShareXModVerticalFallbackMatcher.TryEstimateScrollDeltaOnly(previous, current, settings,
+                    out int fallbackDelta, out double fallbackScore))
             {
                 delta = fallbackDelta;
                 score = fallbackScore;
-                source = "vertical-fallback";
+                source = "bootstrap-vertical-fallback";
                 fallbackAnchors++;
                 Remember(delta);
                 CompleteResolution(delta, source, score, true);

@@ -5,8 +5,8 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
-using System.Reflection;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace LongCapture.Standalone;
@@ -16,21 +16,67 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        LongCaptureLog.Initialize();
+        RegisterGlobalExceptionLogging();
+        LongCaptureLog.Info(
+            $"process start version={StandaloneVersion.Value} runtime={Environment.Version} os={LongCaptureLog.OneLine(Environment.OSVersion.ToString())} arch={System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture} baseDir={LongCaptureLog.OneLine(AppContext.BaseDirectory)} args={LongCaptureLog.OneLine(string.Join(' ', args))}");
+
         if (args.Any(x => string.Equals(x, "--version", StringComparison.OrdinalIgnoreCase)))
         {
-            return File.Exists(Path.Combine(AppContext.BaseDirectory, "ShareX.Mod.VERSION.json")) ? 0 : 2;
+            int code = File.Exists(Path.Combine(AppContext.BaseDirectory, "ShareX.Mod.VERSION.json")) ? 0 : 2;
+            LongCaptureLog.Info($"--version completed exitCode={code}");
+            return code;
         }
 
         if (args.Any(x => string.Equals(x, "--self-test", StringComparison.OrdinalIgnoreCase)))
         {
-            return RunSelfTest();
+            int code = RunSelfTest();
+            LongCaptureLog.Info($"--self-test completed exitCode={code}");
+            return code;
         }
 
         InitializeDesktopUiHosts();
         using var form = new MainForm();
         StandaloneUiPolish.Apply(form);
+        LongCaptureLog.Info("entering WinForms message loop");
         Application.Run(form);
+        LongCaptureLog.Info("WinForms message loop exited");
         return 0;
+    }
+
+    private static void RegisterGlobalExceptionLogging()
+    {
+        Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+        Application.ThreadException += (_, e) =>
+        {
+            LongCaptureLog.Error("unhandled WinForms UI-thread exception", e.Exception);
+            try
+            {
+                MessageBox.Show(
+                    "LongCapture hit an unexpected UI error. A diagnostic log was saved. Restarting the app is recommended.\n\n" +
+                    LongCaptureLog.CurrentLogPath + "\n\n" + e.Exception.Message,
+                    "LongCapture unexpected error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
+            catch
+            {
+                // The UI itself may be compromised; the file log is the primary fallback.
+            }
+        };
+
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+        {
+            Exception? exception = e.ExceptionObject as Exception;
+            LongCaptureLog.Error(
+                $"unhandled AppDomain exception terminating={e.IsTerminating} object={LongCaptureLog.OneLine(e.ExceptionObject?.ToString())}",
+                exception);
+        };
+
+        TaskScheduler.UnobservedTaskException += (_, e) =>
+        {
+            LongCaptureLog.Error("unobserved task exception", e.Exception);
+        };
     }
 
     private static void InitializeDesktopUiHosts()
@@ -42,12 +88,16 @@ internal static class Program
         // message loop, so explicitly initialize Avalonia in its documented
         // legacy-host mode before any capture can create that overlay.
         AvaloniaBootstrapper.EnsureInitialized();
+        LongCaptureLog.Info("WinForms and Avalonia desktop hosts initialized");
     }
 
     private static int RunSelfTest()
     {
         try
         {
+            LongCaptureLog.Info("self-test started");
+            if (string.IsNullOrWhiteSpace(LongCaptureLog.CurrentLogPath) || !File.Exists(LongCaptureLog.CurrentLogPath)) return 24;
+
             string versionPath = Path.Combine(AppContext.BaseDirectory, "ShareX.Mod.VERSION.json");
             string settingsPath = Path.Combine(AppContext.BaseDirectory, "ShareX.Mod.v04.json");
             if (!File.Exists(versionPath) || !File.Exists(settingsPath)) return 10;
@@ -97,10 +147,9 @@ internal static class Program
             }
 
             // Go beyond constructor-only tests: create a real Win32 target window,
-            // inject it into the same ScrollingCaptureManager used after interactive
-            // region selection, start a real capture, then exercise the same StopCapture
-            // path used by F8. This covers overlay creation, target activation, screen
-            // capture, scroll input, result production and cleanup without human input.
+            // resolve it through the same title/HWND target service used by the GUI,
+            // bridge it into ShareX's scrolling manager, start a real capture, then
+            // exercise the same StopCapture path used by F8.
             int captureSmoke = RunScrollingCaptureSmokeTest();
             if (captureSmoke != 0) return captureSmoke;
 
@@ -112,10 +161,12 @@ internal static class Program
                 if (!StandaloneUiPolish.Validate(form, out _)) return 15;
             }
 
+            LongCaptureLog.Info("self-test passed");
             return 0;
         }
-        catch
+        catch (Exception ex)
         {
+            LongCaptureLog.Error("self-test threw an exception", ex);
             return 99;
         }
     }
@@ -141,8 +192,15 @@ internal static class Program
         target.Refresh();
         Application.DoEvents();
 
-        Rectangle targetRectangle = target.RectangleToScreen(target.ClientRectangle);
-        if (target.Handle == IntPtr.Zero || targetRectangle.IsEmpty) return 17;
+        if (target.Handle == IntPtr.Zero) return 17;
+        if (!CaptureTargetService.TryCreateTarget(target.Handle, out CaptureTargetDescriptor? captureTarget, out string targetDetail) || captureTarget is null)
+        {
+            LongCaptureLog.Warn($"self-test target discovery failed detail={LongCaptureLog.OneLine(targetDetail)}");
+            return 18;
+        }
+
+        Rectangle targetRectangle = captureTarget.Bounds;
+        if (targetRectangle.IsEmpty) return 18;
 
         using var service = new ScrollingCaptureService(new ScrollingCaptureOptions
         {
@@ -155,21 +213,13 @@ internal static class Program
             ShowRegion = true
         });
 
-        FieldInfo? managerField = typeof(ScrollingCaptureService).GetField("_manager", BindingFlags.Instance | BindingFlags.NonPublic);
-        object? manager = managerField?.GetValue(service);
-        if (manager is null) return 18;
+        if (!ScrollingCaptureTargetBridge.TryAssignTarget(service, captureTarget, out string bridgeDetail))
+        {
+            LongCaptureLog.Warn($"self-test target bridge failed detail={LongCaptureLog.OneLine(bridgeDetail)}");
+            return 19;
+        }
 
-        Type managerType = manager.GetType();
-        FieldInfo? selectedWindowField = managerType.GetField("selectedWindow", BindingFlags.Instance | BindingFlags.NonPublic);
-        FieldInfo? selectedRectangleField = managerType.GetField("selectedRectangle", BindingFlags.Instance | BindingFlags.NonPublic);
-        Type? windowInfoType = Type.GetType("ShareX.HelpersLib.WindowInfo, ShareX.HelpersLib", throwOnError: false);
-        if (selectedWindowField is null || selectedRectangleField is null || windowInfoType is null) return 19;
-
-        object? windowInfo = Activator.CreateInstance(windowInfoType, target.Handle);
-        if (windowInfo is null) return 20;
-        selectedWindowField.SetValue(manager, windowInfo);
-        selectedRectangleField.SetValue(manager, targetRectangle);
-
+        LongCaptureLog.Info($"self-test locked target assigned detail={LongCaptureLog.OneLine(bridgeDetail)}");
         var captureTask = service.StartCaptureAsync();
 
         // Let at least one frame pass through the real capture pipeline, then request

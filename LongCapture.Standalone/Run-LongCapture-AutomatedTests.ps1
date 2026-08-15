@@ -42,6 +42,51 @@ function Get-LastProgress([string]$Path) {
     }
 }
 
+function Get-MarkOfWebZoneId([string]$Path) {
+    try {
+        $stream = Get-Content -LiteralPath $Path -Stream Zone.Identifier -ErrorAction Stop
+        $zoneLine = $stream | Where-Object { $_ -match '^ZoneId=' } | Select-Object -First 1
+        if ($null -ne $zoneLine) { return $zoneLine.Trim() }
+        return 'Zone.Identifier present (ZoneId unavailable)'
+    }
+    catch {
+        return 'none-or-unavailable'
+    }
+}
+
+function Start-LongCaptureDirect([string]$ExePath, [string]$WorkingDirectory) {
+    # Start-Process normally uses the Windows shell on desktop Windows. On a freshly downloaded,
+    # unsigned portable build that shell path can be intercepted by reputation/security UI and
+    # surface Win32 ERROR_CANCELLED (1223) before LongCapture writes even its first progress marker.
+    # UseShellExecute=false goes straight through Process.Start/CreateProcess instead. This keeps
+    # the exact executable/arguments/environment used by CI while avoiding an unnecessary shell hop.
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $ExePath
+    $psi.Arguments = '--automation-test'
+    $psi.WorkingDirectory = $WorkingDirectory
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $false
+
+    try {
+        $started = [System.Diagnostics.Process]::Start($psi)
+        if ($null -eq $started) {
+            throw 'Process.Start returned null.'
+        }
+        return $started
+    }
+    catch {
+        $nativeCode = 'n/a'
+        try {
+            if ($_.Exception -is [System.ComponentModel.Win32Exception]) {
+                $nativeCode = $_.Exception.NativeErrorCode
+            }
+        }
+        catch { }
+        $zoneId = Get-MarkOfWebZoneId -Path $ExePath
+        throw "Direct LongCapture.exe launch failed. NativeErrorCode=$nativeCode; MarkOfWeb=$zoneId; $($_.Exception.Message)"
+    }
+}
+
 try {
     $profile = if ($Deep) { 'DEEP' } else { 'QUICK' }
     # Quick covers each functional area once and should be fast. A 90-second ceiling catches a
@@ -82,14 +127,14 @@ try {
     $residualProcessTerminated = $false
     $timer = [Diagnostics.Stopwatch]::StartNew()
     $exitObservedAt = $null
+    $exePath = Join-Path $root 'LongCapture.exe'
+    $markOfWeb = Get-MarkOfWebZoneId -Path $exePath
 
     try {
-        # Do NOT use Start-Process -Wait. LongCapture initializes desktop infrastructure during
-        # functional tests; the terminal automation JSON is the authoritative completion signal.
-        $process = Start-Process -FilePath (Join-Path $root 'LongCapture.exe') `
-            -ArgumentList '--automation-test' `
-            -WorkingDirectory $root `
-            -PassThru
+        # Do NOT use Start-Process here. The local downloaded-package path can be intercepted by
+        # shell reputation/security UI before the test process starts. The terminal automation JSON
+        # remains the authoritative completion signal after the direct process launch.
+        $process = Start-LongCaptureDirect -ExePath $exePath -WorkingDirectory $root
 
         while ($timer.Elapsed.TotalSeconds -lt $timeoutSeconds) {
             $report = Try-ReadCompletedReport -Path $jsonPath
@@ -167,6 +212,8 @@ try {
         "LogicalExitCode: $exitCode",
         "ProcessExitCode: $(if ($null -eq $processExitCode) { 'not-observed' } else { $processExitCode })",
         "ResidualProcessTerminated: $residualProcessTerminated",
+        "MarkOfWeb: $markOfWeb",
+        "LaunchMode: ProcessStartInfo UseShellExecute=false",
         "Status: $($report.Status)",
         "PASS: $($report.PassedCount)",
         "FAIL: $($report.FailedCount)",

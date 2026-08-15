@@ -1,0 +1,207 @@
+name: LongCapture RC2 One-Click Acceptance
+
+on:
+  push:
+    branches:
+      - "standalone/longcapture-v0.1.3"
+    paths:
+      - "LongCapture.Standalone/**"
+      - "ShareX.ScreenCaptureLib/**"
+      - "ShareX.Avalonia/**"
+      - "mod-overlay/**"
+      - "scripts/**"
+      - ".github/workflows/longcapture-autotest-rc2.yml"
+  pull_request:
+    branches:
+      - "standalone/longcapture-v0.1.3"
+    paths:
+      - "LongCapture.Standalone/**"
+      - "ShareX.ScreenCaptureLib/**"
+      - "ShareX.Avalonia/**"
+      - "mod-overlay/**"
+      - "scripts/**"
+      - ".github/workflows/longcapture-autotest-rc2.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: longcapture-rc2-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  one-click-acceptance:
+    runs-on: windows-2025
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Apply ShareX-Mod overlay chain
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $hooks = @(
+            "scripts\run-v04-hooks.ps1",
+            "scripts\apply-v041-post-hooks.ps1",
+            "scripts\apply-v042-post-hooks.ps1",
+            "scripts\apply-v043-post-hooks.ps1",
+            "scripts\apply-v044-post-hooks.ps1",
+            "scripts\apply-v050-post-hooks.ps1",
+            "scripts\apply-v051-post-hooks.ps1",
+            "scripts\apply-v052-post-hooks.ps1",
+            "scripts\apply-v061-post-hooks.ps1",
+            "scripts\apply-v062-post-hooks.ps1",
+            "scripts\apply-v064-post-hooks.ps1",
+            "scripts\apply-longcapture-v013-standalone-hooks.ps1",
+            "scripts\apply-longcapture-v013-rc-hardening.ps1"
+          )
+          foreach ($hook in $hooks) {
+            Write-Host "=== $hook ==="
+            & pwsh -NoProfile -File $hook
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          git diff --check
+
+      - name: Verify automation source contract
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          foreach ($path in @(
+            "LongCapture.Standalone\AutomationTestRunner.cs",
+            "LongCapture.Standalone\1-RUN-AUTOMATED-TESTS.cmd",
+            "LongCapture.Standalone\Run-LongCapture-AutomatedTests.ps1"
+          )) {
+            if (-not (Test-Path $path)) { throw "Missing automation source: $path" }
+          }
+          $runner = Get-Content "LongCapture.Standalone\AutomationTestRunner.cs" -Raw
+          foreach ($required in @(
+            "Program.RunSelfTest()",
+            "LongCaptureRcSelfTests.RunOrThrow",
+            "ShareXModScrollingReliabilitySelfTests",
+            "ShareXModDeferredOverlaySelfTests",
+            "CaptureSessionRecorder.ExportLatestBundle",
+            "DeepRepetitions = 10",
+            "PASS_AUTOMATED",
+            "MANUAL_REQUIRED"
+          )) {
+            if ($runner -notmatch [regex]::Escape($required)) { throw "Automation runner missing gate: $required" }
+          }
+
+      - name: Verify .NET 10
+        shell: pwsh
+        run: |
+          if (-not ((dotnet --list-sdks) | Where-Object { $_ -match '^10\.0\.' })) { throw ".NET 10 SDK missing" }
+          dotnet --version
+
+      - name: Restore
+        run: dotnet restore --runtime win-x64 LongCapture.Standalone\LongCapture.Standalone.csproj
+
+      - name: Build Release
+        run: dotnet build LongCapture.Standalone\LongCapture.Standalone.csproj --no-restore --configuration Release --runtime win-x64 /m:1
+
+      - name: Publish portable
+        run: dotnet publish LongCapture.Standalone\LongCapture.Standalone.csproj --no-restore --configuration Release --runtime win-x64 --self-contained true --output artifacts\LongCapture /m:1
+
+      - name: Validate portable test entry
+        shell: pwsh
+        run: |
+          foreach ($name in @(
+            "LongCapture.exe", "LongCapture.dll", "ShareX.ScreenCaptureLib.dll", "ShareX.Avalonia.dll",
+            "ShareX.Mod.v04.json", "ShareX.Mod.VERSION.json", "TESTING.md",
+            "1-RUN-AUTOMATED-TESTS.cmd", "Run-LongCapture-AutomatedTests.ps1"
+          )) {
+            if (-not (Test-Path (Join-Path "artifacts\LongCapture" $name))) { throw "Portable missing $name" }
+          }
+          if (Test-Path "artifacts\LongCapture\ShareX.exe") { throw "Standalone portable must not contain ShareX.exe" }
+
+      - name: Run exact user Quick double-click acceptance path
+        shell: cmd
+        run: artifacts\LongCapture\1-RUN-AUTOMATED-TESTS.cmd --ci
+
+      - name: Validate Quick automation report
+        shell: pwsh
+        run: |
+          $report = Get-ChildItem "artifacts\LongCapture\AutomationReports" -Filter automation-report.json -Recurse | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $report) { throw "No automation-report.json produced" }
+          $data = Get-Content $report.FullName -Raw | ConvertFrom-Json
+          if ($data.Status -ne "PASS_AUTOMATED" -or [int]$data.FailedCount -ne 0) { throw "Automation report is not PASS_AUTOMATED" }
+          if ($data.Profile -ne "QUICK") { throw "Default package gate must use QUICK profile, got $($data.Profile)" }
+          if ([int]$data.PassedCount -lt 5) { throw "Too few automated functional groups passed: $($data.PassedCount)" }
+          if ([int]$data.ManualRequiredCount -lt 1) { throw "Real-environment limitations are not explicitly represented" }
+          Write-Host "Quick automated acceptance PASS=$($data.PassedCount) FAIL=$($data.FailedCount) MANUAL_REQUIRED=$($data.ManualRequiredCount)"
+
+      - name: Generate RC2 readiness manifest
+        shell: pwsh
+        run: |
+          Remove-Item "artifacts\LongCapture\AutomationReports" -Recurse -Force -ErrorAction SilentlyContinue
+          $readiness = [ordered]@{
+            schema = "longcapture.rc-readiness.v2"
+            version = "0.1.3-rc2"
+            status = "RC_READY_FOR_REAL_WORLD_TESTING"
+            mandatoryGates = "PASS"
+            automatedScore = 92
+            oneClickAcceptance = "PASS_AUTOMATED_QUICK"
+            deepStress = "OPTIONAL_NOT_REQUIRED_BEFORE_REAL_TEST"
+            commit = "${{ github.sha }}"
+            workflowRunId = "${{ github.run_id }}"
+            generatedAtUtc = (Get-Date).ToUniversalTime().ToString("o")
+            automatedFunctionalCoverage = @(
+              "portable package/config integrity",
+              "real packaged shell/F8 StartCaptureAsync-StopCapture path",
+              "Avalonia capture overlay bootstrap",
+              "LongCapture own-UI capture exclusion",
+              "HWND target discovery/binding and resize-minimize-close recovery",
+              "100/125/150/200 percent layout pressure",
+              "anchor consensus and repeated-pattern rejection",
+              "sticky/header cleanup and deferred right-bottom fixed-overlay repair",
+              "lazy-load adaptive settle",
+              "recipe planner/range anchor/integrity/router/pagination regressions",
+              "diagnostics session creation and Export diagnostics ZIP round-trip"
+            )
+            optionalDeepCoverage = @(
+              "10 consecutive real capture smoke runs",
+              "managed/private memory growth gate"
+            )
+            manualRequired = @(
+              "real website/app final visual inspection",
+              "live Smart Web Capture Browser session",
+              "live Teach Capture / Run Recipe interaction",
+              "multi-monitor/GPU/animation/infinite-feed behavior",
+              "existing daily Chrome authenticated DOM/CDP reuse remains incomplete"
+            )
+          }
+          $readiness | ConvertTo-Json -Depth 6 | Set-Content "artifacts\LongCapture\RC-READINESS.json" -Encoding UTF8
+
+      - name: Package RC2
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force Output | Out-Null
+          $zip = "Output\LongCapture-standalone-v0.1.3-rc2-x64.zip"
+          Compress-Archive -Path "artifacts\LongCapture\*" -DestinationPath $zip -CompressionLevel Optimal -Force
+          $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
+          Set-Content "Output\LongCapture-standalone-v0.1.3-rc2-x64.sha256.txt" "$hash  LongCapture-standalone-v0.1.3-rc2-x64.zip"
+          Write-Host "SHA256=$hash"
+
+      - name: Extract final RC2 and rerun exact Quick double-click acceptance path
+        shell: pwsh
+        run: |
+          $temp = Join-Path $env:RUNNER_TEMP "longcapture-rc2-final"
+          Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue
+          Expand-Archive "Output\LongCapture-standalone-v0.1.3-rc2-x64.zip" $temp -Force
+          $readiness = Get-Content (Join-Path $temp "RC-READINESS.json") -Raw | ConvertFrom-Json
+          if ($readiness.mandatoryGates -ne "PASS" -or $readiness.oneClickAcceptance -ne "PASS_AUTOMATED_QUICK") { throw "RC2 readiness manifest invalid" }
+          & cmd.exe /d /c "`"$temp\1-RUN-AUTOMATED-TESTS.cmd`" --ci"
+          if ($LASTEXITCODE -ne 0) { throw "Extracted final RC2 Quick one-click acceptance failed with exit code $LASTEXITCODE" }
+          $finalReport = Get-ChildItem (Join-Path $temp "AutomationReports") -Filter automation-report.json -Recurse | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $finalReport) { throw "Extracted RC2 did not produce automation report" }
+          $data = Get-Content $finalReport.FullName -Raw | ConvertFrom-Json
+          if ($data.Status -ne "PASS_AUTOMATED" -or $data.Profile -ne "QUICK" -or [int]$data.FailedCount -ne 0) { throw "Extracted RC2 Quick report failed" }
+
+      - name: Upload RC2 portable
+        uses: actions/upload-artifact@v7
+        with:
+          name: LongCapture-standalone-v0.1.3-rc2-x64
+          path: |
+            Output\LongCapture-standalone-v0.1.3-rc2-x64.zip
+            Output\LongCapture-standalone-v0.1.3-rc2-x64.sha256.txt

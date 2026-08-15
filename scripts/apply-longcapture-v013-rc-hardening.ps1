@@ -33,6 +33,7 @@ function Replace-Literal {
 
 $ui = Join-Path $repoRoot "LongCapture.Standalone\StandaloneUiPolish.cs"
 $program = Join-Path $repoRoot "LongCapture.Standalone\Program.cs"
+$manager = Join-Path $repoRoot "ShareX.ScreenCaptureLib\ScrollingCaptureManager.cs"
 
 # v0.1.3 added Export diagnostics after the original UI hardening was written. Preserve every
 # auxiliary action button instead of assuming there can only ever be one non-capture button.
@@ -182,6 +183,36 @@ Replace-Literal -Path $program `
                 }
 '@ `
     -Marker "responsive GUI self-test failed detail="
+
+# The first-generation visual overlay cleaner can repair a current sticky header from pixels that
+# existed lower in the previous frame, but a fixed footer/right-bottom widget has no Y+delta source.
+# Before combining the next frame, use that next frame's newly exposed Y-delta pixels to repair the
+# previous viewport already stored at the mosaic tail. This prevents local fixed widgets from being
+# written into every appended strip while still preserving the real document pixels underneath.
+Replace-Literal -Path $manager `
+    -Old @'
+                            int modRepairedOverlayTiles = 0;
+
+                            if (modHasAnchor)
+                            {
+'@ `
+    -New @'
+                            int modRepairedOverlayTiles = 0;
+
+                            if (modHasAnchor && Result != null)
+                            {
+                                modRepairedOverlayTiles +=
+                                    ShareXModStaticOverlayCleaner.TryRepairPreviousResultTail(
+                                        Result,
+                                        previousScreenshot,
+                                        lastScreenshot,
+                                        modAnchor.ScrollDelta);
+                            }
+
+                            if (modHasAnchor)
+                            {
+'@ `
+    -Marker "TryRepairPreviousResultTail("
 
 if ($CheckOnly) {
     Write-Host "LongCapture v0.1.3 RC hardening compatibility passed." -ForegroundColor Green

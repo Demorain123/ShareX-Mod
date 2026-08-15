@@ -64,8 +64,8 @@ jobs:
           $program = Get-Content "LongCapture.Standalone\Program.cs" -Raw
           $automation = Get-Content "LongCapture.Standalone\AutomationTestRunner.cs" -Raw
           $exclusion = Get-Content "LongCapture.Standalone\CaptureExclusion.cs" -Raw
-          $compositor = Get-Content "ShareX.ScreenCaptureLib\ShareXModDelayedCompositorV016.cs" -Raw
-          $replay = Get-Content "ShareX.ScreenCaptureLib\ShareXModReplayDiagnostics.cs" -Raw
+          $compositor = Get-Content "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModDelayedCompositorV016.cs" -Raw
+          $replay = Get-Content "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModReplayDiagnostics.cs" -Raw
 
           foreach ($required in @(
             "ShareXModDelayedCompositorV016.TryAppendLive",

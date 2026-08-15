@@ -9,6 +9,7 @@ $root = $PSScriptRoot
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $reportDir = Join-Path $root "AutomationReports\$stamp"
 $jsonPath = Join-Path $reportDir 'automation-report.json'
+$progressPath = Join-Path $reportDir 'automation-progress.txt'
 $summaryPath = Join-Path $reportDir 'launcher-summary.txt'
 
 function Write-Status([string]$Text, [ConsoleColor]$Color = [ConsoleColor]::Gray) {
@@ -24,15 +25,28 @@ function Try-ReadCompletedReport([string]$Path) {
         }
     }
     catch {
-        # The writer may have created the file but not finished the atomic-sized JSON write yet.
-        # Retry on the next short polling interval instead of treating a partial read as failure.
+        # A reader can race the final write. Retry on the next short polling interval.
     }
     return $null
 }
 
+function Get-LastProgress([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) { return 'no progress marker was written' }
+    try {
+        $line = Get-Content -LiteralPath $Path | Select-Object -Last 1
+        if ([string]::IsNullOrWhiteSpace($line)) { return 'progress file is empty' }
+        return $line
+    }
+    catch {
+        return "progress read failed: $($_.Exception.Message)"
+    }
+}
+
 try {
     $profile = if ($Deep) { 'DEEP' } else { 'QUICK' }
-    $timeoutSeconds = if ($Deep) { 900 } else { 180 }
+    # Quick covers each functional area once and should be fast. A 90-second ceiling catches a
+    # deadlock promptly instead of making the user wait for a test that is no longer progressing.
+    $timeoutSeconds = if ($Deep) { 600 } else { 90 }
 
     Write-Status '============================================================' Cyan
     Write-Status " LongCapture - Automated Acceptance [$profile]" Cyan
@@ -59,6 +73,7 @@ try {
 
     New-Item -ItemType Directory -Force -Path $reportDir | Out-Null
     $env:LONGCAPTURE_AUTOMATION_REPORT = $jsonPath
+    $env:LONGCAPTURE_AUTOMATION_PROGRESS = $progressPath
     $env:LONGCAPTURE_AUTOMATION_PROFILE = if ($Deep) { 'deep' } else { 'quick' }
 
     $process = $null
@@ -69,10 +84,8 @@ try {
     $exitObservedAt = $null
 
     try {
-        # Do NOT use Start-Process -Wait here. LongCapture initializes WinForms/Avalonia desktop
-        # infrastructure during the functional tests, and those hosts can keep the process alive
-        # after AutomationTestRunner has already completed and written its final report. The report
-        # is the authoritative completion signal for this test command.
+        # Do NOT use Start-Process -Wait. LongCapture initializes desktop infrastructure during
+        # functional tests; the terminal automation JSON is the authoritative completion signal.
         $process = Start-Process -FilePath (Join-Path $root 'LongCapture.exe') `
             -ArgumentList '--automation-test' `
             -WorkingDirectory $root `
@@ -87,8 +100,6 @@ try {
                 if ($process.HasExited) {
                     if ($null -eq $processExitCode) { $processExitCode = $process.ExitCode }
                     if ($null -eq $exitObservedAt) { $exitObservedAt = [DateTime]::UtcNow }
-                    # Allow a brief filesystem flush grace period if the process exited just before
-                    # the completed JSON became visible.
                     if (([DateTime]::UtcNow - $exitObservedAt).TotalSeconds -ge 5) { break }
                 }
             }
@@ -99,19 +110,18 @@ try {
             Start-Sleep -Milliseconds 250
         }
 
-        # One final read after the loop handles a report that landed on the timeout/exit boundary.
         if ($null -eq $report) {
             $report = Try-ReadCompletedReport -Path $jsonPath
         }
 
         if ($null -eq $report) {
             $state = if ($null -ne $process -and $process.HasExited) { "process exited code=$($process.ExitCode)" } else { 'process still running' }
-            throw "LongCapture automation did not produce a completed report within $timeoutSeconds seconds ($state)."
+            $lastProgress = Get-LastProgress -Path $progressPath
+            throw "LongCapture automation did not produce a completed report within $timeoutSeconds seconds ($state). Last progress: $lastProgress"
         }
 
-        # The automated cases are complete once the report has a terminal status. If desktop-host
-        # lifetime keeps LongCapture alive, terminate only this spawned test process so the launcher
-        # and CI can continue immediately instead of waiting on GUI infrastructure indefinitely.
+        # Once a terminal report exists, every requested case has finished. Close only the spawned
+        # test host if WinForms/Avalonia lifetime still keeps it alive.
         if ($null -ne $process) {
             $process.Refresh()
             if ($process.HasExited) {
@@ -130,9 +140,9 @@ try {
     }
     finally {
         Remove-Item Env:LONGCAPTURE_AUTOMATION_REPORT -ErrorAction SilentlyContinue
+        Remove-Item Env:LONGCAPTURE_AUTOMATION_PROGRESS -ErrorAction SilentlyContinue
         Remove-Item Env:LONGCAPTURE_AUTOMATION_PROFILE -ErrorAction SilentlyContinue
 
-        # On launcher exceptions/timeouts, do not leak the test copy of LongCapture.
         if ($null -ne $process) {
             try {
                 $process.Refresh()
@@ -161,6 +171,7 @@ try {
         "PASS: $($report.PassedCount)",
         "FAIL: $($report.FailedCount)",
         "MANUAL_REQUIRED: $($report.ManualRequiredCount)",
+        "Progress: $progressPath",
         "JSON: $jsonPath"
     )
     $lines | Set-Content -LiteralPath $summaryPath -Encoding UTF8
@@ -196,11 +207,13 @@ try {
 }
 catch {
     New-Item -ItemType Directory -Force -Path $reportDir -ErrorAction SilentlyContinue | Out-Null
-    $message = "AUTOMATED ACCEPTANCE LAUNCHER FAILED`r`n$($_.Exception.ToString())"
+    $lastProgress = Get-LastProgress -Path $progressPath
+    $message = "AUTOMATED ACCEPTANCE LAUNCHER FAILED`r`n$($_.Exception.ToString())`r`nLastProgress: $lastProgress"
     $message | Set-Content -LiteralPath $summaryPath -Encoding UTF8 -ErrorAction SilentlyContinue
     Write-Status ''
     Write-Status 'AUTOMATED ACCEPTANCE: FAIL' Red
     Write-Status $_.Exception.Message Red
+    Write-Status "Last progress: $lastProgress" Yellow
     Write-Status 'Stop here. Do NOT continue to real-world testing.' Red
     Write-Status "Launcher report: $summaryPath" Yellow
     exit 2

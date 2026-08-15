@@ -18,8 +18,9 @@ internal sealed record AutomationTestCase(
 
 internal sealed class AutomationTestReport
 {
-    public string Schema { get; init; } = "longcapture.automation-report.v1";
+    public string Schema { get; init; } = "longcapture.automation-report.v2";
     public string Version { get; init; } = StandaloneVersion.Value;
+    public string Profile { get; init; } = AutomationTestRunner.ResolveProfile();
     public string Status { get; set; } = "RUNNING";
     public DateTime StartedAtUtc { get; init; } = DateTime.UtcNow;
     public DateTime CompletedAtUtc { get; set; }
@@ -31,7 +32,7 @@ internal sealed class AutomationTestReport
 
 internal static class AutomationTestRunner
 {
-    private const int Repetitions = 10;
+    private const int DeepRepetitions = 10;
     private const long MaxManagedGrowthBytes = 64L * 1024L * 1024L;
     private const long MaxPrivateGrowthBytes = 224L * 1024L * 1024L;
 
@@ -51,6 +52,7 @@ internal static class AutomationTestRunner
         var report = new AutomationTestReport();
         string reportPath = ResolveReportPath(requestedReportPath);
         string textPath = Path.ChangeExtension(reportPath, ".txt");
+        bool deep = string.Equals(report.Profile, "DEEP", StringComparison.OrdinalIgnoreCase);
 
         RunCase(report, "package.integrity", "Package", "Portable package integrity and configuration", TestPackageIntegrity);
         RunCase(report, "core.selftest", "Core", "Packaged shell / F8 / target / Avalonia / UI-exclusion self-test", () =>
@@ -62,9 +64,18 @@ internal static class AutomationTestRunner
         RunCase(report, "shell.recovery-layout", "Shell", "Target lifecycle recovery and 100-200% layout pressure", LongCaptureRcSelfTests.RunOrThrow);
         RunCase(report, "engine.semantic-regression", "Engine", "Recipe / anchor / integrity / scrolling / fixed / lazy / router / pagination suites", RunSemanticSuites);
         RunCase(report, "diagnostics.roundtrip", "Diagnostics", "Capture-session recorder and diagnostics ZIP round-trip", TestDiagnosticsRoundTrip);
-        RunCase(report, "stress.capture-memory", "Stability", $"{Repetitions} consecutive real capture smoke runs and memory growth", RunRepeatedCaptureAndMemoryGate);
 
-        AddManual(report, "manual.live-page-visual", "Real environment", "Real web/app long-image visual inspection", "Deterministic stitch, repeated-pattern, sticky/fixed and lazy-load fixtures are automated; the final pixels on real websites/apps still require visual inspection because page scripts, animation, GPU composition and timing differ by machine/site.");
+        // Quick is intentionally the default user gate. The core self-test already executes the
+        // real StartCaptureAsync -> StopCapture path; one additional capture here proves a second
+        // capture can start after the first without making every pre-manual-test run a 10x stress.
+        RunCase(report, "stability.quick-repeat", "Stability", "Second real capture smoke after the core self-test", RunQuickCaptureRepeat);
+
+        if (deep)
+        {
+            RunCase(report, "stress.capture-memory", "Deep stability", $"{DeepRepetitions} consecutive real capture smoke runs and memory growth", RunDeepCaptureAndMemoryGate);
+        }
+
+        AddManual(report, "manual.live-page-visual", "Real environment", "Real web/app long-image visual inspection", "Deterministic stitch, repeated-pattern, sticky/fixed and lazy-load fixtures are automated; final pixels on real websites/apps still require visual inspection because page scripts, animation, GPU composition and timing differ by machine/site.");
         AddManual(report, "manual.smart-web-live", "Real environment", "Smart Web live Capture Browser session", "Semantic/router/recipe primitives are regression-tested automatically, but a real signed-in Capture Browser page and site-specific DOM/CDP behavior require a live test.");
         AddManual(report, "manual.daily-chrome-cdp", "Known limitation", "Existing daily Chrome authenticated DOM/CDP reuse", "Normal Long Capture can target an existing Chrome HWND. Reusing that same daily Chrome authenticated DOM/CDP session for Smart Web is not declared complete in v0.1.3 RC2.");
         AddManual(report, "manual.multimonitor-gpu", "Real environment", "Multi-monitor DPI / GPU / animation / infinite-feed behavior", "Automated layout pressure covers 100/125/150/200% font-DPI pressure, but actual monitor transitions, GPU/compositor behavior and unbounded feeds require the real desktop.");
@@ -89,8 +100,14 @@ internal static class AutomationTestRunner
         }
 
         Console.WriteLine(BuildTextReport(report, reportPath));
-        LongCaptureLog.Info($"automation acceptance completed status={report.Status} passed={report.PassedCount} failed={report.FailedCount} manual={report.ManualRequiredCount} report={LongCaptureLog.OneLine(reportPath)}");
+        LongCaptureLog.Info($"automation acceptance completed profile={report.Profile} status={report.Status} passed={report.PassedCount} failed={report.FailedCount} manual={report.ManualRequiredCount} report={LongCaptureLog.OneLine(reportPath)}");
         return report.FailedCount == 0 ? 0 : 90;
+    }
+
+    internal static string ResolveProfile()
+    {
+        string value = Environment.GetEnvironmentVariable("LONGCAPTURE_AUTOMATION_PROFILE")?.Trim() ?? string.Empty;
+        return string.Equals(value, "deep", StringComparison.OrdinalIgnoreCase) ? "DEEP" : "QUICK";
     }
 
     private static void RunCase(AutomationTestReport report, string id, string category, string name, Func<string> action)
@@ -216,18 +233,26 @@ internal static class AutomationTestRunner
         }
     }
 
-    private static string RunRepeatedCaptureAndMemoryGate()
+    private static string RunQuickCaptureRepeat()
+    {
+        int code = Program.RunScrollingCaptureSmokeTest();
+        if (code != 0)
+            throw new InvalidOperationException($"Second real capture smoke failed with exit code {code}.");
+        return "A second real capture smoke completed after the core self-test; the default Quick gate does not run the 10x stress loop.";
+    }
+
+    private static string RunDeepCaptureAndMemoryGate()
     {
         long baselineManaged = 0;
         long baselinePrivate = 0;
         long maximumManaged = 0;
         long maximumPrivate = 0;
 
-        for (int iteration = 1; iteration <= Repetitions; iteration++)
+        for (int iteration = 1; iteration <= DeepRepetitions; iteration++)
         {
             int code = Program.RunScrollingCaptureSmokeTest();
             if (code != 0)
-                throw new InvalidOperationException($"Real capture smoke failed on repetition {iteration}/{Repetitions} with exit code {code}.");
+                throw new InvalidOperationException($"Real capture smoke failed on repetition {iteration}/{DeepRepetitions} with exit code {code}.");
 
             GC.Collect();
             GC.WaitForPendingFinalizers();
@@ -251,7 +276,7 @@ internal static class AutomationTestRunner
                 maximumPrivate = Math.Max(maximumPrivate, privateBytes);
             }
 
-            Console.WriteLine($"  capture {iteration}/{Repetitions}: managed={FormatMiB(managed)} MiB private={FormatMiB(privateBytes)} MiB");
+            Console.WriteLine($"  deep capture {iteration}/{DeepRepetitions}: managed={FormatMiB(managed)} MiB private={FormatMiB(privateBytes)} MiB");
         }
 
         if (baselineManaged <= 0 || baselinePrivate <= 0)
@@ -264,7 +289,7 @@ internal static class AutomationTestRunner
         if (privateGrowth > MaxPrivateGrowthBytes)
             throw new InvalidOperationException($"Private memory growth {FormatMiB(privateGrowth)} MiB exceeds {FormatMiB(MaxPrivateGrowthBytes)} MiB limit.");
 
-        return $"{Repetitions} real capture runs passed; managedGrowth={FormatMiB(managedGrowth)} MiB privateGrowth={FormatMiB(privateGrowth)} MiB.";
+        return $"{DeepRepetitions} deep capture runs passed; managedGrowth={FormatMiB(managedGrowth)} MiB privateGrowth={FormatMiB(privateGrowth)} MiB.";
     }
 
     private static object? Invoke(MethodInfo method)
@@ -293,6 +318,7 @@ internal static class AutomationTestRunner
         var sb = new StringBuilder();
         sb.AppendLine("LongCapture automated acceptance");
         sb.AppendLine($"Version: {report.Version}");
+        sb.AppendLine($"Profile: {report.Profile}");
         sb.AppendLine($"Status: {report.Status}");
         sb.AppendLine($"PASS={report.PassedCount} FAIL={report.FailedCount} MANUAL_REQUIRED={report.ManualRequiredCount}");
         sb.AppendLine($"JSON: {reportPath}");

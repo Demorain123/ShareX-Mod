@@ -40,7 +40,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Apply current ShareX-Mod overlay chain
+      - name: Apply current ShareX-Mod and LongCapture overlay chain
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -55,7 +55,8 @@ jobs:
             "scripts\apply-v052-post-hooks.ps1",
             "scripts\apply-v061-post-hooks.ps1",
             "scripts\apply-v062-post-hooks.ps1",
-            "scripts\apply-v064-post-hooks.ps1"
+            "scripts\apply-v064-post-hooks.ps1",
+            "scripts\apply-longcapture-v013-standalone-hooks.ps1"
           )
           foreach ($hook in $hooks) {
             Write-Host "=== $hook ==="
@@ -78,7 +79,9 @@ jobs:
             "ScrollingCaptureTargetBridge",
             "LongCaptureLog",
             "CaptureUiQuietPeriodMs",
-            "CaptureExclusion.ApplyToCurrentProcessTopLevelWindows"
+            "CaptureExclusion.ApplyToCurrentProcessTopLevelWindows",
+            "CaptureSessionRecorder",
+            "Export diagnostics"
           )) {
             if ($source -notmatch [regex]::Escape($required)) {
               throw "Standalone source is missing required capture integration: $required"
@@ -89,6 +92,20 @@ jobs:
           }
           if ($source -match "ShowBalloonTip") {
             throw "Capture-start balloon/toast must not be shown because LongCapture UI can enter the first captured frame."
+          }
+
+          $recorder = Get-Content "LongCapture.Standalone\CaptureSessionRecorder.cs" -Raw
+          foreach ($required in @(
+            "CaptureSessions",
+            "quality.json",
+            "engine-evidence",
+            "ExportLatestBundle",
+            "MaxCopiedEvidenceBytes",
+            "FindLatestQualityInfo"
+          )) {
+            if ($recorder -notmatch [regex]::Escape($required)) {
+              throw "Capture flight recorder is missing required guard: $required"
+            }
           }
 
           $target = Get-Content "LongCapture.Standalone\CaptureTargetService.cs" -Raw
@@ -123,6 +140,19 @@ jobs:
           foreach ($required in @("SetWinEventHook", "EVENT_OBJECT_CREATE", "EVENT_OBJECT_SHOW", "UnhookWinEvent", "GCHandle")) {
             if ($watcher -notmatch [regex]::Escape($required)) {
               throw "Capture-exclusion watcher is missing required guard: $required"
+            }
+          }
+
+          $manager = Get-Content "ShareX.ScreenCaptureLib\ScrollingCaptureManager.cs" -Raw
+          foreach ($required in @(
+            "ShareXModAdaptiveSettleV042.WaitAsync",
+            "ShareXModStaticOverlayCleaner.TryClean",
+            "ShareXModCaptureQualitySession",
+            "ShareXModAnchorMatcher.TryEstimateScrollDelta",
+            "ShareXModFinalQualitySummary.TryWrite"
+          )) {
+            if ($manager -notmatch [regex]::Escape($required)) {
+              throw "ShareX-Mod robust capture chain is missing required v0.1.3 dependency: $required"
             }
           }
 
@@ -175,6 +205,20 @@ jobs:
 
       - name: Restore standalone win-x64
         run: dotnet restore --runtime win-x64 LongCapture.Standalone\LongCapture.Standalone.csproj
+
+      - name: Fast Release compile gate
+        shell: pwsh
+        run: |
+          $buildOutput = @(& dotnet build LongCapture.Standalone\LongCapture.Standalone.csproj --no-restore --configuration Release --runtime win-x64 /m:1 2>&1)
+          $buildExit = $LASTEXITCODE
+          $buildOutput | ForEach-Object { Write-Host $_ }
+          if ($buildExit -ne 0) {
+            foreach ($line in ($buildOutput | Where-Object { "$_" -match ': (error|warning) [A-Z]+[0-9]+:' } | Select-Object -First 25)) {
+              $safe = ("$line").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+              Write-Host "::error::$safe"
+            }
+            exit $buildExit
+          }
 
       - name: Publish standalone self-contained win-x64
         shell: pwsh

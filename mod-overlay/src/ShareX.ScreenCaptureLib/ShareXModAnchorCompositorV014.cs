@@ -119,8 +119,6 @@ internal static class ShareXModAnchorCompositorV014
         int previousViewportTop = result.Height - viewportHeight;
         if (previousViewportTop < 0) return FixedOverlayRepair.Empty;
 
-        // Only pixels that were inside the previous newly appended strip can have been stamped into
-        // the mosaic by a fixed control. current(y-delta) must also exist to recover the hidden pixel.
         int repairTop = Math.Max(viewportHeight - scrollDelta, scrollDelta);
         if (repairTop >= viewportHeight) return FixedOverlayRepair.Empty;
 
@@ -155,10 +153,6 @@ internal static class ShareXModAnchorCompositorV014
             }
         }
 
-        // Dynamic text/counters can make a tile inside a fixed button fail the strict test even when
-        // its surrounding shell is clearly stationary. Expand by one tile around strong detections.
-        // Copying current(y-delta) into a neighboring normal document tile is geometrically safe: it
-        // is the exact same logical document position under the trusted anchor delta.
         bool[,] selected = DilateOneTile(strong);
 
         int detected = 0;
@@ -172,22 +166,24 @@ internal static class ShareXModAnchorCompositorV014
         {
             for (int row = 0; row < rows; row++)
             {
-                int y = row * TileHeight;
+                int tileY = row * TileHeight;
                 for (int column = 0; column < columns; column++)
                 {
                     if (!selected[row, column]) continue;
-                    detected++;
 
                     int x = column * TileWidth;
                     int width = Math.Min(TileWidth, currentFrame.Width - x);
-                    int height = Math.Min(TileHeight, viewportHeight - y);
-                    int sourceY = y - scrollDelta;
+                    int tileHeight = Math.Min(TileHeight, viewportHeight - tileY);
+                    int patchY = Math.Max(tileY, repairTop);
+                    int trimmedTop = patchY - tileY;
+                    int height = tileHeight - trimmedTop;
+                    int sourceY = patchY - scrollDelta;
                     if (width <= 0 || height <= 0 || sourceY < 0 || sourceY + height > viewportHeight) continue;
-                    if (y < repairTop) continue;
 
+                    detected++;
                     destinationGraphics.DrawImage(
                         currentFrame,
-                        new Rectangle(x, previousViewportTop + y, width, height),
+                        new Rectangle(x, previousViewportTop + patchY, width, height),
                         new Rectangle(x, sourceY, width, height),
                         GraphicsUnit.Pixel);
                     repaired++;
@@ -201,7 +197,7 @@ internal static class ShareXModAnchorCompositorV014
                     maskGraphics!.FillRectangle(
                         Brushes.White,
                         x / EvidenceScale,
-                        y / EvidenceScale,
+                        patchY / EvidenceScale,
                         Math.Max(1, (width + EvidenceScale - 1) / EvidenceScale),
                         Math.Max(1, (height + EvidenceScale - 1) / EvidenceScale));
                 }
@@ -318,7 +314,6 @@ internal static class ShareXModAnchorCompositorV014
         }
         catch
         {
-            // Evidence is advisory and must never invalidate a capture.
         }
     }
 

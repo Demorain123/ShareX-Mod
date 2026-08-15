@@ -5,6 +5,7 @@ on:
     branches:
       - "**"
       - "!mod/robust-scrolling-v0.1"
+      - "!standalone/longcapture-v*"
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
     paths-ignore:

@@ -76,7 +76,9 @@ jobs:
             "RegisterHotKey",
             "CaptureTargetService",
             "ScrollingCaptureTargetBridge",
-            "LongCaptureLog"
+            "LongCaptureLog",
+            "CaptureUiQuietPeriodMs",
+            "CaptureExclusion.ApplyToCurrentProcessTopLevelWindows"
           )) {
             if ($source -notmatch [regex]::Escape($required)) {
               throw "Standalone source is missing required capture integration: $required"
@@ -84,6 +86,9 @@ jobs:
           }
           if ($source -match "integration is starting|next integration step") {
             throw "Standalone source still contains placeholder-only capture UI."
+          }
+          if ($source -match "ShowBalloonTip") {
+            throw "Capture-start balloon/toast must not be shown because LongCapture UI can enter the first captured frame."
           }
 
           $target = Get-Content "LongCapture.Standalone\CaptureTargetService.cs" -Raw
@@ -107,6 +112,20 @@ jobs:
             }
           }
 
+          $exclusion = Get-Content "LongCapture.Standalone\CaptureExclusion.cs" -Raw
+          foreach ($required in @("SetWindowDisplayAffinity", "GetWindowDisplayAffinity", "WDA_EXCLUDEFROMCAPTURE", "ApplyToCurrentProcessTopLevelWindows")) {
+            if ($exclusion -notmatch [regex]::Escape($required)) {
+              throw "Capture-exclusion layer is missing required guard: $required"
+            }
+          }
+
+          $watcher = Get-Content "LongCapture.Standalone\CaptureExclusionWatcher.cs" -Raw
+          foreach ($required in @("SetWinEventHook", "EVENT_OBJECT_CREATE", "EVENT_OBJECT_SHOW", "UnhookWinEvent", "GCHandle")) {
+            if ($watcher -notmatch [regex]::Escape($required)) {
+              throw "Capture-exclusion watcher is missing required guard: $required"
+            }
+          }
+
           $program = Get-Content "LongCapture.Standalone\Program.cs" -Raw
           foreach ($required in @(
             "AvaloniaBootstrapper.EnsureInitialized",
@@ -117,11 +136,19 @@ jobs:
             "AppDomain.CurrentDomain.UnhandledException",
             "TaskScheduler.UnobservedTaskException",
             "CaptureTargetService.TryCreateTarget",
-            "ScrollingCaptureTargetBridge.TryAssignTarget"
+            "ScrollingCaptureTargetBridge.TryAssignTarget",
+            "CaptureExclusionWatcher.Start",
+            "RunCaptureExclusionSelfTest",
+            "CaptureMarkerFraction"
           )) {
             if ($program -notmatch [regex]::Escape($required)) {
               throw "Standalone bootstrap/self-test is missing required guard: $required"
             }
+          }
+
+          $recipeReview = Get-Content "LongCapture.Standalone\RecipeReviewForm.cs" -Raw
+          if ($recipeReview -notmatch [regex]::Escape("CaptureExclusion.Apply")) {
+            throw "Recipe review helper window is missing capture exclusion."
           }
 
           $bootstrapper = Get-Content "ShareX.Avalonia\Integration\AvaloniaBootstrapper.cs" -Raw
@@ -181,7 +208,7 @@ jobs:
           $version = (Get-Content "artifacts\LongCapture\ShareX.Mod.VERSION.json" -Raw | ConvertFrom-Json).version
           Write-Host "Bundled ShareX-Mod engine version=$version"
 
-      - name: Run packaged logging, locked-target, F8 bootstrap, engine and responsive UI self-test
+      - name: Run packaged logging, exclusion, locked-target, F8 bootstrap, engine and responsive UI self-test
         shell: pwsh
         run: |
           $p = Start-Process -FilePath (Resolve-Path "artifacts\LongCapture\LongCapture.exe") -ArgumentList "--self-test" -Wait -PassThru

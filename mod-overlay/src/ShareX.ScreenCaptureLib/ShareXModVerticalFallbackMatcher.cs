@@ -50,6 +50,62 @@ internal static class ShareXModVerticalFallbackMatcher
         return true;
     }
 
+    /// <summary>
+    /// Exposes the existing central-body matcher to v0.1.7 without constructing a legacy mosaic.
+    /// This is intentionally an estimator only: the resolved delta is always consumed by the
+    /// raw-frame delayed compositor, so fixed/sticky handling is never bypassed.
+    /// </summary>
+    internal static bool TryEstimateScrollDeltaOnly(
+        Bitmap previousFrame,
+        Bitmap currentFrame,
+        ShareXModRobustScrollingSettings settings,
+        out int scrollDelta,
+        out double score)
+    {
+        scrollDelta = 0;
+        score = double.MaxValue;
+        if (previousFrame == null || currentFrame == null ||
+            previousFrame.Width != currentFrame.Width || previousFrame.Height != currentFrame.Height)
+        {
+            return false;
+        }
+        return TryEstimateScrollDelta(previousFrame, currentFrame, settings, out scrollDelta, out score);
+    }
+
+    /// <summary>
+    /// Validates a temporal scroll-delta prior against this exact raw-frame pair. The prior is
+    /// accepted only when the same central-body evidence metric that powers the fallback matcher
+    /// passes the configured threshold. This prevents a stale prior from silently corrupting output.
+    /// </summary>
+    internal static bool TryValidateSpecificDelta(
+        Bitmap previousFrame,
+        Bitmap currentFrame,
+        ShareXModRobustScrollingSettings settings,
+        int delta,
+        out double score)
+    {
+        score = double.MaxValue;
+        if (previousFrame == null || currentFrame == null ||
+            previousFrame.Width != currentFrame.Width || previousFrame.Height != currentFrame.Height ||
+            delta <= 0 || delta >= currentFrame.Height)
+        {
+            return false;
+        }
+
+        PixelBuffer previous = PixelBuffer.FromBitmap(previousFrame);
+        PixelBuffer current = PixelBuffer.FromBitmap(currentFrame);
+        try
+        {
+            score = CalculateScore(previous, current, previousFrame.Width, previousFrame.Height, delta, 16, 16);
+            return score <= settings.FallbackMaxMeanDifference;
+        }
+        finally
+        {
+            previous.Dispose();
+            current.Dispose();
+        }
+    }
+
     private static bool TryEstimateScrollDelta(Bitmap previousFrame, Bitmap currentFrame,
         ShareXModRobustScrollingSettings settings, out int bestDelta, out double bestScore)
     {

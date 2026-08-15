@@ -27,6 +27,13 @@ internal static class Program
             return 3;
         }
 
+        string managedAssembly = Path.ChangeExtension(executable, ".dll");
+        if (!File.Exists(managedAssembly))
+        {
+            Console.Error.WriteLine("Managed LongCapture.dll companion not found: " + managedAssembly);
+            return 4;
+        }
+
         try
         {
             string directory = Path.GetDirectoryName(executable)!;
@@ -36,7 +43,12 @@ internal static class Program
                 return File.Exists(candidate) ? context.LoadFromAssemblyPath(candidate) : null;
             };
 
-            Assembly assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(executable);
+            // The self-contained LongCapture.exe is a native Windows apphost. The workflow runs
+            // that executable directly with --self-test before this stress gate. For in-process
+            // repeated capture/memory measurement, load the managed LongCapture.dll shipped beside
+            // the exact same executable; this exercises the same published application code while
+            // allowing ten capture lifecycles to share one process.
+            Assembly assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(managedAssembly);
             Type program = assembly.GetType("LongCapture.Standalone.Program", throwOnError: true)!;
             InvokeStatic(program, "InitializeDesktopUiHosts");
 
@@ -84,14 +96,16 @@ internal static class Program
                 {
                     baselineManaged = managed;
                     baselinePrivate = privateBytes;
+                    maximumManaged = managed;
+                    maximumPrivate = privateBytes;
                 }
             }
 
             if (baselineManaged <= 0 || baselinePrivate <= 0)
                 throw new InvalidOperationException("RC stress runner did not establish a post-warmup memory baseline.");
 
-            long managedGrowth = maximumManaged - baselineManaged;
-            long privateGrowth = maximumPrivate - baselinePrivate;
+            long managedGrowth = Math.Max(0, maximumManaged - baselineManaged);
+            long privateGrowth = Math.Max(0, maximumPrivate - baselinePrivate);
 
             Console.WriteLine(
                 $"RC stress summary: runs={Repetitions}, managedGrowth={FormatMiB(managedGrowth)} MiB, privateGrowth={FormatMiB(privateGrowth)} MiB");

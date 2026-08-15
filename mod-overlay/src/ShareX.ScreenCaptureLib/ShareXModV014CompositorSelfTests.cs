@@ -26,13 +26,14 @@ internal static class ShareXModV014CompositorSelfTests
                 result = next;
             }
 
+            Bitmap finalResult = result ?? throw new InvalidOperationException("Anchor compositor produced no result.");
             int expectedHeight = Height + Delta * (Frames - 1);
-            if (result.Width != Width || result.Height != expectedHeight)
+            if (finalResult.Width != Width || finalResult.Height != expectedHeight)
             {
-                throw new InvalidOperationException($"Anchor compositor geometry mismatch: {result.Width}x{result.Height}, expected {Width}x{expectedHeight}.");
+                throw new InvalidOperationException($"Anchor compositor geometry mismatch: {finalResult.Width}x{finalResult.Height}, expected {Width}x{expectedHeight}.");
             }
 
-            int overlayBands = CountDynamicOverlayBands(result);
+            int overlayBands = CountDynamicOverlayBands(finalResult);
             if (overlayBands > 1)
             {
                 throw new InvalidOperationException($"Dynamic fixed right-side control was stamped into {overlayBands} mosaic bands; expected at most one initial occurrence.");
@@ -46,14 +47,14 @@ internal static class ShareXModV014CompositorSelfTests
                 int destinationTop = Height + (frame - 1) * Delta;
                 int logicalTop = frame * Delta + Height - Delta;
                 using Bitmap expected = BuildDocumentStrip(logicalTop, Delta);
-                double error = RegionError(result, expected, new Rectangle(0, destinationTop, Width, Delta));
+                double error = RegionError(finalResult, expected, new Rectangle(0, destinationTop, Width, Delta));
                 if (error > 0.6)
                 {
                     throw new InvalidOperationException($"Anchor compositor seam error at frame {frame}: {error:F2}.");
                 }
             }
 
-            return $"v0.1.4 anchor-compositor integration passed: frames={Frames}, result={result.Width}x{result.Height}, dynamicFixedBands={overlayBands}.";
+            return $"v0.1.4 anchor-compositor integration passed: frames={Frames}, result={finalResult.Width}x{finalResult.Height}, dynamicFixedBands={overlayBands}.";
         }
         finally
         {
@@ -67,15 +68,11 @@ internal static class ShareXModV014CompositorSelfTests
         using Graphics graphics = Graphics.FromImage(bitmap);
         DrawDocument(graphics, logicalOffset, Height);
 
-        // Fixed header remains at the same screen location.
         using var header = new SolidBrush(Color.FromArgb(28, 35, 44));
         graphics.FillRectangle(header, 0, 0, Width, 48);
         using var headerInk = new SolidBrush(Color.White);
         graphics.FillRectangle(headerInk, 24, 17, 150, 8);
 
-        // Fixed right control changes its contents on every scroll. The old exact/static test only
-        // covered byte-identical overlays; real websites often update counters while the widget
-        // remains fixed at the same screen coordinate.
         using var control = new SolidBrush(Color.FromArgb(0, 145, 220));
         graphics.FillRectangle(control, Width - 105, 205, 88, 86);
         using var changing = new SolidBrush(Color.FromArgb(255, 255 - frame * 22, 40 + frame * 25));

@@ -22,7 +22,9 @@ internal static class Program
         }
 
         ApplicationConfiguration.Initialize();
-        Application.Run(new MainForm());
+        using var form = new MainForm();
+        StandaloneUiPolish.Apply(form);
+        Application.Run(form);
         return 0;
     }
 
@@ -59,8 +61,10 @@ internal static class Program
             ApplicationConfiguration.Initialize();
             using (var form = new MainForm())
             {
+                StandaloneUiPolish.Apply(form);
                 _ = form.Handle;
                 if (!form.Text.Contains("LongCapture", StringComparison.OrdinalIgnoreCase)) return 14;
+                if (!StandaloneUiPolish.Validate(form, out _)) return 15;
             }
 
             return 0;

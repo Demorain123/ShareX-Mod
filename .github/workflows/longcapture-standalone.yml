@@ -65,7 +65,7 @@ jobs:
           }
           git diff --check
 
-      - name: Verify standalone source is a real capture client
+      - name: Verify standalone source guards
         shell: pwsh
         run: |
           $source = Get-Content "LongCapture.Standalone\MainForm.cs" -Raw
@@ -101,7 +101,9 @@ jobs:
             "engine-evidence",
             "ExportLatestBundle",
             "MaxCopiedEvidenceBytes",
-            "FindLatestQualityInfo"
+            "IsCurrentEngineEvidence",
+            "CopyEngineEvidence",
+            "BuildQuality"
           )) {
             if ($recorder -notmatch [regex]::Escape($required)) {
               throw "Capture flight recorder is missing required guard: $required"
@@ -176,6 +178,24 @@ jobs:
             }
           }
 
+          $reliability = Get-Content "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModScrollingReliabilitySelfTests.cs" -Raw
+          foreach ($required in @(
+            "TestUniqueScrollDelta",
+            "TestRepeatedPatternIsRejected",
+            "TestStaticOverlayCleanup",
+            "TestPlainContentIsNotOverCleaned",
+            "TestLazyLoadSettle"
+          )) {
+            if ($reliability -notmatch [regex]::Escape($required)) {
+              throw "Scrolling reliability fixture suite is missing required case: $required"
+            }
+          }
+
+          $runner = Get-Content "mod-overlay\tests\ShareXMod.SelfTestRunner\Program.cs" -Raw
+          if ($runner -notmatch [regex]::Escape("ShareXModScrollingReliabilitySelfTests")) {
+            throw "Published-engine regression runner does not execute scrolling reliability fixtures."
+          }
+
           $recipeReview = Get-Content "LongCapture.Standalone\RecipeReviewForm.cs" -Raw
           if ($recipeReview -notmatch [regex]::Escape("CaptureExclusion.Apply")) {
             throw "Recipe review helper window is missing capture exclusion."
@@ -202,6 +222,14 @@ jobs:
             throw "GitHub runner does not expose a .NET 10 SDK."
           }
           dotnet --version
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v5
+        with:
+          path: ~\.nuget\packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('Directory.Packages.props', 'Directory.build.props', 'LongCapture.Standalone/*.csproj', 'ShareX.ScreenCaptureLib/*.csproj', 'ShareX.Avalonia/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
 
       - name: Restore standalone win-x64
         run: dotnet restore --runtime win-x64 LongCapture.Standalone\LongCapture.Standalone.csproj
@@ -258,13 +286,13 @@ jobs:
           $p = Start-Process -FilePath (Resolve-Path "artifacts\LongCapture\LongCapture.exe") -ArgumentList "--self-test" -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "LongCapture self-test failed with exit code $($p.ExitCode)." }
 
-      - name: Run ShareX-Mod semantic regression suite against published engine
+      - name: Run ShareX-Mod semantic and scrolling reliability regression suite
         shell: pwsh
         run: |
           dotnet run --project "mod-overlay\tests\ShareXMod.SelfTestRunner\ShareXMod.SelfTestRunner.csproj" --configuration Release -- "artifacts\LongCapture\ShareX.ScreenCaptureLib.dll"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Package standalone portable ZIP
+      - name: Package standalone portable
         id: package
         shell: pwsh
         run: |

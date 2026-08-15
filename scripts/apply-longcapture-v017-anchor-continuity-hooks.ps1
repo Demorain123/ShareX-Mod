@@ -37,8 +37,8 @@ Replace-Literal -Path $manager `
 
 # Real v0.1.6 Linux.do evidence contained seven strict-anchor rejections. Every one bypassed the
 # delayed fixed-overlay compositor through the old CombineImagesAsync fallback. v0.1.7 removes that
-# split path: direct anchor, validated vertical fallback, and validated temporal prior all feed the
-# same raw-frame delayed compositor. If no transition can be validated, stop instead of corrupting.
+# split path: direct anchor, validated fallback and validated temporal prior all feed the same
+# raw-frame delayed compositor. If no transition can be validated, stop instead of corrupting.
 Replace-Literal -Path $manager `
   -Old @'
                             ShareXModReplayDiagnostics.RecordAnchor(modHasAnchor, modAnchor);
@@ -172,6 +172,25 @@ Replace-Literal -Path $automation `
         "ShareX.ScreenCaptureLib.ShareXModV017AnchorContinuitySelfTests",
 '@ `
   -Marker '"ShareX.ScreenCaptureLib.ShareXModV017AnchorContinuitySelfTests",'
+
+# The replay button is now part of the recovery workflow, not an optional developer file.
+Replace-Literal -Path $automation `
+  -Old @'
+            "1-RUN-AUTOMATED-TESTS.cmd",
+            "Run-LongCapture-AutomatedTests.ps1"
+'@ `
+  -New @'
+            "1-RUN-AUTOMATED-TESTS.cmd",
+            "2-REPLAY-LAST-CAPTURE.cmd",
+            "Run-LongCapture-AutomatedTests.ps1"
+'@ `
+  -Marker '"2-REPLAY-LAST-CAPTURE.cmd",'
+
+# Remove stale RC2 wording from the report that the user sees after QUICK.
+Replace-Literal -Path $automation `
+  -Old 'Normal Long Capture can target an existing Chrome HWND. Reusing that same daily Chrome authenticated DOM/CDP session for Smart Web is not declared complete in v0.1.3 RC2.' `
+  -New 'Normal Long Capture can target an existing Chrome HWND. Existing daily-Chrome authenticated DOM/CDP reuse remains an Advanced provider item and is not required for the v0.1.7 core fixed/stitch validation.' `
+  -Marker 'v0.1.7 core fixed/stitch validation.'
 
 if ($CheckOnly) { Write-Host "LongCapture v0.1.7 anchor-continuity compatibility passed." -ForegroundColor Green }
 else { Write-Host "LongCapture v0.1.7 anchor-continuity hooks applied." -ForegroundColor Green }

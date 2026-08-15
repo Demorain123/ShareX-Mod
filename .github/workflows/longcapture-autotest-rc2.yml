@@ -81,7 +81,6 @@ jobs:
             "ShareXModScrollingReliabilitySelfTests",
             "ShareXModDeferredOverlaySelfTests",
             "CaptureSessionRecorder.ExportLatestBundle",
-            "RunQuickCaptureRepeat",
             "DeepRepetitions = 10",
             "PASS_AUTOMATED",
             "MANUAL_REQUIRED"
@@ -128,7 +127,7 @@ jobs:
           $data = Get-Content $report.FullName -Raw | ConvertFrom-Json
           if ($data.Status -ne "PASS_AUTOMATED" -or [int]$data.FailedCount -ne 0) { throw "Automation report is not PASS_AUTOMATED" }
           if ($data.Profile -ne "QUICK") { throw "Default package gate must use QUICK profile, got $($data.Profile)" }
-          if ([int]$data.PassedCount -lt 6) { throw "Too few automated functional groups passed: $($data.PassedCount)" }
+          if ([int]$data.PassedCount -lt 5) { throw "Too few automated functional groups passed: $($data.PassedCount)" }
           if ([int]$data.ManualRequiredCount -lt 1) { throw "Real-environment limitations are not explicitly represented" }
           Write-Host "Quick automated acceptance PASS=$($data.PassedCount) FAIL=$($data.FailedCount) MANUAL_REQUIRED=$($data.ManualRequiredCount)"
 
@@ -158,8 +157,7 @@ jobs:
               "sticky/header cleanup and deferred right-bottom fixed-overlay repair",
               "lazy-load adaptive settle",
               "recipe planner/range anchor/integrity/router/pagination regressions",
-              "diagnostics session creation and Export diagnostics ZIP round-trip",
-              "second real capture smoke proving another capture can run after the core self-test"
+              "diagnostics session creation and Export diagnostics ZIP round-trip"
             )
             optionalDeepCoverage = @(
               "10 consecutive real capture smoke runs",

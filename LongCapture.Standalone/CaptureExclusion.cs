@@ -17,6 +17,8 @@ internal static class CaptureExclusion
     public const uint WDA_NONE = 0x00000000;
     public const uint WDA_EXCLUDEFROMCAPTURE = 0x00000011;
 
+    private static volatile bool debugCaptureUi;
+
     private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
     [DllImport("user32.dll", SetLastError = true)]
@@ -34,6 +36,16 @@ internal static class CaptureExclusion
     [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 
+    public static bool DebugCaptureUi => debugCaptureUi;
+    public static uint DesiredAffinity => debugCaptureUi ? WDA_NONE : WDA_EXCLUDEFROMCAPTURE;
+
+    public static void SetDebugCaptureUi(bool enabled, string reason)
+    {
+        debugCaptureUi = enabled;
+        LongCaptureLog.Info($"debug capture UI changed enabled={enabled} reason={LongCaptureLog.OneLine(reason)} desiredAffinity=0x{DesiredAffinity:X8}");
+        ApplyToCurrentProcessTopLevelWindows(enabled ? "debug-ui-enabled" : "debug-ui-disabled");
+    }
+
     public static CaptureExclusionResult Apply(Form form, string role)
     {
         _ = form.Handle;
@@ -45,12 +57,13 @@ internal static class CaptureExclusion
         if (hWnd == IntPtr.Zero)
         {
             var missing = new CaptureExclusionResult(hWnd, false, 0, null, role);
-            LongCaptureLog.Warn($"capture exclusion skipped role={LongCaptureLog.OneLine(role)} reason=no-window-handle");
+            LongCaptureLog.Warn($"capture affinity skipped role={LongCaptureLog.OneLine(role)} reason=no-window-handle");
             return missing;
         }
 
+        uint requested = DesiredAffinity;
         Marshal.SetLastPInvokeError(0);
-        bool applied = SetWindowDisplayAffinity(hWnd, WDA_EXCLUDEFROMCAPTURE);
+        bool applied = SetWindowDisplayAffinity(hWnd, requested);
         int error = applied ? 0 : Marshal.GetLastPInvokeError();
 
         uint? verified = null;
@@ -63,12 +76,12 @@ internal static class CaptureExclusion
         if (applied)
         {
             LongCaptureLog.Info(
-                $"capture exclusion applied role={LongCaptureLog.OneLine(role)} hwnd=0x{hWnd.ToInt64():X} requested=0x{WDA_EXCLUDEFROMCAPTURE:X8} verified={verifiedText}");
+                $"capture affinity applied role={LongCaptureLog.OneLine(role)} hwnd=0x{hWnd.ToInt64():X} requested=0x{requested:X8} debugUi={debugCaptureUi} verified={verifiedText}");
         }
         else
         {
             LongCaptureLog.Warn(
-                $"capture exclusion failed role={LongCaptureLog.OneLine(role)} hwnd=0x{hWnd.ToInt64():X} requested=0x{WDA_EXCLUDEFROMCAPTURE:X8} win32={error}");
+                $"capture affinity failed role={LongCaptureLog.OneLine(role)} hwnd=0x{hWnd.ToInt64():X} requested=0x{requested:X8} debugUi={debugCaptureUi} win32={error}");
         }
 
         return new CaptureExclusionResult(hWnd, applied, error, verified, role);
@@ -97,7 +110,7 @@ internal static class CaptureExclusion
         }
 
         LongCaptureLog.Info(
-            $"capture exclusion sweep reason={LongCaptureLog.OneLine(reason)} windows={results.Count} applied={applied} failed={results.Count - applied}");
+            $"capture affinity sweep reason={LongCaptureLog.OneLine(reason)} windows={results.Count} applied={applied} failed={results.Count - applied} debugUi={debugCaptureUi} desired=0x{DesiredAffinity:X8}");
         return results;
     }
 }

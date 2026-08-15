@@ -2,7 +2,6 @@ using ShareX.ScreenCaptureLib;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
-using System.Drawing.Imaging;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -13,33 +12,17 @@ namespace LongCapture.Standalone;
 
 internal sealed class CaptureSessionRecorder : IDisposable
 {
-    private const int MaxDiagnosticFramePairs = 16;
+    private const long MaxCopiedEvidenceBytes = 128L * 1024L * 1024L;
+    private const long MaxSingleEvidenceFileBytes = 16L * 1024L * 1024L;
     private static readonly object LatestSync = new();
     private static string? latestCompletedSessionDirectory;
 
-    private readonly object sync = new();
-    private readonly string telemetryPath;
-    private readonly string sessionLogPath;
-    private readonly string diagnosticsDirectory;
     private readonly DateTimeOffset started = DateTimeOffset.Now;
     private readonly JsonSerializerOptions jsonOptions = new() { WriteIndented = true };
     private readonly string mode;
     private readonly string target;
     private readonly object optionsSnapshot;
-
-    private Bitmap? previousFrame;
-    private Bitmap? currentFrame;
-    private int currentFrameIndex;
-    private int diagnosticFramePairs;
-    private int totalFrames;
-    private int stitchCount;
-    private int lowConfidenceStitches;
-    private int bestGuessStitches;
-    private int settleTimeouts;
-    private int warningCount;
-    private int stationaryOverlayEvents;
-    private int stationaryTileCount;
-    private long stationaryPixelArea;
+    private readonly string sessionLogPath;
     private bool completed;
 
     public CaptureSessionRecorder(
@@ -57,25 +40,15 @@ internal sealed class CaptureSessionRecorder : IDisposable
             options.ScrollMethod,
             options.ScrollAmount,
             options.AutoIgnoreBottomEdge,
-            options.ShowRegion,
-            options.AdaptiveSettle,
-            options.AdaptiveSettleProbeInterval,
-            options.AdaptiveSettleStableSamples,
-            options.AdaptiveSettleMaxDelay,
-            options.AdaptiveSettleChangedFraction,
-            options.SuppressStationaryOverlays
+            options.ShowRegion
         };
 
-        string sessionId = $"{DateTime.Now:yyyyMMdd-HHmmssfff}-{Environment.ProcessId}-{Guid.NewGuid():N}"[..34];
+        string sessionId = $"{DateTime.Now:yyyyMMdd-HHmmssfff}-p{Environment.ProcessId}-{Guid.NewGuid():N}";
         SessionDirectory = Path.Combine(SessionRoot, sessionId);
-        diagnosticsDirectory = Path.Combine(SessionDirectory, "diagnostics");
-        telemetryPath = Path.Combine(SessionDirectory, "telemetry.jsonl");
         sessionLogPath = Path.Combine(SessionDirectory, "session.log");
-
         Directory.CreateDirectory(SessionDirectory);
-        Directory.CreateDirectory(diagnosticsDirectory);
-        WriteSessionManifest(null, null, null, null);
-        AppendSessionLog($"session started mode={Sanitize(mode)} target={Sanitize(target)}");
+        WriteManifest(null, null, null, null, null);
+        AppendSessionLog($"session-start mode={Sanitize(mode)} target={Sanitize(target)}");
         LongCaptureLog.Info($"capture flight recorder started directory={LongCaptureLog.OneLine(SessionDirectory)}");
     }
 
@@ -100,9 +73,10 @@ internal sealed class CaptureSessionRecorder : IDisposable
 
             try
             {
-                Directory.CreateDirectory(SessionRoot);
+                if (!Directory.Exists(SessionRoot)) return null;
                 return new DirectoryInfo(SessionRoot)
                     .EnumerateDirectories()
+                    .Where(directory => File.Exists(Path.Combine(directory.FullName, "quality.json")))
                     .OrderByDescending(directory => directory.LastWriteTimeUtc)
                     .Select(directory => directory.FullName)
                     .FirstOrDefault();
@@ -114,70 +88,27 @@ internal sealed class CaptureSessionRecorder : IDisposable
         }
     }
 
-    public void Attach(ScrollingCaptureOptions options)
-    {
-        options.TelemetrySink = OnTelemetry;
-        options.FrameSink = OnFrame;
-    }
-
-    public void OnFrame(ScrollingCaptureFrameEvent frame)
-    {
-        lock (sync)
-        {
-            previousFrame?.Dispose();
-            previousFrame = currentFrame;
-            currentFrame = (Bitmap)frame.Frame.Clone();
-            currentFrameIndex = frame.FrameIndex;
-        }
-    }
-
-    public void OnTelemetry(ScrollingCaptureTelemetryEvent evt)
-    {
-        try
-        {
-            string line = JsonSerializer.Serialize(evt);
-            lock (sync)
-            {
-                File.AppendAllText(telemetryPath, line + Environment.NewLine, Encoding.UTF8);
-                UpdateCounters(evt);
-            }
-
-            if (evt.Kind is ScrollingCaptureTelemetryKind.Warning or ScrollingCaptureTelemetryKind.StationaryOverlayDetected)
-            {
-                SaveDiagnosticFramePair(evt);
-            }
-
-            if (evt.Kind is ScrollingCaptureTelemetryKind.Warning or ScrollingCaptureTelemetryKind.SettleCompleted or ScrollingCaptureTelemetryKind.StitchComputed)
-            {
-                AppendSessionLog(
-                    $"{evt.Kind} frame={evt.FrameIndex} confidence={evt.Confidence:F3} changed={evt.ChangedFraction:F4} scroll={evt.EstimatedScrollPixels} matchRows={evt.MatchRows} timeout={evt.TimedOut} bestGuess={evt.UsedBestGuess} message={Sanitize(evt.Message)}");
-            }
-        }
-        catch (Exception ex)
-        {
-            LongCaptureLog.Warn($"flight recorder telemetry write failed type={ex.GetType().Name} message={LongCaptureLog.OneLine(ex.Message)}");
-        }
-    }
-
     public CaptureSessionQuality Complete(
         ScrollingCaptureStatus status,
         string? savedPath,
-        Size? resultSize)
+        Size? resultSize,
+        LongCaptureQualityInfo? engineQuality)
     {
-        lock (sync)
+        if (completed)
         {
-            if (completed)
-            {
-                return LoadQualityOrFallback(status);
-            }
-            completed = true;
+            return LoadQualityOrFallback(status);
         }
+        completed = true;
 
-        CaptureSessionQuality quality = BuildQuality(status, savedPath, resultSize);
+        LongCaptureQualityInfo? correlated = IsCurrentEngineEvidence(engineQuality) ? engineQuality : null;
+        EngineEvidenceCopy copy = CopyEngineEvidence(correlated);
+        CaptureSessionQuality quality = BuildQuality(status, savedPath, resultSize, correlated, copy);
+
         string qualityPath = Path.Combine(SessionDirectory, "quality.json");
         File.WriteAllText(qualityPath, JsonSerializer.Serialize(quality, jsonOptions), Encoding.UTF8);
-        WriteSessionManifest(status, savedPath, resultSize, quality);
-        AppendSessionLog($"session completed status={status} quality={quality.Status} score={quality.Score}/100 result={Sanitize(savedPath)}");
+        WriteManifest(status, savedPath, resultSize, quality, correlated);
+        AppendSessionLog(
+            $"session-end engineStatus={status} quality={quality.Status} score={quality.Score}/100 engineEvidence={Sanitize(correlated?.SessionDirectory)} copiedFiles={copy.FilesCopied} copiedBytes={copy.BytesCopied} truncated={copy.Truncated}");
 
         lock (LatestSync)
         {
@@ -185,7 +116,7 @@ internal sealed class CaptureSessionRecorder : IDisposable
         }
 
         LongCaptureLog.Info(
-            $"capture flight recorder completed status={quality.Status} score={quality.Score}/100 directory={LongCaptureLog.OneLine(SessionDirectory)}");
+            $"capture flight recorder completed status={quality.Status} score={quality.Score}/100 engineEvidence={(correlated is null ? "not-correlated" : "correlated")} directory={LongCaptureLog.OneLine(SessionDirectory)}");
         return quality;
     }
 
@@ -198,140 +129,185 @@ internal sealed class CaptureSessionRecorder : IDisposable
         }
 
         Directory.CreateDirectory(destinationDirectory);
-        string fileName = $"LongCapture-Diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}.zip";
-        string destination = Path.Combine(destinationDirectory, fileName);
+        string destination = Path.Combine(
+            destinationDirectory,
+            $"LongCapture-Diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}.zip");
         if (File.Exists(destination)) File.Delete(destination);
         ZipFile.CreateFromDirectory(source, destination, CompressionLevel.Optimal, includeBaseDirectory: true);
         return destination;
     }
 
-    private void UpdateCounters(ScrollingCaptureTelemetryEvent evt)
+    private bool IsCurrentEngineEvidence(LongCaptureQualityInfo? quality)
     {
-        switch (evt.Kind)
+        if (quality is null || string.IsNullOrWhiteSpace(quality.SummaryPath) || !File.Exists(quality.SummaryPath))
         {
-            case ScrollingCaptureTelemetryKind.FrameCaptured:
-                totalFrames = Math.Max(totalFrames, evt.FrameIndex);
-                break;
-            case ScrollingCaptureTelemetryKind.StitchComputed:
-                stitchCount++;
-                if (evt.Confidence < 0.50) lowConfidenceStitches++;
-                if (evt.UsedBestGuess) bestGuessStitches++;
-                break;
-            case ScrollingCaptureTelemetryKind.SettleCompleted:
-                if (evt.TimedOut) settleTimeouts++;
-                break;
-            case ScrollingCaptureTelemetryKind.Warning:
-                warningCount++;
-                break;
-            case ScrollingCaptureTelemetryKind.StationaryOverlayDetected:
-                stationaryOverlayEvents++;
-                stationaryTileCount += evt.StationaryTileCount;
-                stationaryPixelArea += evt.StationaryPixelArea;
-                break;
-        }
-    }
-
-    private void SaveDiagnosticFramePair(ScrollingCaptureTelemetryEvent evt)
-    {
-        Bitmap? before = null;
-        Bitmap? after = null;
-        int frame;
-        lock (sync)
-        {
-            if (diagnosticFramePairs >= MaxDiagnosticFramePairs) return;
-            if (currentFrame is null) return;
-            diagnosticFramePairs++;
-            frame = currentFrameIndex;
-            before = previousFrame is null ? null : (Bitmap)previousFrame.Clone();
-            after = (Bitmap)currentFrame.Clone();
+            return false;
         }
 
         try
         {
-            string prefix = $"frame-{frame:0000}-{evt.Kind}";
-            before?.Save(Path.Combine(diagnosticsDirectory, prefix + "-previous.png"), ImageFormat.Png);
-            after.Save(Path.Combine(diagnosticsDirectory, prefix + "-current.png"), ImageFormat.Png);
+            DateTimeOffset written = File.GetLastWriteTimeUtc(quality.SummaryPath);
+            // Filesystem timestamps can have coarse resolution. Accept a small margin, but do
+            // not accidentally attach a previous run's quality summary to this capture.
+            return written >= started.UtcDateTime.AddSeconds(-3);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private EngineEvidenceCopy CopyEngineEvidence(LongCaptureQualityInfo? quality)
+    {
+        if (quality is null || string.IsNullOrWhiteSpace(quality.SessionDirectory) || !Directory.Exists(quality.SessionDirectory))
+        {
             File.WriteAllText(
-                Path.Combine(diagnosticsDirectory, prefix + "-event.json"),
-                JsonSerializer.Serialize(evt, jsonOptions),
+                Path.Combine(SessionDirectory, "engine-evidence-unavailable.txt"),
+                "No new ShareX-Mod capture-session evidence could be correlated with this LongCapture run.\r\n",
                 Encoding.UTF8);
+            return new EngineEvidenceCopy(0, 0, false);
+        }
+
+        string destinationRoot = Path.Combine(SessionDirectory, "engine-evidence");
+        Directory.CreateDirectory(destinationRoot);
+        long copiedBytes = 0;
+        int copiedFiles = 0;
+        bool truncated = false;
+        var skipped = new List<string>();
+
+        IEnumerable<string> candidates;
+        try
+        {
+            candidates = Directory.EnumerateFiles(quality.SessionDirectory, "*", SearchOption.AllDirectories).ToArray();
         }
         catch (Exception ex)
         {
-            LongCaptureLog.Warn($"diagnostic frame save failed type={ex.GetType().Name} message={LongCaptureLog.OneLine(ex.Message)}");
+            skipped.Add($"enumeration failed: {ex.GetType().Name}: {ex.Message}");
+            candidates = Array.Empty<string>();
         }
-        finally
+
+        foreach (string source in candidates)
         {
-            before?.Dispose();
-            after?.Dispose();
+            try
+            {
+                FileInfo info = new(source);
+                string extension = info.Extension.ToLowerInvariant();
+                bool evidenceType = extension is ".json" or ".jsonl" or ".txt" or ".log" or ".csv" or ".png";
+                if (!evidenceType)
+                {
+                    skipped.Add($"unsupported type: {Path.GetRelativePath(quality.SessionDirectory, source)}");
+                    continue;
+                }
+
+                if (info.Length > MaxSingleEvidenceFileBytes || copiedBytes + info.Length > MaxCopiedEvidenceBytes)
+                {
+                    truncated = true;
+                    skipped.Add($"size cap: {Path.GetRelativePath(quality.SessionDirectory, source)} ({info.Length} bytes)");
+                    continue;
+                }
+
+                string relative = Path.GetRelativePath(quality.SessionDirectory, source);
+                string destination = Path.Combine(destinationRoot, relative);
+                string? parent = Path.GetDirectoryName(destination);
+                if (!string.IsNullOrWhiteSpace(parent)) Directory.CreateDirectory(parent);
+                File.Copy(source, destination, overwrite: true);
+                copiedBytes += info.Length;
+                copiedFiles++;
+            }
+            catch (Exception ex)
+            {
+                skipped.Add($"copy failed: {source}: {ex.GetType().Name}: {ex.Message}");
+            }
         }
+
+        File.WriteAllText(
+            Path.Combine(destinationRoot, "copy-manifest.json"),
+            JsonSerializer.Serialize(new
+            {
+                source = quality.SessionDirectory,
+                qualitySummary = quality.SummaryPath,
+                copiedFiles,
+                copiedBytes,
+                truncated,
+                maxBytes = MaxCopiedEvidenceBytes,
+                maxSingleFileBytes = MaxSingleEvidenceFileBytes,
+                skipped
+            }, jsonOptions),
+            Encoding.UTF8);
+
+        return new EngineEvidenceCopy(copiedFiles, copiedBytes, truncated);
     }
 
     private CaptureSessionQuality BuildQuality(
         ScrollingCaptureStatus status,
         string? savedPath,
-        Size? resultSize)
+        Size? resultSize,
+        LongCaptureQualityInfo? engineQuality,
+        EngineEvidenceCopy evidenceCopy)
     {
-        int score = 100;
+        int score = engineQuality?.IntegrityScore is > 0 and <= 100
+            ? engineQuality.IntegrityScore
+            : 75;
         var reasons = new List<string>();
 
         if (status == ScrollingCaptureStatus.Failed)
         {
-            score -= 65;
+            score = Math.Min(score, 30);
             reasons.Add("capture engine reported Failed");
         }
         else if (status == ScrollingCaptureStatus.PartiallySuccessful)
         {
-            score -= 18;
-            reasons.Add("capture used a partial/best-guess stitch path");
+            score = Math.Min(score, 78);
+            reasons.Add("capture engine reported PartiallySuccessful");
         }
 
         if (string.IsNullOrWhiteSpace(savedPath) || resultSize is null || resultSize.Value.Width <= 0 || resultSize.Value.Height <= 0)
         {
-            score -= 50;
+            score = Math.Min(score, 25);
             reasons.Add("no usable output image was saved");
         }
 
-        if (lowConfidenceStitches > 0)
+        if (engineQuality is null)
         {
-            score -= Math.Min(28, lowConfidenceStitches * 7);
-            reasons.Add($"{lowConfidenceStitches} low-confidence stitch(es)");
+            score = Math.Min(score, 72);
+            reasons.Add("no new final ShareX-Mod Quality Guard summary could be correlated with this capture");
+        }
+        else
+        {
+            if (!string.Equals(engineQuality.Confidence, "high", StringComparison.OrdinalIgnoreCase))
+            {
+                score = Math.Min(score, string.Equals(engineQuality.Confidence, "medium", StringComparison.OrdinalIgnoreCase) ? 84 : 70);
+                reasons.Add($"engine quality confidence is {engineQuality.Confidence}");
+            }
+
+            if (string.Equals(engineQuality.Status, "unresolved", StringComparison.OrdinalIgnoreCase))
+            {
+                score = Math.Min(score, 68);
+                reasons.Add("Quality Guard reports unresolved suspect ranges");
+            }
+            else if (string.Equals(engineQuality.Status, "partially-repaired", StringComparison.OrdinalIgnoreCase))
+            {
+                score = Math.Min(score, 82);
+                reasons.Add("Quality Guard reports partially repaired suspect ranges");
+            }
         }
 
-        if (bestGuessStitches > 0)
+        if (evidenceCopy.Truncated)
         {
-            score -= Math.Min(20, bestGuessStitches * 10);
-            reasons.Add($"{bestGuessStitches} historical best-guess stitch(es)");
+            reasons.Add("diagnostic evidence copy hit the safety size cap; original engine evidence remains on disk");
         }
 
-        if (settleTimeouts > 0)
-        {
-            score -= Math.Min(15, settleTimeouts * 3);
-            reasons.Add($"{settleTimeouts} adaptive-settle timeout(s)");
-        }
-
-        if (warningCount > 0)
-        {
-            score -= Math.Min(10, warningCount * 2);
-            reasons.Add($"{warningCount} engine warning event(s)");
-        }
-
-        if (totalFrames > 2 && stitchCount < 2)
-        {
-            score -= 12;
-            reasons.Add("multiple frames were captured but too few successful stitch decisions were recorded");
-        }
-
-        score = Math.Max(0, Math.Min(100, score));
-        string qualityStatus = score >= 90 && status == ScrollingCaptureStatus.Successful
-            ? "PASS"
-            : score >= 75 && status != ScrollingCaptureStatus.Failed
-                ? "PASS_WITH_WARNING"
-                : "FAIL";
+        score = Math.Clamp(score, 0, 100);
+        string qualityStatus =
+            score >= 90 && status == ScrollingCaptureStatus.Successful && engineQuality is not null
+                ? "PASS"
+                : score >= 75 && status != ScrollingCaptureStatus.Failed
+                    ? "PASS_WITH_WARNING"
+                    : "FAIL";
 
         if (reasons.Count == 0)
         {
-            reasons.Add("no capture-integrity warning was observed by the v0.1.3 flight recorder");
+            reasons.Add("capture engine and final Quality Guard did not report a blocking integrity issue");
         }
 
         return new CaptureSessionQuality
@@ -339,15 +315,14 @@ internal sealed class CaptureSessionRecorder : IDisposable
             Status = qualityStatus,
             Score = score,
             EngineStatus = status.ToString(),
-            TotalFrames = totalFrames,
-            StitchCount = stitchCount,
-            LowConfidenceStitches = lowConfidenceStitches,
-            BestGuessStitches = bestGuessStitches,
-            SettleTimeouts = settleTimeouts,
-            WarningEvents = warningCount,
-            StationaryOverlayEvents = stationaryOverlayEvents,
-            StationaryTileCount = stationaryTileCount,
-            StationaryPixelArea = stationaryPixelArea,
+            EngineQualityStatus = engineQuality?.Status ?? "unavailable",
+            EngineConfidence = engineQuality?.Confidence ?? "unavailable",
+            EngineIntegrityScore = engineQuality?.IntegrityScore ?? 0,
+            EngineQualitySummary = engineQuality?.SummaryPath ?? string.Empty,
+            EngineSessionDirectory = engineQuality?.SessionDirectory ?? string.Empty,
+            EvidenceFilesCopied = evidenceCopy.FilesCopied,
+            EvidenceBytesCopied = evidenceCopy.BytesCopied,
+            EvidenceTruncated = evidenceCopy.Truncated,
             ResultPath = savedPath ?? string.Empty,
             ResultWidth = resultSize?.Width ?? 0,
             ResultHeight = resultSize?.Height ?? 0,
@@ -355,15 +330,16 @@ internal sealed class CaptureSessionRecorder : IDisposable
         };
     }
 
-    private void WriteSessionManifest(
+    private void WriteManifest(
         ScrollingCaptureStatus? status,
         string? savedPath,
         Size? resultSize,
-        CaptureSessionQuality? quality)
+        CaptureSessionQuality? quality,
+        LongCaptureQualityInfo? engineQuality)
     {
         var manifest = new
         {
-            schema = "longcapture.capture-session.v1",
+            schema = "longcapture.capture-session.v2",
             appVersion = StandaloneVersion.Value,
             started,
             completed = status.HasValue ? DateTimeOffset.Now : (DateTimeOffset?)null,
@@ -377,12 +353,19 @@ internal sealed class CaptureSessionRecorder : IDisposable
                 width = resultSize?.Width ?? 0,
                 height = resultSize?.Height ?? 0
             },
+            engineEvidence = engineQuality is null ? null : new
+            {
+                engineQuality.Status,
+                engineQuality.Confidence,
+                engineQuality.IntegrityScore,
+                engineQuality.SummaryPath,
+                engineQuality.SessionDirectory
+            },
             quality,
             diagnostics = new
             {
-                telemetry = Path.GetFileName(telemetryPath),
                 sessionLog = Path.GetFileName(sessionLogPath),
-                anomalyDirectory = "diagnostics"
+                engineEvidenceCopy = "engine-evidence"
             }
         };
 
@@ -407,7 +390,7 @@ internal sealed class CaptureSessionRecorder : IDisposable
         return new CaptureSessionQuality
         {
             Status = status == ScrollingCaptureStatus.Successful ? "PASS_WITH_WARNING" : "FAIL",
-            Score = status == ScrollingCaptureStatus.Successful ? 75 : 0,
+            Score = status == ScrollingCaptureStatus.Successful ? 70 : 0,
             EngineStatus = status.ToString(),
             Reasons = new[] { "quality report could not be reloaded" }
         };
@@ -434,14 +417,12 @@ internal sealed class CaptureSessionRecorder : IDisposable
 
     public void Dispose()
     {
-        lock (sync)
-        {
-            previousFrame?.Dispose();
-            currentFrame?.Dispose();
-            previousFrame = null;
-            currentFrame = null;
-        }
+        // The recorder intentionally owns no long-lived frame buffers. Detailed per-frame
+        // evidence is produced by the existing ShareX-Mod Capture Map / Robust session and
+        // correlated into this session at Complete().
     }
+
+    private readonly record struct EngineEvidenceCopy(int FilesCopied, long BytesCopied, bool Truncated);
 }
 
 internal sealed class CaptureSessionQuality
@@ -449,15 +430,14 @@ internal sealed class CaptureSessionQuality
     public string Status { get; init; } = "FAIL";
     public int Score { get; init; }
     public string EngineStatus { get; init; } = string.Empty;
-    public int TotalFrames { get; init; }
-    public int StitchCount { get; init; }
-    public int LowConfidenceStitches { get; init; }
-    public int BestGuessStitches { get; init; }
-    public int SettleTimeouts { get; init; }
-    public int WarningEvents { get; init; }
-    public int StationaryOverlayEvents { get; init; }
-    public int StationaryTileCount { get; init; }
-    public long StationaryPixelArea { get; init; }
+    public string EngineQualityStatus { get; init; } = string.Empty;
+    public string EngineConfidence { get; init; } = string.Empty;
+    public int EngineIntegrityScore { get; init; }
+    public string EngineQualitySummary { get; init; } = string.Empty;
+    public string EngineSessionDirectory { get; init; } = string.Empty;
+    public int EvidenceFilesCopied { get; init; }
+    public long EvidenceBytesCopied { get; init; }
+    public bool EvidenceTruncated { get; init; }
     public string ResultPath { get; init; } = string.Empty;
     public int ResultWidth { get; init; }
     public int ResultHeight { get; init; }

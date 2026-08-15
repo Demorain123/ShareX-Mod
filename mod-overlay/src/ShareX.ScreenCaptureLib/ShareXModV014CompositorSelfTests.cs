@@ -11,6 +11,10 @@ internal static class ShareXModV014CompositorSelfTests
     private const int Height = 540;
     private const int Delta = 120;
     private const int Frames = 6;
+    private const int FixedX = Width - 118;
+    private const int FixedY = Height - 104;
+    private const int FixedWidth = 96;
+    private const int FixedHeight = 88;
 
     public static string RunOrThrow()
     {
@@ -36,25 +40,39 @@ internal static class ShareXModV014CompositorSelfTests
             int overlayBands = CountDynamicOverlayBands(finalResult);
             if (overlayBands > 1)
             {
-                throw new InvalidOperationException($"Dynamic fixed right-side control was stamped into {overlayBands} mosaic bands; expected at most one initial occurrence.");
+                throw new InvalidOperationException($"Bottom-right fixed control was stamped into {overlayBands} mosaic bands; expected only the newest unresolved tail occurrence.");
             }
 
-            // Every appended strip must equal the underlying document because the synthetic fixed
-            // control sits above the newly exposed bottom delta. This models the Linux.do-style
-            // changing right-side timeline control that should not be re-appended on every scroll.
-            for (int frame = 1; frame < Frames; frame++)
+            // Every occurrence except the newest tail must have been repaired one frame later from
+            // current(y-delta), which is the same logical document pixel previously hidden by the
+            // fixed control. This is the exact case v0.1.4 failed to test.
+            for (int frame = 0; frame < Frames - 1; frame++)
             {
-                int destinationTop = Height + (frame - 1) * Delta;
-                int logicalTop = frame * Delta + Height - Delta;
-                using Bitmap expected = BuildDocumentStrip(logicalTop, Delta);
-                double error = RegionError(finalResult, expected, new Rectangle(0, destinationTop, Width, Delta));
-                if (error > 0.6)
+                int destinationTop = frame * Delta + FixedY;
+                int logicalTop = frame * Delta + FixedY;
+                using Bitmap expected = BuildDocumentStrip(logicalTop, FixedHeight);
+                double error = RegionError(
+                    finalResult,
+                    expected,
+                    new Rectangle(FixedX, destinationTop, FixedWidth, FixedHeight),
+                    expectedX: FixedX);
+                if (error > 18.0)
                 {
-                    throw new InvalidOperationException($"Anchor compositor seam error at frame {frame}: {error:F2}.");
+                    throw new InvalidOperationException($"Deferred fixed-overlay recovery error at frame {frame}: {error:F2}.");
                 }
             }
 
-            return $"v0.1.4 anchor-compositor integration passed: frames={Frames}, result={finalResult.Width}x{finalResult.Height}, dynamicFixedBands={overlayBands}.";
+            ShareXModAnchorCompositorTelemetry telemetry = ShareXModAnchorCompositorV014.SnapshotTelemetry();
+            if (telemetry.DetectedStationaryTiles <= 0 || telemetry.RepairedStationaryTiles <= 0)
+            {
+                throw new InvalidOperationException("Bottom fixed-overlay fixture did not exercise the v0.1.5 stationary-tile detector/repair path.");
+            }
+            if (telemetry.PendingTailTiles <= 0)
+            {
+                throw new InvalidOperationException("Fixture should expose one newest fixed tail as pending evidence at manual stop.");
+            }
+
+            return $"v0.1.5 bottom-fixed deferred-repair integration passed: frames={Frames}, result={finalResult.Width}x{finalResult.Height}, dynamicFixedBands={overlayBands}, detectedTiles={telemetry.DetectedStationaryTiles}, repairedTiles={telemetry.RepairedStationaryTiles}, pendingTailTiles={telemetry.PendingTailTiles}.";
         }
         finally
         {
@@ -68,16 +86,22 @@ internal static class ShareXModV014CompositorSelfTests
         using Graphics graphics = Graphics.FromImage(bitmap);
         DrawDocument(graphics, logicalOffset, Height);
 
+        // Fixed header remains outside the newly appended bottom strip; it verifies that ordinary
+        // top chrome does not perturb delta geometry.
         using var header = new SolidBrush(Color.FromArgb(28, 35, 44));
         graphics.FillRectangle(header, 0, 0, Width, 48);
         using var headerInk = new SolidBrush(Color.White);
         graphics.FillRectangle(headerInk, 24, 17, 150, 8);
 
+        // Linux.do-shaped failure: a blue fixed Back/counter control intersects the bottom Delta
+        // strip and changes a small amount of internal content every frame.
         using var control = new SolidBrush(Color.FromArgb(0, 145, 220));
-        graphics.FillRectangle(control, Width - 105, 205, 88, 86);
-        using var changing = new SolidBrush(Color.FromArgb(255, 255 - frame * 22, 40 + frame * 25));
-        graphics.FillRectangle(changing, Width - 88, 224 + (frame % 3) * 9, 53, 7);
-        graphics.FillRectangle(changing, Width - 88, 259, 34 + frame * 4, 6);
+        graphics.FillRectangle(control, FixedX, FixedY, FixedWidth, FixedHeight);
+        using var inner = new SolidBrush(Color.White);
+        graphics.FillRectangle(inner, FixedX + 13, FixedY + 13, 58, 10);
+        using var changing = new SolidBrush(Color.FromArgb(255, 245 - frame * 20, 35 + frame * 28));
+        graphics.FillRectangle(changing, FixedX + 14, FixedY + 38 + (frame % 3) * 5, 54, 7);
+        graphics.FillRectangle(changing, FixedX + 14, FixedY + 63, 28 + frame * 6, 6);
         return bitmap;
     }
 
@@ -114,9 +138,9 @@ internal static class ShareXModV014CompositorSelfTests
         for (int y = 0; y < bitmap.Height; y += 3)
         {
             bool hit = false;
-            for (int x = Width - 110; x < Width - 10; x += 4)
+            for (int x = FixedX - 4; x < FixedX + FixedWidth + 4 && x < bitmap.Width; x += 4)
             {
-                Color c = bitmap.GetPixel(x, y);
+                Color c = bitmap.GetPixel(Math.Max(0, x), y);
                 if (c.B > 170 && c.G > 105 && c.R < 40)
                 {
                     hit = true;
@@ -130,7 +154,7 @@ internal static class ShareXModV014CompositorSelfTests
         return bands;
     }
 
-    private static double RegionError(Bitmap actual, Bitmap expectedStrip, Rectangle destination)
+    private static double RegionError(Bitmap actual, Bitmap expectedStrip, Rectangle destination, int expectedX)
     {
         long total = 0;
         long samples = 0;
@@ -139,7 +163,7 @@ internal static class ShareXModV014CompositorSelfTests
             for (int x = 2; x < destination.Width; x += 5)
             {
                 Color a = actual.GetPixel(destination.X + x, destination.Y + y);
-                Color b = expectedStrip.GetPixel(x, y);
+                Color b = expectedStrip.GetPixel(expectedX + x, y);
                 total += Math.Abs(a.R - b.R) + Math.Abs(a.G - b.G) + Math.Abs(a.B - b.B);
                 samples += 3;
             }

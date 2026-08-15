@@ -5,6 +5,7 @@ on:
     branches:
       - "standalone/longcapture-v0.1.2-work"
       - "standalone/longcapture-v0.1.2"
+      - "standalone/longcapture-v0.1.3"
     paths:
       - "LongCapture.Standalone/**"
       - "ShareX.ScreenCaptureLib/**"
@@ -15,6 +16,7 @@ on:
   pull_request:
     branches:
       - "standalone/longcapture-v0.1.2"
+      - "standalone/longcapture-v0.1.3"
     paths:
       - "LongCapture.Standalone/**"
       - "ShareX.ScreenCaptureLib/**"
@@ -66,7 +68,16 @@ jobs:
         shell: pwsh
         run: |
           $source = Get-Content "LongCapture.Standalone\MainForm.cs" -Raw
-          foreach ($required in @("ScrollingCaptureService", "SelectWindow", "StartCaptureAsync", "StopCapture", "RegisterHotKey")) {
+          foreach ($required in @(
+            "ScrollingCaptureService",
+            "SelectWindow",
+            "StartCaptureAsync",
+            "StopCapture",
+            "RegisterHotKey",
+            "CaptureTargetService",
+            "ScrollingCaptureTargetBridge",
+            "LongCaptureLog"
+          )) {
             if ($source -notmatch [regex]::Escape($required)) {
               throw "Standalone source is missing required capture integration: $required"
             }
@@ -75,10 +86,41 @@ jobs:
             throw "Standalone source still contains placeholder-only capture UI."
           }
 
+          $target = Get-Content "LongCapture.Standalone\CaptureTargetService.cs" -Raw
+          foreach ($required in @("EnumWindows", "GetWindowTextW", "GetClientRect", "ClientToScreen", "TryRefreshTarget")) {
+            if ($target -notmatch [regex]::Escape($required)) {
+              throw "Title/HWND target service is missing required guard: $required"
+            }
+          }
+
+          $targetBridge = Get-Content "LongCapture.Standalone\ScrollingCaptureTargetBridge.cs" -Raw
+          foreach ($required in @("_manager", "selectedWindow", "selectedRectangle", "WindowInfo")) {
+            if ($targetBridge -notmatch [regex]::Escape($required)) {
+              throw "Locked-target compatibility bridge is missing required binding: $required"
+            }
+          }
+
+          $log = Get-Content "LongCapture.Standalone\LongCaptureLog.cs" -Raw
+          foreach ($required in @("LocalApplicationData", "RetainedLogFiles", "MaxLogBytes", "File.AppendAllText")) {
+            if ($log -notmatch [regex]::Escape($required)) {
+              throw "Persistent diagnostic logger is missing required guard: $required"
+            }
+          }
+
           $program = Get-Content "LongCapture.Standalone\Program.cs" -Raw
-          foreach ($required in @("AvaloniaBootstrapper.EnsureInitialized", "ScrollingCaptureRegionWindow", "overlay.Show()", "ShowRegion = true")) {
+          foreach ($required in @(
+            "AvaloniaBootstrapper.EnsureInitialized",
+            "ScrollingCaptureRegionWindow",
+            "overlay.Show()",
+            "ShowRegion = true",
+            "Application.ThreadException",
+            "AppDomain.CurrentDomain.UnhandledException",
+            "TaskScheduler.UnobservedTaskException",
+            "CaptureTargetService.TryCreateTarget",
+            "ScrollingCaptureTargetBridge.TryAssignTarget"
+          )) {
             if ($program -notmatch [regex]::Escape($required)) {
-              throw "F8 capture bootstrap regression guard is missing: $required"
+              throw "Standalone bootstrap/self-test is missing required guard: $required"
             }
           }
 
@@ -124,7 +166,7 @@ jobs:
           $version = (Get-Content "artifacts\LongCapture\ShareX.Mod.VERSION.json" -Raw | ConvertFrom-Json).version
           Write-Host "Bundled ShareX-Mod engine version=$version"
 
-      - name: Run packaged F8 bootstrap, engine and responsive UI self-test
+      - name: Run packaged logging, locked-target, F8 bootstrap, engine and responsive UI self-test
         shell: pwsh
         run: |
           $p = Start-Process -FilePath (Resolve-Path "artifacts\LongCapture\LongCapture.exe") -ArgumentList "--self-test" -Wait -PassThru
@@ -142,11 +184,11 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force -Path "Output" | Out-Null
-          $zip = "Output\LongCapture-standalone-v0.1.2-dev-x64.zip"
+          $zip = "Output\LongCapture-standalone-v0.1.3-dev-x64.zip"
           if (Test-Path $zip) { Remove-Item $zip -Force }
           Compress-Archive -Path "artifacts\LongCapture\*" -DestinationPath $zip -CompressionLevel Optimal
           $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
-          Set-Content -LiteralPath "Output\LongCapture-standalone-v0.1.2-dev-x64.sha256.txt" -Value "$hash  LongCapture-standalone-v0.1.2-dev-x64.zip"
+          Set-Content -LiteralPath "Output\LongCapture-standalone-v0.1.3-dev-x64.sha256.txt" -Value "$hash  LongCapture-standalone-v0.1.3-dev-x64.zip"
           Write-Host "SHA256=$hash"
           "sha256=$hash" >> $env:GITHUB_OUTPUT
 
@@ -156,7 +198,7 @@ jobs:
           $ErrorActionPreference = "Stop"
           $temp = Join-Path $env:RUNNER_TEMP "longcapture-standalone-zipcheck"
           if (Test-Path $temp) { Remove-Item $temp -Recurse -Force }
-          Expand-Archive -LiteralPath "Output\LongCapture-standalone-v0.1.2-dev-x64.zip" -DestinationPath $temp -Force
+          Expand-Archive -LiteralPath "Output\LongCapture-standalone-v0.1.3-dev-x64.zip" -DestinationPath $temp -Force
           foreach ($name in @("LongCapture.exe", "ShareX.ScreenCaptureLib.dll", "ShareX.Avalonia.dll", "ShareX.Mod.v04.json", "ShareX.Mod.VERSION.json")) {
             if (-not (Test-Path (Join-Path $temp $name))) { throw "ZIP missing $name" }
           }
@@ -167,7 +209,7 @@ jobs:
       - name: Upload standalone portable
         uses: actions/upload-artifact@v7
         with:
-          name: LongCapture-standalone-v0.1.2-dev-x64
+          name: LongCapture-standalone-v0.1.3-dev-x64
           path: |
-            Output\LongCapture-standalone-v0.1.2-dev-x64.zip
-            Output\LongCapture-standalone-v0.1.2-dev-x64.sha256.txt
+            Output\LongCapture-standalone-v0.1.3-dev-x64.zip
+            Output\LongCapture-standalone-v0.1.3-dev-x64.sha256.txt

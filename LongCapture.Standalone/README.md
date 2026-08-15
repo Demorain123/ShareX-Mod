@@ -1,19 +1,28 @@
-# LongCapture Standalone v0.1.1-dev
+# LongCapture Standalone v0.1.2-dev
 
 `LongCapture.exe` is the independent long-screenshot application. It reuses ShareX's capture libraries and the ShareX-Mod overlay, but it does **not** launch or require `ShareX.exe` as the user entry point.
 
-## v0.1.1 UI hardening
+## v0.1.2 capture bootstrap fix
 
-This patch release keeps the capture engine unchanged and focuses on release-quality Windows UI behavior:
+v0.1.1 exposed a standalone-host integration bug during the first real F8 capture test: region selection could complete, but the ShareX scrolling engine then created its Avalonia `ScrollingCaptureRegionWindow` from a WinForms-only host that had never initialized Avalonia. Calling `Window.Show()` therefore failed with `InvalidOperationException: The window has not been initialized.`
+
+v0.1.2 fixes the host boundary instead of disabling the region overlay:
+
+- LongCapture explicitly initializes ShareX's Avalonia stack through `AvaloniaBootstrapper.EnsureInitialized()` before the WinForms main loop starts.
+- This uses the bootstrapper's existing `SetupWithoutStarting()` path, which is specifically intended for a legacy host that owns its own application lifetime/message loop.
+- The standalone project now declares the ShareX Avalonia project as an explicit dependency rather than relying only on a transitive reference from `ShareX.ScreenCaptureLib`.
+- `ShowRegion = true` remains enabled, so the scrolling-region outline is preserved rather than hidden as a workaround.
+- The packaged `--self-test` now constructs the same `ScrollingCaptureRegionWindow`, calls `Show()`, verifies it became visible, and closes it. This directly executes the window-bootstrap path that v0.1.1 failed to test.
+- The same self-test is run once on the published directory and again after extracting the final portable ZIP, so a package missing the Avalonia runtime/host dependency is rejected.
+
+## v0.1.1 UI hardening retained
 
 - Per-monitor high-DPI scaling is explicitly enabled for the WinForms executable.
 - Fixed-height settings rows are converted to content-sized rows at runtime, so controls are not cut off by DPI/font scaling.
 - Readiness, output-path, quality and status text wrap instead of silently extending beyond their containers.
 - The settings grid can scroll when the monitor/window is too small to show every row at once.
-- Recipe action buttons are allowed to wrap as a group and keep a minimum touch/click height.
-- The packaged `--self-test` now runs responsive-layout checks at 840×720, 960×800 and 1100×900 and fails the build if readiness text or button captions are clipped.
-
-The layout hardening is intentionally isolated from capture/stitching logic so the patch is low-risk and easy to carry forward.
+- Recipe action buttons are allowed to wrap as a group and keep a minimum click height.
+- Responsive layout checks run at 840×720, 980×900 and 1100×900 and reject clipped readiness text, important labels or button captions.
 
 ## Modes
 
@@ -36,4 +45,4 @@ Run Recipe remains blocked until the exact recipe version has a valid approval. 
 
 ## Build verification
 
-The dedicated `Build LongCapture Standalone` workflow applies the current ShareX-Mod overlay chain, publishes self-contained `win-x64`, verifies that the package contains `LongCapture.exe` and not `ShareX.exe`, runs the packaged engine + responsive-GUI self-test, runs the ShareX-Mod semantic regression suite, rebuilds the ZIP, extracts it, and repeats the packaged self-test before upload.
+The dedicated `Build LongCapture Standalone` workflow applies the current ShareX-Mod overlay chain, verifies the real capture integration and Avalonia legacy-host bootstrap, publishes self-contained `win-x64`, checks that the package contains `LongCapture.exe`, `ShareX.ScreenCaptureLib.dll` and `ShareX.Avalonia.dll` but not `ShareX.exe`, runs the packaged F8-overlay/engine/responsive-GUI self-test, runs the ShareX-Mod semantic regression suite, builds the ZIP, extracts it, and repeats the packaged self-test before upload.

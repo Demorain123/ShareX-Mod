@@ -81,7 +81,8 @@ jobs:
             "ShareXModScrollingReliabilitySelfTests",
             "ShareXModDeferredOverlaySelfTests",
             "CaptureSessionRecorder.ExportLatestBundle",
-            "Repetitions = 10",
+            "RunQuickCaptureRepeat",
+            "DeepRepetitions = 10",
             "PASS_AUTOMATED",
             "MANUAL_REQUIRED"
           )) {
@@ -115,20 +116,21 @@ jobs:
           }
           if (Test-Path "artifacts\LongCapture\ShareX.exe") { throw "Standalone portable must not contain ShareX.exe" }
 
-      - name: Run exact user double-click acceptance path
+      - name: Run exact user Quick double-click acceptance path
         shell: cmd
         run: artifacts\LongCapture\1-RUN-AUTOMATED-TESTS.cmd --ci
 
-      - name: Validate automation report
+      - name: Validate Quick automation report
         shell: pwsh
         run: |
           $report = Get-ChildItem "artifacts\LongCapture\AutomationReports" -Filter automation-report.json -Recurse | Sort-Object LastWriteTime -Descending | Select-Object -First 1
           if (-not $report) { throw "No automation-report.json produced" }
           $data = Get-Content $report.FullName -Raw | ConvertFrom-Json
           if ($data.Status -ne "PASS_AUTOMATED" -or [int]$data.FailedCount -ne 0) { throw "Automation report is not PASS_AUTOMATED" }
+          if ($data.Profile -ne "QUICK") { throw "Default package gate must use QUICK profile, got $($data.Profile)" }
           if ([int]$data.PassedCount -lt 6) { throw "Too few automated functional groups passed: $($data.PassedCount)" }
           if ([int]$data.ManualRequiredCount -lt 1) { throw "Real-environment limitations are not explicitly represented" }
-          Write-Host "Automated acceptance PASS=$($data.PassedCount) FAIL=$($data.FailedCount) MANUAL_REQUIRED=$($data.ManualRequiredCount)"
+          Write-Host "Quick automated acceptance PASS=$($data.PassedCount) FAIL=$($data.FailedCount) MANUAL_REQUIRED=$($data.ManualRequiredCount)"
 
       - name: Generate RC2 readiness manifest
         shell: pwsh
@@ -139,8 +141,9 @@ jobs:
             version = "0.1.3-rc2"
             status = "RC_READY_FOR_REAL_WORLD_TESTING"
             mandatoryGates = "PASS"
-            automatedScore = 93
-            oneClickAcceptance = "PASS_AUTOMATED"
+            automatedScore = 92
+            oneClickAcceptance = "PASS_AUTOMATED_QUICK"
+            deepStress = "OPTIONAL_NOT_REQUIRED_BEFORE_REAL_TEST"
             commit = "${{ github.sha }}"
             workflowRunId = "${{ github.run_id }}"
             generatedAtUtc = (Get-Date).ToUniversalTime().ToString("o")
@@ -156,7 +159,11 @@ jobs:
               "lazy-load adaptive settle",
               "recipe planner/range anchor/integrity/router/pagination regressions",
               "diagnostics session creation and Export diagnostics ZIP round-trip",
-              "10 consecutive real capture smoke runs and memory growth gate"
+              "second real capture smoke proving another capture can run after the core self-test"
+            )
+            optionalDeepCoverage = @(
+              "10 consecutive real capture smoke runs",
+              "managed/private memory growth gate"
             )
             manualRequired = @(
               "real website/app final visual inspection",
@@ -178,20 +185,20 @@ jobs:
           Set-Content "Output\LongCapture-standalone-v0.1.3-rc2-x64.sha256.txt" "$hash  LongCapture-standalone-v0.1.3-rc2-x64.zip"
           Write-Host "SHA256=$hash"
 
-      - name: Extract final RC2 and rerun exact double-click acceptance path
+      - name: Extract final RC2 and rerun exact Quick double-click acceptance path
         shell: pwsh
         run: |
           $temp = Join-Path $env:RUNNER_TEMP "longcapture-rc2-final"
           Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue
           Expand-Archive "Output\LongCapture-standalone-v0.1.3-rc2-x64.zip" $temp -Force
           $readiness = Get-Content (Join-Path $temp "RC-READINESS.json") -Raw | ConvertFrom-Json
-          if ($readiness.mandatoryGates -ne "PASS" -or $readiness.oneClickAcceptance -ne "PASS_AUTOMATED") { throw "RC2 readiness manifest invalid" }
+          if ($readiness.mandatoryGates -ne "PASS" -or $readiness.oneClickAcceptance -ne "PASS_AUTOMATED_QUICK") { throw "RC2 readiness manifest invalid" }
           & cmd.exe /d /c "`"$temp\1-RUN-AUTOMATED-TESTS.cmd`" --ci"
-          if ($LASTEXITCODE -ne 0) { throw "Extracted final RC2 one-click acceptance failed with exit code $LASTEXITCODE" }
+          if ($LASTEXITCODE -ne 0) { throw "Extracted final RC2 Quick one-click acceptance failed with exit code $LASTEXITCODE" }
           $finalReport = Get-ChildItem (Join-Path $temp "AutomationReports") -Filter automation-report.json -Recurse | Sort-Object LastWriteTime -Descending | Select-Object -First 1
           if (-not $finalReport) { throw "Extracted RC2 did not produce automation report" }
           $data = Get-Content $finalReport.FullName -Raw | ConvertFrom-Json
-          if ($data.Status -ne "PASS_AUTOMATED" -or [int]$data.FailedCount -ne 0) { throw "Extracted RC2 report failed" }
+          if ($data.Status -ne "PASS_AUTOMATED" -or $data.Profile -ne "QUICK" -or [int]$data.FailedCount -ne 0) { throw "Extracted RC2 Quick report failed" }
 
       - name: Upload RC2 portable
         uses: actions/upload-artifact@v7

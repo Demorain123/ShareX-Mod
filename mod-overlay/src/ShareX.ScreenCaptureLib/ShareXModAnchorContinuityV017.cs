@@ -85,8 +85,6 @@ internal static class ShareXModAnchorContinuityV017
                     return true;
                 }
 
-                // Once temporal geometry exists, a far-away full-range candidate is more likely to
-                // be a repeated-content alias than a real wheel displacement. Fail closed here.
                 unresolvedTransitions++;
                 source = "prior-neighborhood-unresolved";
                 CompleteResolution(0, source, score, false);
@@ -142,13 +140,26 @@ internal static class ShareXModAnchorContinuityV017
     {
         prior = 0;
         if (RecentReliableDeltas.Count == 0) return false;
+
         int[] values = RecentReliableDeltas.OrderBy(x => x).ToArray();
         int median = values[values.Length / 2];
-        if (values.Length >= 2)
+        int tolerance = Math.Max(32, median / 10);
+        int clustered = values.Count(x => Math.Abs(x - median) <= tolerance);
+
+        // v0.1.6 real Linux.do evidence was almost entirely 900px with one legitimate 612px
+        // transition. A single outlier must not erase an otherwise strong temporal prior. Require
+        // a majority cluster for 3+ samples; with one or two samples, use the latest direct history
+        // only as a candidate that still has to pass the exact raw-pixel validator.
+        if (values.Length >= 3)
         {
-            int maxDeviation = values.Max(x => Math.Abs(x - median));
-            if (maxDeviation > Math.Max(32, median / 10)) return false;
+            int required = (values.Length + 1) / 2;
+            if (clustered < required) return false;
         }
+        else if (values.Length == 2 && clustered == 0)
+        {
+            return false;
+        }
+
         prior = median;
         return prior > 0;
     }

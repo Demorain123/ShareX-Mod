@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Runtime.CompilerServices;
@@ -21,9 +22,9 @@ internal static class StandaloneUiPolish
             form.Text = $"LongCapture Standalone v{StandaloneVersion.Value}";
             form.AutoScaleMode = AutoScaleMode.Dpi;
             form.MinimumSize = new Size(840, 720);
-            if (form.Width < 960 || form.Height < 800)
+            if (form.Width < 980 || form.Height < 900)
             {
-                form.Size = new Size(Math.Max(form.Width, 960), Math.Max(form.Height, 800));
+                form.Size = new Size(Math.Max(form.Width, 980), Math.Max(form.Height, 900));
             }
 
             TableLayoutPanel? body = FindBody(form);
@@ -37,6 +38,11 @@ internal static class StandaloneUiPolish
             {
                 body.RowStyles[i].SizeType = SizeType.AutoSize;
                 body.RowStyles[i].Height = 0;
+            }
+            if (body.RowStyles.Count > 11)
+            {
+                body.RowStyles[11].SizeType = SizeType.AutoSize;
+                body.RowStyles[11].Height = 0;
             }
 
             foreach (Control control in body.Controls)
@@ -81,6 +87,8 @@ internal static class StandaloneUiPolish
             if (recipePanel is not null)
             {
                 recipePanel.WrapContents = true;
+                recipePanel.AutoSize = true;
+                recipePanel.AutoSizeMode = AutoSizeMode.GrowAndShrink;
                 recipePanel.Padding = new Padding(0, 1, 0, 1);
                 recipePanel.MinimumSize = new Size(0, 46);
 
@@ -113,25 +121,7 @@ internal static class StandaloneUiPolish
             Panel? actionPanel = body.GetControlFromPosition(0, 11) as Panel;
             if (actionPanel is not null)
             {
-                actionPanel.MinimumSize = new Size(0, 156);
-
-                foreach (Button button in actionPanel.Controls.OfType<Button>())
-                {
-                    if (!button.Text.StartsWith("Start long capture", StringComparison.OrdinalIgnoreCase) &&
-                        !button.Text.StartsWith("Stop capture", StringComparison.OrdinalIgnoreCase))
-                    {
-                        button.AutoSize = true;
-                        button.MinimumSize = new Size(150, 34);
-                    }
-                }
-
-                Label? quality = actionPanel.Controls.OfType<Label>().FirstOrDefault();
-                if (quality is not null)
-                {
-                    quality.AutoSize = true;
-                    quality.AutoEllipsis = false;
-                    quality.MinimumSize = new Size(0, 36);
-                }
+                HardenActionPanel(actionPanel);
             }
 
             Label? subtitle = form.Controls.OfType<Label>()
@@ -139,6 +129,7 @@ internal static class StandaloneUiPolish
             if (subtitle is not null)
             {
                 subtitle.AutoSize = true;
+                subtitle.AutoEllipsis = false;
                 subtitle.MinimumSize = new Size(0, 42);
             }
 
@@ -158,6 +149,7 @@ internal static class StandaloneUiPolish
 
             form.ClientSizeChanged += (_, _) => Reflow();
             form.DpiChanged += (_, _) => BeginReflow(form, Reflow);
+            form.Shown += (_, _) => BeginReflow(form, Reflow);
             body.ClientSizeChanged += (_, _) => Reflow();
             if (readinessPanel is not null) readinessPanel.ClientSizeChanged += (_, _) => Reflow();
 
@@ -181,7 +173,12 @@ internal static class StandaloneUiPolish
         Size original = form.Size;
         try
         {
-            foreach (Size size in new[] { new Size(960, 800), new Size(840, 720), new Size(1100, 900) })
+            foreach (Size size in new[]
+            {
+                new Size(980, 900),
+                new Size(840, 720),
+                new Size(1100, 900)
+            })
             {
                 form.Size = size;
                 form.PerformLayout();
@@ -204,6 +201,8 @@ internal static class StandaloneUiPolish
 
                 if (!ValidateReadiness(body, out detail)) return false;
                 if (!ValidateRecipeActions(body, out detail)) return false;
+                if (!ValidatePrimaryActions(body, out detail)) return false;
+                if (!ValidateImportantLabels(form, body, out detail)) return false;
                 if (!ValidateButtons(form, out detail)) return false;
             }
         }
@@ -215,6 +214,77 @@ internal static class StandaloneUiPolish
 
         detail = "responsive layout checks passed";
         return true;
+    }
+
+    private static void HardenActionPanel(Panel actionPanel)
+    {
+        Button? capture = actionPanel.Controls.OfType<Button>()
+            .FirstOrDefault(x =>
+                x.Text.StartsWith("Start long capture", StringComparison.OrdinalIgnoreCase) ||
+                x.Text.StartsWith("Stop capture", StringComparison.OrdinalIgnoreCase));
+        Button? openOutput = actionPanel.Controls.OfType<Button>()
+            .FirstOrDefault(x => !ReferenceEquals(x, capture));
+        Label? quality = actionPanel.Controls.OfType<Label>().FirstOrDefault();
+
+        if (capture is null || openOutput is null || quality is null)
+        {
+            actionPanel.MinimumSize = new Size(0, 156);
+            return;
+        }
+
+        actionPanel.SuspendLayout();
+        try
+        {
+            actionPanel.Controls.Clear();
+            actionPanel.Padding = Padding.Empty;
+            actionPanel.AutoSize = true;
+            actionPanel.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            actionPanel.MinimumSize = new Size(0, 124);
+
+            var layout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                ColumnCount = 2,
+                RowCount = 2,
+                Margin = Padding.Empty,
+                Padding = new Padding(0, 8, 0, 4),
+                GrowStyle = TableLayoutPanelGrowStyle.FixedSize
+            };
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+            capture.Dock = DockStyle.Fill;
+            capture.AutoSize = false;
+            capture.Height = 56;
+            capture.MinimumSize = new Size(0, 56);
+            capture.Margin = new Padding(0, 0, 0, 10);
+
+            openOutput.Dock = DockStyle.Top;
+            openOutput.AutoSize = true;
+            openOutput.MinimumSize = new Size(150, 34);
+            openOutput.Margin = new Padding(0, 0, 12, 0);
+
+            quality.Dock = DockStyle.Fill;
+            quality.AutoSize = true;
+            quality.AutoEllipsis = false;
+            quality.MinimumSize = new Size(0, 34);
+            quality.Margin = new Padding(0, 4, 0, 0);
+            quality.TextAlign = ContentAlignment.MiddleLeft;
+
+            layout.Controls.Add(capture, 0, 0);
+            layout.SetColumnSpan(capture, 2);
+            layout.Controls.Add(openOutput, 0, 1);
+            layout.Controls.Add(quality, 1, 1);
+            actionPanel.Controls.Add(layout);
+        }
+        finally
+        {
+            actionPanel.ResumeLayout(true);
+        }
     }
 
     private static void BeginReflow(Control control, Action reflow)
@@ -267,13 +337,17 @@ internal static class StandaloneUiPolish
 
         if (actionPanel is not null)
         {
-            Label? quality = actionPanel.Controls.OfType<Label>().FirstOrDefault();
+            Button? openOutput = Descendants(actionPanel).OfType<Button>()
+                .FirstOrDefault(x => !x.Text.StartsWith("Start long capture", StringComparison.OrdinalIgnoreCase) &&
+                                     !x.Text.StartsWith("Stop capture", StringComparison.OrdinalIgnoreCase));
+            Label? quality = Descendants(actionPanel).OfType<Label>().FirstOrDefault();
             if (quality is not null)
             {
-                int width = Math.Max(300, body.ClientSize.Width - body.Padding.Horizontal - 8);
+                int openWidth = openOutput?.PreferredSize.Width ?? 150;
+                int width = Math.Max(260, body.ClientSize.Width - body.Padding.Horizontal - openWidth - 36);
                 quality.MaximumSize = new Size(width, 0);
                 Size preferred = quality.GetPreferredSize(new Size(width, 0));
-                actionPanel.MinimumSize = new Size(0, Math.Max(156, 120 + preferred.Height));
+                actionPanel.MinimumSize = new Size(0, Math.Max(124, 94 + preferred.Height));
             }
         }
 
@@ -310,7 +384,7 @@ internal static class StandaloneUiPolish
             return false;
         }
 
-        return true;
+        return ValidateLabelHeight(label, "readiness", out detail);
     }
 
     private static bool ValidateRecipeActions(TableLayoutPanel body, out string detail)
@@ -330,6 +404,82 @@ internal static class StandaloneUiPolish
             }
         }
 
+        detail = string.Empty;
+        return true;
+    }
+
+    private static bool ValidatePrimaryActions(TableLayoutPanel body, out string detail)
+    {
+        if (body.GetControlFromPosition(0, 11) is not Panel panel)
+        {
+            detail = "primary action panel missing";
+            return false;
+        }
+
+        Button? capture = Descendants(panel).OfType<Button>()
+            .FirstOrDefault(x => x.Text.StartsWith("Start long capture", StringComparison.OrdinalIgnoreCase));
+        Button? open = Descendants(panel).OfType<Button>()
+            .FirstOrDefault(x => x.Text.StartsWith("Open output folder", StringComparison.OrdinalIgnoreCase));
+        Label? quality = Descendants(panel).OfType<Label>().FirstOrDefault();
+
+        if (capture is null || open is null || quality is null)
+        {
+            detail = "primary actions were not rebuilt into the responsive action layout";
+            return false;
+        }
+
+        if (capture.Bounds.Height < 54 || open.Bounds.Height < 32)
+        {
+            detail = "primary action button height is too small";
+            return false;
+        }
+
+        return ValidateLabelHeight(quality, "quality", out detail);
+    }
+
+    private static bool ValidateImportantLabels(Form form, TableLayoutPanel body, out string detail)
+    {
+        var labels = new List<(Label? Label, string Name)>
+        {
+            (body.GetControlFromPosition(1, 10) as Label, "output"),
+            (form.Controls.OfType<Label>().FirstOrDefault(x => x.Text.StartsWith("Independent long screenshot", StringComparison.OrdinalIgnoreCase)), "subtitle"),
+            (form.Controls.OfType<Label>().FirstOrDefault(x => x.Dock == DockStyle.Bottom), "status")
+        };
+
+        foreach ((Label? label, string name) in labels)
+        {
+            if (label is null)
+            {
+                detail = $"{name} label missing";
+                return false;
+            }
+
+            if (label.AutoEllipsis)
+            {
+                detail = $"{name} label still uses AutoEllipsis";
+                return false;
+            }
+
+            if (!ValidateLabelHeight(label, name, out detail)) return false;
+        }
+
+        detail = string.Empty;
+        return true;
+    }
+
+    private static bool ValidateLabelHeight(Label label, string name, out string detail)
+    {
+        int width = label.MaximumSize.Width > 0
+            ? label.MaximumSize.Width
+            : Math.Max(1, label.ClientSize.Width);
+        Size preferred = label.GetPreferredSize(new Size(width, 0));
+        if (label.ClientSize.Height + 2 < preferred.Height)
+        {
+            detail = $"{name} text clipped vertically: client={label.ClientSize}, preferred={preferred}";
+            return false;
+        }
+
+        detail = string.Empty;
         return true;
     }
 
@@ -339,7 +489,11 @@ internal static class StandaloneUiPolish
         {
             if (string.IsNullOrWhiteSpace(button.Text)) continue;
 
-            Size measured = TextRenderer.MeasureText(button.Text, button.Font, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
+            Size measured = TextRenderer.MeasureText(
+                button.Text,
+                button.Font,
+                Size.Empty,
+                TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
             if (button.ClientSize.Width + 2 < measured.Width + 12 || button.ClientSize.Height + 2 < measured.Height + 8)
             {
                 detail = $"button text clipped: {button.Text} ({button.ClientSize.Width}x{button.ClientSize.Height}, text {measured.Width}x{measured.Height})";
@@ -351,7 +505,7 @@ internal static class StandaloneUiPolish
         return true;
     }
 
-    private static System.Collections.Generic.IEnumerable<Control> Descendants(Control root)
+    private static IEnumerable<Control> Descendants(Control root)
     {
         foreach (Control child in root.Controls)
         {

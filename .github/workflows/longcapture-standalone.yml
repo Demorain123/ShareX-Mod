@@ -56,7 +56,8 @@ jobs:
             "scripts\apply-v061-post-hooks.ps1",
             "scripts\apply-v062-post-hooks.ps1",
             "scripts\apply-v064-post-hooks.ps1",
-            "scripts\apply-longcapture-v013-standalone-hooks.ps1"
+            "scripts\apply-longcapture-v013-standalone-hooks.ps1",
+            "scripts\apply-longcapture-v013-rc-hardening.ps1"
           )
           foreach ($hook in $hooks) {
             Write-Host "=== $hook ==="
@@ -171,7 +172,8 @@ jobs:
             "ScrollingCaptureTargetBridge.TryAssignTarget",
             "CaptureExclusionWatcher.Start",
             "RunCaptureExclusionSelfTest",
-            "CaptureMarkerFraction"
+            "CaptureMarkerFraction",
+            "responsive GUI self-test failed detail="
           )) {
             if ($program -notmatch [regex]::Escape($required)) {
               throw "Standalone bootstrap/self-test is missing required guard: $required"
@@ -196,6 +198,20 @@ jobs:
             throw "Published-engine regression runner does not execute scrolling reliability fixtures."
           }
 
+          $rcShell = Get-Content "LongCapture.Standalone\LongCaptureRcSelfTests.cs" -Raw
+          foreach ($required in @("TestTargetLifecycleAndRecovery", "TestScaledLayoutResilience", "2.00f")) {
+            if ($rcShell -notmatch [regex]::Escape($required)) {
+              throw "Standalone RC shell suite is missing required gate: $required"
+            }
+          }
+
+          $stressRunner = Get-Content "mod-overlay\tests\LongCapture.RcStressRunner\Program.cs" -Raw
+          foreach ($required in @("Repetitions = 10", "RunScrollingCaptureSmokeTest", "MaxManagedGrowthBytes", "MaxPrivateGrowthBytes")) {
+            if ($stressRunner -notmatch [regex]::Escape($required)) {
+              throw "Published-binary RC stress runner is missing required gate: $required"
+            }
+          }
+
           $recipeReview = Get-Content "LongCapture.Standalone\RecipeReviewForm.cs" -Raw
           if ($recipeReview -notmatch [regex]::Escape("CaptureExclusion.Apply")) {
             throw "Recipe review helper window is missing capture exclusion."
@@ -207,7 +223,7 @@ jobs:
           }
 
           $ui = Get-Content "LongCapture.Standalone\StandaloneUiPolish.cs" -Raw
-          foreach ($required in @("AutoScaleMode.Dpi", "AutoScroll = true", "MaximumSize", "ValidateReadiness", "ValidateButtons")) {
+          foreach ($required in @("AutoScaleMode.Dpi", "AutoScroll = true", "MaximumSize", "ValidateReadiness", "ValidateButtons", "Export diagnostics/Quality required")) {
             if ($ui -notmatch [regex]::Escape($required)) {
               throw "Responsive UI hardening is missing required guard: $required"
             }
@@ -284,12 +300,24 @@ jobs:
         shell: pwsh
         run: |
           $p = Start-Process -FilePath (Resolve-Path "artifacts\LongCapture\LongCapture.exe") -ArgumentList "--self-test" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "LongCapture self-test failed with exit code $($p.ExitCode)." }
+          if ($p.ExitCode -ne 0) {
+            $logRoot = Join-Path $env:LOCALAPPDATA "LongCapture\Logs"
+            if (Test-Path $logRoot) {
+              Get-ChildItem $logRoot -Filter "LongCapture-*.log" | Sort-Object LastWriteTime -Descending | Select-Object -First 1 | Get-Content | Select-Object -Last 80
+            }
+            throw "LongCapture self-test failed with exit code $($p.ExitCode)."
+          }
 
       - name: Run ShareX-Mod semantic and scrolling reliability regression suite
         shell: pwsh
         run: |
           dotnet run --project "mod-overlay\tests\ShareXMod.SelfTestRunner\ShareXMod.SelfTestRunner.csproj" --configuration Release -- "artifacts\LongCapture\ShareX.ScreenCaptureLib.dll"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run published LongCapture RC recovery, repeated-run and memory gates
+        shell: pwsh
+        run: |
+          dotnet run --project "mod-overlay\tests\LongCapture.RcStressRunner\LongCapture.RcStressRunner.csproj" --configuration Release -- "artifacts\LongCapture\LongCapture.exe"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Package standalone portable
@@ -306,7 +334,7 @@ jobs:
           Write-Host "SHA256=$hash"
           "sha256=$hash" >> $env:GITHUB_OUTPUT
 
-      - name: Validate ZIP after extraction
+      - name: Validate ZIP after extraction with packaged self-test and RC stress gates
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -319,6 +347,8 @@ jobs:
           if (Test-Path (Join-Path $temp "ShareX.exe")) { throw "ZIP must not use ShareX.exe as its entry point." }
           $p = Start-Process -FilePath (Join-Path $temp "LongCapture.exe") -ArgumentList "--self-test" -WorkingDirectory $temp -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "Extracted ZIP self-test failed with exit code $($p.ExitCode)." }
+          dotnet run --project "mod-overlay\tests\LongCapture.RcStressRunner\LongCapture.RcStressRunner.csproj" --configuration Release -- (Join-Path $temp "LongCapture.exe")
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload standalone portable
         uses: actions/upload-artifact@v7

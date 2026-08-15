@@ -22,7 +22,10 @@ permissions:
 
 jobs:
   validate:
-    runs-on: windows-latest
+    # GitHub's Windows Server 2025 image already includes multiple .NET 10 SDK feature bands.
+    # Avoid setup-dotnet network installation here: the gate verifies a 10.x SDK is present before
+    # doing any restore/build work and fails immediately if the runner image ever stops providing it.
+    runs-on: windows-2025
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -67,10 +70,15 @@ jobs:
           Write-Host "Overlay C# sources=$sourceCount"
           if ($sourceCount -lt 1) { throw "Overlay source directory is empty." }
 
-      - name: Setup .NET 10
-        uses: actions/setup-dotnet@v5
-        with:
-          dotnet-version: 10.0.x
+      - name: Verify preinstalled .NET 10
+        shell: pwsh
+        run: |
+          $sdks = @(dotnet --list-sdks)
+          $sdks | ForEach-Object { Write-Host $_ }
+          if (-not ($sdks | Where-Object { $_ -match '^10\.0\.' })) {
+            throw "GitHub runner does not expose a .NET 10 SDK."
+          }
+          dotnet --version
 
       # Fast gate: compile only ScreenCaptureLib and its project dependencies, then execute the
       # pure Recipe-planner regression suite. This catches semantic regressions before paying for

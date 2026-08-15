@@ -67,23 +67,38 @@ jobs:
           Write-Host "Overlay C# sources=$sourceCount"
           if ($sourceCount -lt 1) { throw "Overlay source directory is empty." }
 
-      - name: Setup .NET
+      - name: Setup .NET 10
         uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: 9.0.x
+          dotnet-version: 10.0.x
 
-      - name: Restore Release x64
-        run: dotnet restore --runtime win-x64 ShareX.sln
+      # Fast gate: compile only ScreenCaptureLib and its project dependencies, then execute the
+      # pure Recipe-planner regression suite. This catches semantic regressions before paying for
+      # the full ShareX solution build and portable packaging path.
+      - name: Fast semantic restore
+        run: dotnet restore --runtime win-x64 ShareX.ScreenCaptureLib\ShareX.ScreenCaptureLib.csproj
 
-      - name: Build Release x64
-        run: dotnet build --no-restore --configuration Release -p:Platform=x64 --self-contained true /m:1 ShareX.sln
+      - name: Fast semantic build
+        run: dotnet build ShareX.ScreenCaptureLib\ShareX.ScreenCaptureLib.csproj --no-restore --configuration Release -p:Platform=x64 --self-contained true /m:1
 
-      - name: Run Recipe planner self-tests
+      - name: Fast Recipe planner self-tests
         shell: pwsh
         run: |
-          $dll = Resolve-Path "ShareX\bin\Release\win-x64\ShareX.ScreenCaptureLib.dll"
-          dotnet run --project "mod-overlay\tests\ShareXMod.SelfTestRunner\ShareXMod.SelfTestRunner.csproj" --configuration Release -- $dll
+          $dll = Get-ChildItem "ShareX.ScreenCaptureLib\bin\Release" -Recurse -File -Filter "ShareX.ScreenCaptureLib.dll" |
+            Where-Object { $_.FullName -match "win-x64" } |
+            Select-Object -First 1
+          if (-not $dll) { throw "Fast semantic build did not produce ShareX.ScreenCaptureLib.dll." }
+          Write-Host "Planner test DLL=$($dll.FullName)"
+          dotnet run --project "mod-overlay\tests\ShareXMod.SelfTestRunner\ShareXMod.SelfTestRunner.csproj" --configuration Release -- $dll.FullName
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # Full integration remains authoritative. NuGet/project outputs populated by the fast gate are
+      # reused in this same job where possible, so successful runs do not start from a cold workspace.
+      - name: Restore full Release x64
+        run: dotnet restore --runtime win-x64 ShareX.sln
+
+      - name: Build full Release x64
+        run: dotnet build --no-restore --configuration Release -p:Platform=x64 --self-contained true /m:1 ShareX.sln
 
       - name: Build portable
         shell: pwsh

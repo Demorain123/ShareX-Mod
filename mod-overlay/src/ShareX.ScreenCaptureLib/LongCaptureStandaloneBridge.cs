@@ -166,6 +166,26 @@ public static class LongCaptureStandaloneBridge
 
             string qualityDirectory = Path.GetDirectoryName(summary) ?? string.Empty;
             string sessionDirectory = Directory.GetParent(qualityDirectory)?.FullName ?? qualityDirectory;
+
+            // v0.1.4 could report clean/high/100 even while the final mosaic visibly contained a
+            // fixed Back/counter control once per scroll step. The anchor compositor now emits
+            // session-local evidence. If it detected/repaired stationary tiles and the newest tail
+            // is still pending (no future frame exists yet to reveal the covered pixels), never
+            // silently promote the capture to clean/high.
+            string compositorEvidence = Path.Combine(
+                sessionDirectory,
+                "anchor-compositor-v015",
+                "fixed-overlay-evidence.jsonl");
+            if (File.Exists(compositorEvidence))
+            {
+                ShareXModAnchorCompositorTelemetry telemetry = ShareXModAnchorCompositorV014.SnapshotTelemetry();
+                if (telemetry.DetectedStationaryTiles > 0 && telemetry.PendingTailTiles > 0)
+                {
+                    status = "partially-repaired";
+                    confidence = telemetry.LowOverlapRisk ? "low" : "medium";
+                }
+            }
+
             return new LongCaptureQualityInfo(
                 status,
                 confidence,
@@ -182,7 +202,6 @@ public static class LongCaptureStandaloneBridge
     private static LongCaptureRecipeReviewInfo? ConvertReview(ShareXModRecipeReviewSnapshot? snapshot)
     {
         if (snapshot is null) return null;
-
         return new LongCaptureRecipeReviewInfo(
             snapshot.RecipePath,
             snapshot.Summary,

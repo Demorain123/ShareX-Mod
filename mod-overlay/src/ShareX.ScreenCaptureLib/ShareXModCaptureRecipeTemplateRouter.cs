@@ -44,6 +44,12 @@ internal static class ShareXModCaptureRecipeTemplateRouter
         string RuntimePageKey,
         IReadOnlyList<ShareXModCaptureRecipeStep> Steps);
 
+    private sealed record ProbeTarget(
+        string Label,
+        ShareXModRecipeLocator Locator,
+        bool RequiredForSelection,
+        int Weight);
+
     private sealed class FamilyBuilder
     {
         public string Id { get; }
@@ -168,51 +174,41 @@ internal static class ShareXModCaptureRecipeTemplateRouter
 
         foreach (ShareXModRecipeTemplateFamily family in plan.Families)
         {
-            List<ShareXModCaptureRecipeStep> locatorSteps = family.Steps
-                .Where(x => x.Locator != null &&
-                            x.Kind is ShareXModCaptureRecipeStepKind.ExpandOrActivate or
-                                      ShareXModCaptureRecipeStepKind.HorizontalSweep or
-                                      ShareXModCaptureRecipeStepKind.NextPage)
-                .ToList();
-
-            if (locatorSteps.Count == 0)
+            List<ProbeTarget> targets = BuildProbeTargets(family, settings);
+            if (targets.Count == 0)
             {
                 familyScores[family.Id] = 0;
                 evidence[family.Id] = new[] { "no-semantic-locators" };
                 continue;
             }
 
-            double sum = 0;
-            int weighted = 0;
-            bool invalid = false;
-            List<string> familyEvidence = new();
-
-            foreach (ShareXModCaptureRecipeStep step in locatorSteps)
+            List<ShareXModRouterProbeObservation> observations = new();
+            foreach (ProbeTarget target in targets)
             {
-                ShareXModRecipeLocatorProbe probe = await ProbeLocatorAsync(client, step.Locator!);
+                ShareXModRecipeLocatorProbe probe =
+                    await ProbeLocatorAsync(client, target.Locator);
                 bool strong = probe.Resolved && probe.Score >= 80 && probe.Gap >= 20;
                 bool usable = probe.Resolved && probe.Score >= 48 && probe.Gap >= 8;
-                double stepScore = strong ? 1.0 : usable ? 0.72 : 0;
 
-                familyEvidence.Add(
-                    $"step-{step.Index}:{step.Kind}:{probe.Detail}:score={probe.Score:0.0}:gap={probe.Gap:0.0}");
-
-                if (!usable && step.Required)
-                {
-                    invalid = true;
-                    familyEvidence.Add($"required-step-{step.Index}-unresolved");
-                    break;
-                }
-
-                int weight = step.Required ? 3 : 1;
-                sum += stepScore * weight;
-                weighted += weight;
+                observations.Add(new ShareXModRouterProbeObservation(
+                    target.Label,
+                    strong,
+                    usable,
+                    target.RequiredForSelection,
+                    target.Weight,
+                    probe.Score,
+                    probe.Gap,
+                    probe.Detail));
             }
 
-            double score = invalid || weighted == 0 ? 0 : sum / weighted;
-            familyScores[family.Id] = score;
-            evidence[family.Id] = familyEvidence.ToArray();
-            if (!invalid && score > 0) valid.Add((family, score));
+            ShareXModRouterEvidenceScore scored =
+                ShareXModTemplateRouterEvidenceScorer.Score(observations);
+            familyScores[family.Id] = scored.Score;
+            evidence[family.Id] = scored.Evidence;
+            if (scored.Valid && scored.Score > 0)
+            {
+                valid.Add((family, scored.Score));
+            }
         }
 
         if (valid.Count == 0)
@@ -251,6 +247,61 @@ internal static class ShareXModCaptureRecipeTemplateRouter
                 : Array.Empty<string>());
     }
 
+    private static List<ProbeTarget> BuildProbeTargets(
+        ShareXModRecipeTemplateFamily family,
+        ShareXModV04Settings settings)
+    {
+        List<ProbeTarget> targets = new();
+
+        foreach (ShareXModCaptureRecipeStep step in family.Steps)
+        {
+            if (step.Locator != null &&
+                step.Kind is ShareXModCaptureRecipeStepKind.ExpandOrActivate or
+                             ShareXModCaptureRecipeStepKind.HorizontalSweep or
+                             ShareXModCaptureRecipeStepKind.NextPage)
+            {
+                targets.Add(new ProbeTarget(
+                    $"step-{step.Index}:{step.Kind}",
+                    step.Locator,
+                    step.Required,
+                    step.Required ? 4 : 2));
+            }
+
+            if (!settings.CaptureRecipeTemplateRouterUseRangeAnchors ||
+                step.Kind != ShareXModCaptureRecipeStepKind.CaptureVerticalRange)
+            {
+                continue;
+            }
+
+            if (step.Locator != null)
+            {
+                targets.Add(new ProbeTarget(
+                    $"step-{step.Index}:range-start",
+                    step.Locator,
+                    RequiredForSelection: false,
+                    Weight: 1));
+            }
+
+            if (ShareXModRecipeAnchorEvidence.TryGetEndAnchor(
+                    step.Evidence,
+                    out ShareXModRecipeLocator? endAnchor) &&
+                endAnchor != null &&
+                !string.Equals(
+                    endAnchor.Fingerprint,
+                    step.Locator?.Fingerprint,
+                    StringComparison.Ordinal))
+            {
+                targets.Add(new ProbeTarget(
+                    $"step-{step.Index}:range-end",
+                    endAnchor,
+                    RequiredForSelection: false,
+                    Weight: 1));
+            }
+        }
+
+        return targets;
+    }
+
     private static bool IsRepeatable(PagePattern pattern) =>
         pattern.Steps.Any(x => x.Kind == ShareXModCaptureRecipeStepKind.CaptureVerticalRange) &&
         pattern.Steps.Any(x => x.Kind == ShareXModCaptureRecipeStepKind.NextPage && x.Locator != null);
@@ -269,8 +320,7 @@ internal static class ShareXModCaptureRecipeTemplateRouter
   const visible = el => {
     const r = el.getBoundingClientRect();
     const cs = getComputedStyle(el);
-    return r.width > 0 && r.height > 0 && cs.display !== 'none' &&
-           cs.visibility !== 'hidden' && cs.pointerEvents !== 'none';
+    return r.width > 0 && r.height > 0 && cs.display !== 'none' && cs.visibility !== 'hidden';
   };
 
   let pool = [];
@@ -280,8 +330,10 @@ internal static class ShareXModCaptureRecipeTemplateRouter
   } else if (locator.TestId) {
     const escaped = CSS.escape(locator.TestId);
     pool = [...document.querySelectorAll(`[data-testid="${escaped}"],[data-test-id="${escaped}"],[data-test="${escaped}"]`)];
+  } else if (locator.Tag && /^[A-Za-z][A-Za-z0-9-]*$/.test(locator.Tag)) {
+    pool = [...document.querySelectorAll(locator.Tag.toLowerCase())];
   } else {
-    pool = [...document.querySelectorAll('a,button,summary,[role],input,label,[aria-label]')];
+    pool = [...document.querySelectorAll('article,section,h1,h2,h3,h4,p,li,figure,figcaption,img,table,blockquote,pre,a,button,summary,[role],input,label,[aria-label]')];
   }
 
   const candidates = [];
@@ -294,7 +346,7 @@ internal static class ShareXModCaptureRecipeTemplateRouter
     const aria = el.getAttribute('aria-label') || '';
     const name = el.getAttribute('name') || '';
     const href = el.href || el.getAttribute('href') || '';
-    const text = clean(el.innerText || el.textContent || el.value || '').slice(0, 220);
+    const text = clean(el.textContent || el.value || '').slice(0, 220);
     let score = 0;
 
     if (locator.Tag && el.tagName.toUpperCase() === locator.Tag.toUpperCase()) score += 7;
@@ -310,6 +362,7 @@ internal static class ShareXModCaptureRecipeTemplateRouter
     else if (wantedText && currentText &&
              (currentText.includes(wantedText) || wantedText.includes(currentText))) score += 20;
 
+    // Historical geometry stays weak: it may break ties but never outweighs semantic identity.
     const dx = Math.abs((r.left + r.width * 0.5 + scrollX) - locator.DocumentX);
     const dy = Math.abs((r.top + r.height * 0.5 + scrollY) - locator.DocumentY);
     score += Math.max(0, 6 - (dx + dy) / 500);

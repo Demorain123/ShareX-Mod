@@ -55,6 +55,7 @@
   "captureRecipeTemplateRouterMinSimilarity": 0.78,
   "captureRecipeTemplateRouterMinSelectionScore": 0.55,
   "captureRecipeTemplateRouterMinUniquenessGap": 0.08,
+  "captureRecipeTemplateRouterUseRangeAnchors": true,
 
   "captureIntegrityManifestEnabled": true,
   "captureIntegrityIncludeNativeAssets": false,

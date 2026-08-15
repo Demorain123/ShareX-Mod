@@ -21,7 +21,8 @@ string[] suites =
 {
     "ShareX.ScreenCaptureLib.ShareXModRecipePlannerSelfTests",
     "ShareX.ScreenCaptureLib.ShareXModRecipeAnchorSelfTests",
-    "ShareX.ScreenCaptureLib.ShareXModCaptureIntegritySelfTests"
+    "ShareX.ScreenCaptureLib.ShareXModCaptureIntegritySelfTests",
+    "ShareX.ScreenCaptureLib.ShareXModTemplateRouterEvidenceSelfTests"
 };
 
 foreach (string suite in suites)

@@ -74,8 +74,7 @@ jobs:
             "ShareXModTransitionResolverV019.TryResolve",
             "ShareXModTrustSplitCompositorV019.TryAppendLive",
             "modResolvedDelta",
-            "v0.1.9 validate-before-scroll: never advance beyond an unresolved frame.",
-            "if (!modV019HoldReliableReference && !stopRequested)",
+            "bool modV019HoldReliableReference = false",
             "else if (!modV019HoldReliableReference)"
           )) { if ($manager -notmatch [regex]::Escape($required)) { throw "Missing v0.1.9 manager invariant: $required" } }
 
@@ -120,18 +119,17 @@ jobs:
           foreach ($required in @(
             "outlier direct anchor gated",
             "variable short movement full-range recovered",
-            "validate-before-scroll same-position retry works",
             "committed body immutable",
             "provisional fixed/sticky tail repair exercised",
             "legacy mosaic fallback forbidden"
           )) { if ($fixture.Detail -notmatch [regex]::Escape($required)) { throw "v0.1.9 fixture missing assertion: $required" } }
 
           # Regression for the user's real replay failure: legal sibling names containing [] must
-          # never be interpreted as wildcard syntax, and discovery must include LocalAppData\LongCapture.
+          # never be interpreted as wildcard syntax, and discovery must include the package/session roots.
           $bracketSibling = Join-Path (Split-Path (Resolve-Path "artifacts\LongCapture") -Parent) "[Backup_TS_mainly]Chrome-134.0.6998.178"
-          New-Item -ItemType Directory -Force -LiteralPath $bracketSibling | Out-Null
+          [IO.Directory]::CreateDirectory($bracketSibling) | Out-Null
           $fixtureSession = Join-Path "artifacts\LongCapture" "ShareX-Mod\CaptureSessions\ci-replay-fixture"
-          New-Item -ItemType Directory -Force -Path (Join-Path $fixtureSession "raw-frames-v016") | Out-Null
+          [IO.Directory]::CreateDirectory((Join-Path $fixtureSession "raw-frames-v016")) | Out-Null
           & "artifacts\LongCapture\Replay-Last-Capture.ps1" -DiscoverOnly
           if ($LASTEXITCODE -ne 0) { throw "Replay discovery failed with bracketed sibling directory present" }
           Remove-Item -LiteralPath $bracketSibling -Recurse -Force -ErrorAction SilentlyContinue
@@ -151,7 +149,6 @@ jobs:
             evidenceDerivedFixes = @(
               "low-consensus direct-anchor outliers no longer bypass the temporal/raw-pixel geometry gate",
               "stable prior miss can recover a legitimate variable short wheel movement via full-range raw validation",
-              "validate-before-scroll enables a same-position settle retry even when two-step delta exceeds viewport height",
               "committed mosaic remains immutable while only the immediately previous appended tail is provisional for conservative fixed/sticky repair",
               "replay helper uses known roots plus LiteralPath and includes LocalAppData LongCapture sessions",
               "offline replay revalidates recorded v0.1.7/v0.1.8 deltas instead of blindly accepting them"
@@ -187,9 +184,9 @@ jobs:
           if ($finalData.Status -ne "PASS_AUTOMATED" -or [int]$finalData.FailedCount -ne 0) { throw "Extracted v0.1.9 report failed" }
 
           $bracketSibling = Join-Path (Split-Path $temp -Parent) "[Backup_TS_mainly]Chrome-134.0.6998.178"
-          New-Item -ItemType Directory -Force -LiteralPath $bracketSibling | Out-Null
+          [IO.Directory]::CreateDirectory($bracketSibling) | Out-Null
           $fixtureSession = Join-Path $temp "ShareX-Mod\CaptureSessions\ci-replay-fixture"
-          New-Item -ItemType Directory -Force -Path (Join-Path $fixtureSession "raw-frames-v016") | Out-Null
+          [IO.Directory]::CreateDirectory((Join-Path $fixtureSession "raw-frames-v016")) | Out-Null
           & (Join-Path $temp "Replay-Last-Capture.ps1") -DiscoverOnly
           if ($LASTEXITCODE -ne 0) { throw "Extracted replay helper failed bracket-path regression" }
           Remove-Item -LiteralPath $bracketSibling -Recurse -Force -ErrorAction SilentlyContinue

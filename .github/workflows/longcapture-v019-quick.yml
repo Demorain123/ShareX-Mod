@@ -93,7 +93,7 @@ jobs:
           foreach ($required in @("transitionV019", "trustSplitV019", "ProvisionalTailRepairEnabled", "TailRepairComponents")) {
             if ($quality -notmatch [regex]::Escape($required)) { throw "v0.1.9 quality gate missing: $required" }
           }
-          foreach ($required in @("-LiteralPath", "LongCapture\\CaptureSessions", "DiscoverOnly")) {
+          foreach ($required in @("-LiteralPath", "LongCapture\CaptureSessions", "DiscoverOnly")) {
             if ($helper -notmatch [regex]::Escape($required)) { throw "Replay helper missing literal-path hardening: $required" }
           }
 

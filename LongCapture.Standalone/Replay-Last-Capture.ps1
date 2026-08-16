@@ -63,8 +63,29 @@ if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
 
 Write-Host "Replaying with v0.1.9 validated geometry + provisional-tail compositor:"
 Write-Host $Session
-& $exe --replay $Session
-$rc = $LASTEXITCODE
+
+# Do not use $LASTEXITCODE here. In the real rc2 handoff LongCapture completed replay and wrote the
+# output PNG, while the PowerShell wrapper observed a blank/null $LASTEXITCODE and falsely reported
+# failure. Start an explicit Process, wait for that exact process, then read its ExitCode.
+$psi = [System.Diagnostics.ProcessStartInfo]::new()
+$psi.FileName = $exe
+$psi.UseShellExecute = $false
+$null = $psi.ArgumentList.Add("--replay")
+$null = $psi.ArgumentList.Add($Session)
+$process = [System.Diagnostics.Process]::Start($psi)
+if ($null -eq $process) {
+    Write-Error "Replay process could not be started."
+    exit 5
+}
+
+try {
+    $process.WaitForExit()
+    $rc = $process.ExitCode
+}
+finally {
+    $process.Dispose()
+}
+
 if ($rc -ne 0) {
     Write-Error "Replay failed with exit code $rc. v0.1.9 remains fail-closed and will not manufacture geometry with the legacy mosaic matcher."
     exit $rc

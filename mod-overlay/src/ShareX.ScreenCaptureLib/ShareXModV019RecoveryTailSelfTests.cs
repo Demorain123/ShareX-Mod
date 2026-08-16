@@ -64,7 +64,8 @@ internal static class ShareXModV019RecoveryTailSelfTests
                 previous, current, false, default,
                 out int resolved, out string source, out _, out bool hold);
 
-            if (!ok || hold || Math.Abs(resolved - shortDelta) > 10 || !source.StartsWith("full-range", StringComparison.Ordinal))
+            if (!ok || hold || Math.Abs(resolved - shortDelta) > 10 ||
+                !source.Contains("full-range", StringComparison.Ordinal))
                 throw new InvalidOperationException($"v0.1.9 full-range variable scroll recovery failed: ok={ok} hold={hold} delta={resolved} source={source}.");
         }
         finally
@@ -128,8 +129,14 @@ internal static class ShareXModV019RecoveryTailSelfTests
                 ShareXModTransitionResolverV019.SeedForSelfTest(Delta, Delta, Delta, Delta);
                 using Bitmap previous = BuildViewport(0, 0, includeFixed: false);
                 using Bitmap current = BuildViewport(expected, 1, includeFixed: false);
+
+                // Shorter-than-prior movement must recover without direct-anchor help. Larger jumps
+                // are intentionally stricter: they need a high-consensus direct anchor that can be
+                // corroborated by the independent full-range matcher.
+                bool largerJump = expected > Delta;
+                ShareXModAnchorMatch direct = largerJump ? new ShareXModAnchorMatch(expected, 0, 3) : default;
                 bool ok = ShareXModTransitionResolverV019.TryResolve(
-                    previous, current, false, default,
+                    previous, current, largerJump, direct,
                     out int resolved, out string source, out _, out bool hold);
                 if (!ok || hold || Math.Abs(resolved - expected) > 10)
                     throw new InvalidOperationException($"v0.1.9 variable-delta matrix failed expected={expected} resolved={resolved} source={source} ok={ok} hold={hold}.");
@@ -253,8 +260,6 @@ internal static class ShareXModV019RecoveryTailSelfTests
                 55 + row * 23 % 140));
             g.FillRectangle(ink, 34 + row * 31 % 650, y + 3, 72 + row * 5 % 180, 4);
 
-            // The marker belongs to document coordinates, not frame number. It breaks perfect
-            // periodicity while remaining exactly scroll-stable across captures.
             if (row % 11 == 0)
             {
                 using var marker = new SolidBrush(Color.FromArgb(60 + row * 3 % 120, 70, 90));

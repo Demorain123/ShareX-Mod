@@ -30,7 +30,8 @@ internal readonly record struct ShareXModV019TransitionTelemetry(
 /// aliases. The resolver therefore treats escapes from a validated prior asymmetrically: a materially
 /// better shorter movement may override it (important near document ends), while a much larger jump
 /// requires corroboration from a high-consensus direct anchor plus the independent full-range matcher.
-/// This keeps the live path fail-closed rather than following a single attractive repeated-pattern score.
+/// If a prior becomes invalid and the only remaining hypothesis is an uncorroborated far jump, the
+/// resolver fails closed rather than appending geometry that can corrupt the committed long image.
 /// </summary>
 internal static class ShareXModTransitionResolverV019
 {
@@ -161,25 +162,30 @@ internal static class ShareXModTransitionResolverV019
                             return true;
                         }
 
-                        // If the prior itself cannot be validated, strong exact direct evidence is
-                        // still useful; otherwise use a validated global candidate as the last
-                        // fail-closed recovery option.
-                        if (strongDirectValid)
+                        // If the prior itself cannot be validated, an exact high-consensus direct
+                        // candidate is still admissible when it is not a materially larger escape.
+                        // A materially larger direct candidate has already had its chance above and
+                        // therefore must not bypass the independent-global corroboration requirement.
+                        if (strongDirectValid && IsSafeUncorroboratedPriorCandidate(directAnchor.ScrollDelta, prior))
                         {
                             delta = directAnchor.ScrollDelta;
                             score = strongDirectScore;
-                            source = "validated-direct-outlier";
+                            source = "validated-direct-outlier-safe-direction";
                             directAccepted++;
                             Remember(delta);
                             Complete(delta, source, true);
                             return true;
                         }
 
-                        if (globalValid)
+                        // The same rule applies to the global fallback. A single full-range search is
+                        // not independent evidence for a far jump. It may recover a shorter/nearby
+                        // motion, but a far larger hypothesis is rejected and the resolver falls
+                        // through to the terminal unresolved state.
+                        if (globalValid && IsSafeUncorroboratedPriorCandidate(globalDelta, prior))
                         {
                             delta = globalDelta;
                             score = globalScore;
-                            source = "full-range-recovered-prior-outlier";
+                            source = "full-range-recovered-prior-outlier-safe-direction";
                             outlierDirectRejected++;
                             fullRangeRecovered++;
                             Remember(delta);
@@ -226,19 +232,21 @@ internal static class ShareXModTransitionResolverV019
 
                 bool hasNear = ShareXModVerticalFallbackMatcher.TryEstimateNearDelta(
                     previousReliable, current, settings, prior, out int nearDelta, out double nearScore);
+                bool safeFull = hasFull && IsSafeUncorroboratedPriorCandidate(fullDelta, prior);
+                bool safeNear = hasNear && IsSafeUncorroboratedPriorCandidate(nearDelta, prior);
 
-                if (hasFull && (!hasNear || fullScore + 1.0 < nearScore))
+                if (safeFull && (!safeNear || fullScore + 1.0 < nearScore))
                 {
                     delta = fullDelta;
                     score = fullScore;
-                    source = "full-range-recovered-prior-outlier";
+                    source = "full-range-recovered-prior-outlier-safe-direction";
                     fullRangeRecovered++;
                     Remember(delta);
                     Complete(delta, source, true);
                     return true;
                 }
 
-                if (hasNear)
+                if (safeNear)
                 {
                     delta = nearDelta;
                     score = nearScore;
@@ -249,11 +257,11 @@ internal static class ShareXModTransitionResolverV019
                     return true;
                 }
 
-                if (hasFull)
+                if (safeFull)
                 {
                     delta = fullDelta;
                     score = fullScore;
-                    source = "full-range-recovered-prior-outlier";
+                    source = "full-range-recovered-prior-outlier-safe-direction";
                     fullRangeRecovered++;
                     Remember(delta);
                     Complete(delta, source, true);
@@ -343,6 +351,13 @@ internal static class ShareXModTransitionResolverV019
         // Require both absolute and relative improvement. This keeps a stable prior when scores are
         // merely close, while allowing a genuinely better short terminal movement to escape it.
         return globalScore + 1.0 < priorScore && globalScore <= priorScore * 0.82;
+    }
+
+    private static bool IsSafeUncorroboratedPriorCandidate(int candidateDelta, int priorDelta)
+    {
+        if (candidateDelta <= 0 || priorDelta <= 0) return false;
+        int tolerance = Math.Max(48, priorDelta / 8);
+        return candidateDelta <= priorDelta + tolerance;
     }
 
     private static bool AreIndependentCandidatesConsistent(int directDelta, int globalDelta)

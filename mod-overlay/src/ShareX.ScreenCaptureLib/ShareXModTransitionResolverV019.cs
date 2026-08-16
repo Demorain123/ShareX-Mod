@@ -241,7 +241,12 @@ internal static class ShareXModTransitionResolverV019
                     return true;
                 }
 
-                if (priorValid)
+                // A robust prior score can itself be a repeated-pattern alias. If an independent
+                // full-range search points to a materially different displacement and did not earn
+                // the strict short-override rule above, the evidence is ambiguous. Do not silently
+                // choose the temporal prior merely because both scores happen to be below threshold.
+                bool fullDisagreesWithPrior = hasFull && !AreIndependentCandidatesConsistent(fullDelta, prior);
+                if (priorValid && !fullDisagreesWithPrior)
                 {
                     delta = prior;
                     score = priorScore;

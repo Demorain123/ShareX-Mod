@@ -92,16 +92,16 @@ jobs:
 
           foreach ($required in @(
             "ShouldFullRangeVetoValidatedPrior",
-            "fullDisagreesWithPrior = hasFull && ShouldFullRangeVetoValidatedPrior",
-            "larger uncorroborated full-range candidate"
+            "hasNearForVeto",
+            "nearCorroboratesPrior"
           )) { if ($resolver -notmatch [regex]::Escape($required)) { throw "RC4 resolver hardening missing: $required" } }
           foreach ($required in @(
             "bottomRightConfirmed = rightEdge && bottomEdge",
             "!bottomRightConfirmed && sourceStationary <= 10.0"
           )) { if ($compositor -notmatch [regex]::Escape($required)) { throw "RC4 fixed-control repair missing: $required" } }
           foreach ($required in @(
-            "upward full-range alias cannot veto validated prior",
-            "short conflicting evidence still vetoes",
+            "near-prior-corroborated upward full-range alias cannot veto validated prior",
+            "uncorroborated upward conflict still fails closed",
             "blank-source bottom fixed controls stay bounded",
             "premature no-direct stop regression blocked"
           )) { if ($rc4tests -notmatch [regex]::Escape($required)) { throw "RC4 real-evidence regression missing: $required" } }
@@ -146,8 +146,8 @@ jobs:
             "v0.1.9 rc3 real-evidence passed",
             "strong direct/prior consensus cannot be short-overridden",
             "v0.1.9 rc4 real-evidence passed",
-            "upward full-range alias cannot veto validated prior",
-            "short conflicting evidence still vetoes",
+            "near-prior-corroborated upward full-range alias cannot veto validated prior",
+            "uncorroborated upward conflict still fails closed",
             "blank-source bottom fixed controls stay bounded",
             "premature no-direct stop regression blocked"
           )) { if ($semantic.Detail -notmatch [regex]::Escape($required)) { throw "Fixture did not attest: $required" } }
@@ -176,7 +176,7 @@ jobs:
               finalPackageIntegrity = 6
             }
             reservedForRealEnvironment = 5
-            scoreCapReason = "RC4 is derived from the user's RC3 failure: it prevents an uncorroborated upward full-range alias from vetoing a validated prior and adds a blank-source bottom-right fixed-control regression. Five points remain reserved for the real Linux.do runtime."
+            scoreCapReason = "RC4 is derived from the user's RC3 failure: a larger full-range candidate can be suppressed only when a restricted near-prior search corroborates the validated prior; RC4 also adds a blank-source bottom-right fixed-control regression. Five points remain reserved for the real Linux.do runtime."
             commit = "${{ github.sha }}"
             workflowRunId = "${{ github.run_id }}"
             generatedAtUtc = (Get-Date).ToUniversalTime().ToString("o")

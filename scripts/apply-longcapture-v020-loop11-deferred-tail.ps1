@@ -144,23 +144,11 @@ Replace-Literal -Path $compositor `
 
 Replace-Literal -Path $compositor `
   -Old @'
-            initialRepairPending = false;
-        }
-'@ `
-  -New @'
-            initialRepairPending = false;
-            deferredTailRepairs.Clear();
-        }
-'@ `
-  -Marker 'deferredTailRepairs.Clear();'
-
-Replace-Literal -Path $compositor `
-  -Old @'
                         policy = "committed-body-immutable-persistent-edge-provisional-tail-repair-v020",
                         telemetry = SnapshotTelemetry()
 '@ `
   -New @'
-                        policy = "committed-body-immutable-persistent-edge-provisional-tail-repair-v020-multiframe",
+                        policy = "committed-body-immutable-persistent-edge-provisional-tail-repair-v020-multiframe-atomic",
                         telemetry = SnapshotTelemetry(),
                         deferredTail = SnapshotDeferredTailTelemetry()
 '@ `

@@ -307,14 +307,28 @@ internal static class ShareXModTrustSplitCompositorV019
                     component.Add(key);
                     int y = key / columns;
                     int x = key % columns;
-                    Span<(int Y, int X)> neighbours = stackalloc (int, int)[4]
+                    int[] neighbours =
                     {
-                        (y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1)
+                        (y - 1) * columns + x,
+                        (y + 1) * columns + x,
+                        y * columns + (x - 1),
+                        y * columns + (x + 1)
                     };
-                    foreach ((int ny, int nx) in neighbours)
+                    for (int i = 0; i < neighbours.Length; i++)
                     {
+                        int neighbour = neighbours[i];
+                        int ny = neighbour / columns;
+                        int nx = neighbour % columns;
+                        bool valid = i switch
+                        {
+                            0 => y > 0,
+                            1 => y + 1 < rows,
+                            2 => x > 0,
+                            3 => x + 1 < columns,
+                            _ => false
+                        };
+                        if (!valid) continue;
                         if (ny < 0 || ny >= rows || nx < 0 || nx >= columns) continue;
-                        int neighbour = ny * columns + nx;
                         if (tiles.Contains(neighbour) && seen.Add(neighbour)) stack.Push(neighbour);
                     }
                 }

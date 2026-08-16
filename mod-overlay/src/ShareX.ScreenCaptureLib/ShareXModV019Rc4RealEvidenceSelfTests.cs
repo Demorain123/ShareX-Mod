@@ -8,14 +8,19 @@ namespace ShareX.ScreenCaptureLib;
 /// <summary>
 /// RC4 regressions derived from the real v0.1.9-rc3 Linux.do failure without embedding user pixels.
 /// The real sequence established a stable ~752px temporal prior, then lost the direct anchor. The
-/// exact prior still validated strongly, but a larger ~1068px full-range alias won a shorter-overlap
-/// search and was allowed to veto the prior, causing an immediate terminal unresolved stop.
+/// exact prior still validated strongly, a restricted near-prior search remained near ~737px, but a
+/// larger ~1068px full-range alias won a shorter-overlap search and was allowed to veto the prior.
 ///
-/// The same capture also exposed a fixed-control edge case: when the document region revealed behind
-/// a repeatedly stationary bottom-right control is visually quiet/blank, the RC3 compositor's source
-/// stationarity guard refuses to repair the provisional tail. That leaves one fixed Back/counter copy
-/// per scroll step. RC4 permits that repair only for repeatedly confirmed bottom-right components;
-/// right-edge-only surfaces retain the conservative source-stationarity guard.
+/// RC4 therefore does not blindly trust the prior and does not blindly ignore upward full-range
+/// candidates. A larger conflicting full-range candidate is treated as an alias only when the
+/// independent restricted near-prior search also corroborates the validated prior. This preserves
+/// the older ambiguous-short regression, where a 260px prior is only barely valid, full-range finds
+/// a far larger alias, and near-prior does not corroborate the prior; that case must still fail closed.
+///
+/// The same capture exposed a fixed-control edge case: when the document region revealed behind a
+/// repeatedly stationary bottom-right control is visually quiet/blank, the RC3 compositor's source
+/// stationarity guard refuses to repair the provisional tail. RC4 permits that repair only for
+/// repeatedly confirmed bottom-right components; right-edge-only surfaces remain conservative.
 /// </summary>
 internal static class ShareXModV019Rc4RealEvidenceSelfTests
 {
@@ -25,40 +30,46 @@ internal static class ShareXModV019Rc4RealEvidenceSelfTests
 
     public static string RunOrThrow()
     {
-        VerifyUncorroboratedUpwardAliasCannotVetoValidatedPrior();
-        VerifyShortConflictingCandidateStillVetoesPrior();
+        VerifyCorroboratedUpwardAliasCannotVetoValidatedPrior();
+        VerifyUncorroboratedUpwardConflictStillVetoesPrior();
         VerifyNearPriorCandidateDoesNotCreateFalseDisagreement();
         VerifyBlankSourceBottomFixedControlsDoNotAccumulate();
-        return "v0.1.9 rc4 real-evidence passed: upward full-range alias cannot veto validated prior, short conflicting evidence still vetoes, near-prior agreement remains accepted, blank-source bottom fixed controls stay bounded, premature no-direct stop regression blocked.";
+        return "v0.1.9 rc4 real-evidence passed: near-prior-corroborated upward full-range alias cannot veto validated prior, uncorroborated upward conflict still fails closed, near-prior agreement remains accepted, blank-source bottom fixed controls stay bounded, premature no-direct stop regression blocked.";
     }
 
-    private static void VerifyUncorroboratedUpwardAliasCannotVetoValidatedPrior()
+    private static void VerifyCorroboratedUpwardAliasCannotVetoValidatedPrior()
     {
-        // Scaled directly from the rc3 evidence: stable prior ~= 752, spurious full-range ~= 1068.
-        if (ShareXModTransitionResolverV019.ShouldFullRangeVetoValidatedPrior(1068, 752))
+        // Scaled directly from the rc3 evidence: prior ~= 752, restricted near ~= 737, spurious
+        // full-range ~= 1068. The larger candidate has less overlap and must not defeat two pieces
+        // of prior-local evidence that agree on the same geometry.
+        if (ShareXModTransitionResolverV019.ShouldFullRangeVetoValidatedPrior(
+                fullDelta: 1068, priorDelta: 752, hasNear: true, nearDelta: 737))
         {
             throw new InvalidOperationException(
-                "RC4 regression: an uncorroborated larger full-range alias was allowed to veto a validated prior.");
+                "RC4 regression: a near-prior-corroborated upward full-range alias vetoed the validated prior.");
         }
     }
 
-    private static void VerifyShortConflictingCandidateStillVetoesPrior()
+    private static void VerifyUncorroboratedUpwardConflictStillVetoesPrior()
     {
-        // This preserves the confidence-loop regression that forced RC3 to stop blindly trusting a
-        // plausible prior: a real 120px short movement must be allowed to challenge a 260px prior.
-        if (!ShareXModTransitionResolverV019.ShouldFullRangeVetoValidatedPrior(120, 260))
+        // Confidence-loop synthetic evidence for the old ambiguous-short case: the actual movement
+        // is 120, a 260 prior is only barely valid, full-range can prefer ~620, and near search lands
+        // around ~300 rather than corroborating 260. RC4 must not silently accept the wrong 260 prior.
+        if (!ShareXModTransitionResolverV019.ShouldFullRangeVetoValidatedPrior(
+                fullDelta: 620, priorDelta: 260, hasNear: true, nearDelta: 300))
         {
             throw new InvalidOperationException(
-                "RC4 regression: short conflicting evidence no longer vetoes a potentially aliased prior.");
+                "RC4 regression: an uncorroborated upward conflict no longer vetoes a potentially aliased prior.");
         }
     }
 
     private static void VerifyNearPriorCandidateDoesNotCreateFalseDisagreement()
     {
-        if (ShareXModTransitionResolverV019.ShouldFullRangeVetoValidatedPrior(748, 752))
+        if (ShareXModTransitionResolverV019.ShouldFullRangeVetoValidatedPrior(
+                fullDelta: 748, priorDelta: 752, hasNear: true, nearDelta: 748))
         {
             throw new InvalidOperationException(
-                "RC4 regression: a near-prior candidate was incorrectly treated as conflicting geometry.");
+                "RC4 regression: a full-range candidate near the prior was incorrectly treated as conflicting geometry.");
         }
     }
 

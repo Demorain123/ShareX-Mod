@@ -136,38 +136,65 @@ internal static class ShareXModVerticalFallbackMatcher
         int marginX = Math.Min(width / 3, Math.Max(40, width / 6));
         int usableWidth = width - marginX * 2;
         if (usableWidth < 96) return double.MaxValue;
-        const int tileCount = 8;
-        List<double> movingTileScores = new(tileCount);
-        for (int tile = 0; tile < tileCount; tile++)
+
+        // The original fallback score averaged each horizontal tile over the entire overlap height.
+        // A full-width sticky header therefore contaminated every tile at the same time and could
+        // make the true scroll delta score worse than a repeated-content short alias. The real
+        // v0.1.9-rc2 Linux.do evidence exhibited exactly that failure: a stable ~750px movement was
+        // replaced by 253px and the next transition then failed closed. Score independent vertical
+        // bands first and use their median so a minority of fixed/dynamic rows cannot dominate the
+        // geometry decision. Horizontal side margins remain in place to avoid fixed edge controls.
+        const int horizontalTileCount = 8;
+        const int verticalBandCount = 8;
+        List<double> verticalBandScores = new(verticalBandCount);
+
+        for (int band = 0; band < verticalBandCount; band++)
         {
-            int tileLeft = marginX + usableWidth * tile / tileCount;
-            int tileRight = marginX + usableWidth * (tile + 1) / tileCount;
-            long shiftedDiff = 0, samePositionDiff = 0;
-            int samples = 0;
-            for (int y = 0; y < overlap; y += yStep)
+            int bandTop = overlap * band / verticalBandCount;
+            int bandBottom = overlap * (band + 1) / verticalBandCount;
+            if (bandBottom <= bandTop) continue;
+
+            List<double> movingTileScores = new(horizontalTileCount);
+            for (int tile = 0; tile < horizontalTileCount; tile++)
             {
-                int previousY = y + delta;
-                for (int x = tileLeft; x < tileRight; x += xStep)
+                int tileLeft = marginX + usableWidth * tile / horizontalTileCount;
+                int tileRight = marginX + usableWidth * (tile + 1) / horizontalTileCount;
+                long shiftedDiff = 0, samePositionDiff = 0;
+                int samples = 0;
+
+                for (int y = bandTop; y < bandBottom; y += yStep)
                 {
-                    int shiftedPrevious = previous.RowOffset(previousY) + x * 4;
-                    int samePrevious = previous.RowOffset(y) + x * 4;
-                    int currentOffset = current.RowOffset(y) + x * 4;
-                    shiftedDiff += ColorDifference(previous.Bytes, shiftedPrevious, current.Bytes, currentOffset);
-                    samePositionDiff += ColorDifference(previous.Bytes, samePrevious, current.Bytes, currentOffset);
-                    samples += 3;
+                    int previousY = y + delta;
+                    for (int x = tileLeft; x < tileRight; x += xStep)
+                    {
+                        int shiftedPrevious = previous.RowOffset(previousY) + x * 4;
+                        int samePrevious = previous.RowOffset(y) + x * 4;
+                        int currentOffset = current.RowOffset(y) + x * 4;
+                        shiftedDiff += ColorDifference(previous.Bytes, shiftedPrevious, current.Bytes, currentOffset);
+                        samePositionDiff += ColorDifference(previous.Bytes, samePrevious, current.Bytes, currentOffset);
+                        samples += 3;
+                    }
                 }
+
+                if (samples == 0) continue;
+                double movement = samePositionDiff / (double)samples;
+                double shifted = shiftedDiff / (double)samples;
+                if (movement >= 1.25) movingTileScores.Add(shifted);
             }
-            if (samples == 0) continue;
-            double movement = samePositionDiff / (double)samples;
-            double shifted = shiftedDiff / (double)samples;
-            if (movement >= 1.25) movingTileScores.Add(shifted);
+
+            if (movingTileScores.Count < 3) continue;
+            movingTileScores.Sort();
+            int take = Math.Min(5, movingTileScores.Count);
+            double bandTotal = 0;
+            for (int i = 0; i < take; i++) bandTotal += movingTileScores[i];
+            verticalBandScores.Add(bandTotal / take);
         }
-        if (movingTileScores.Count < 3) return double.MaxValue;
-        movingTileScores.Sort();
-        int take = Math.Min(5, movingTileScores.Count);
-        double total = 0;
-        for (int i = 0; i < take; i++) total += movingTileScores[i];
-        return total / take;
+
+        if (verticalBandScores.Count < 3) return double.MaxValue;
+        verticalBandScores.Sort();
+        int middle = verticalBandScores.Count / 2;
+        if ((verticalBandScores.Count & 1) == 1) return verticalBandScores[middle];
+        return (verticalBandScores[middle - 1] + verticalBandScores[middle]) / 2.0;
     }
 
     private static int ColorDifference(byte[] a, int ai, byte[] b, int bi) =>

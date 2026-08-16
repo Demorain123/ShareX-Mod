@@ -23,16 +23,13 @@ internal readonly record struct ShareXModV019TransitionTelemetry(
     bool PendingRetry);
 
 /// <summary>
-/// v0.1.9 RC1 geometry resolver derived from the real v0.1.8 Linux.do evidence. Two independent
-/// defects were visible in the recorded raw frames: low-consensus direct anchors could jump to a
-/// visually similar short offset, while a legitimate one-off short wheel movement was rejected
-/// because the temporal prior was treated as the only admissible search neighbourhood.
-///
-/// Every accepted delta now has to survive raw-pair validation. A stable prior may override a
-/// conflicting direct anchor, an outlier direct anchor needs stronger consensus, and a prior miss
-/// compares near-prior and full-range raw-pixel hypotheses instead of allowing a plausible repeated
-/// pattern close to the prior to mask a much better global match. RC1 remains fail-closed if all
-/// evidence fails; it does not use the old mosaic matcher or unsafe multi-frame catch-up.
+/// v0.1.9 geometry resolver derived from the real v0.1.8 Linux.do evidence. Low-consensus direct
+/// anchors can jump to visually similar offsets, while legitimate wheel movements can vary sharply
+/// from the temporal prior. Every accepted delta must survive raw-pair validation. A stable prior is
+/// useful evidence, but even an exact prior validation is not absolute: repeated content can make the
+/// old displacement pass a threshold while a materially better full-range hypothesis identifies the
+/// true movement. The resolver therefore arbitrates direct, prior, near-prior and full-range evidence
+/// and remains fail-closed when no defensible geometry exists.
 /// </summary>
 internal static class ShareXModTransitionResolverV019
 {
@@ -105,10 +102,28 @@ internal static class ShareXModTransitionResolverV019
                     }
                     else
                     {
+                        bool priorValid = ShareXModVerticalFallbackMatcher.TryValidateSpecificDelta(
+                            previousReliable, current, settings, prior, out double priorScore);
+                        bool globalValid = TryFullRange(
+                            previousReliable, current, settings, out int globalDelta, out double globalScore);
+
+                        // A threshold-passing prior can itself be a repeated-content alias. If an
+                        // independent global search is materially better, the global geometry wins.
+                        if (globalValid && IsMateriallyBetterGlobal(globalDelta, globalScore, prior, priorValid ? priorScore : double.MaxValue))
+                        {
+                            delta = globalDelta;
+                            score = globalScore;
+                            source = "full-range-overrode-validated-prior";
+                            outlierDirectRejected++;
+                            fullRangeRecovered++;
+                            Remember(delta);
+                            Complete(delta, source, true);
+                            return true;
+                        }
+
                         // The user's v0.1.8 run contained 200/404px direct anchors among a strong
-                        // ~750px history. A conflicting direct anchor no longer bypasses the prior.
-                        if (ShareXModVerticalFallbackMatcher.TryValidateSpecificDelta(
-                                previousReliable, current, settings, prior, out double priorScore))
+                        // ~750px history. A conflicting direct anchor does not bypass a validated prior.
+                        if (priorValid)
                         {
                             delta = prior;
                             score = priorScore;
@@ -135,6 +150,18 @@ internal static class ShareXModTransitionResolverV019
                             return true;
                         }
 
+                        if (globalValid)
+                        {
+                            delta = globalDelta;
+                            score = globalScore;
+                            source = "full-range-recovered-prior-outlier";
+                            outlierDirectRejected++;
+                            fullRangeRecovered++;
+                            Remember(delta);
+                            Complete(delta, source, true);
+                            return true;
+                        }
+
                         outlierDirectRejected++;
                     }
                 }
@@ -142,8 +169,25 @@ internal static class ShareXModTransitionResolverV019
 
             if (hasPrior)
             {
-                if (ShareXModVerticalFallbackMatcher.TryValidateSpecificDelta(
-                        previousReliable, current, settings, prior, out double priorScore))
+                bool priorValid = ShareXModVerticalFallbackMatcher.TryValidateSpecificDelta(
+                    previousReliable, current, settings, prior, out double priorScore);
+                bool hasFull = TryFullRange(previousReliable, current, settings, out int fullDelta, out double fullScore);
+
+                // Do not return a merely threshold-passing prior until it has competed with the
+                // independent full-range hypothesis. This catches short/variable movement on
+                // repetitive pages where the old displacement can still look superficially valid.
+                if (hasFull && IsMateriallyBetterGlobal(fullDelta, fullScore, prior, priorValid ? priorScore : double.MaxValue))
+                {
+                    delta = fullDelta;
+                    score = fullScore;
+                    source = "full-range-overrode-validated-prior";
+                    fullRangeRecovered++;
+                    Remember(delta);
+                    Complete(delta, source, true);
+                    return true;
+                }
+
+                if (priorValid)
                 {
                     delta = prior;
                     score = priorScore;
@@ -156,12 +200,7 @@ internal static class ShareXModTransitionResolverV019
 
                 bool hasNear = ShareXModVerticalFallbackMatcher.TryEstimateNearDelta(
                     previousReliable, current, settings, prior, out int nearDelta, out double nearScore);
-                bool hasFull = TryFullRange(previousReliable, current, settings, out int fullDelta, out double fullScore);
 
-                // A repeated page pattern can produce a threshold-passing candidate near the prior
-                // even when the actual wheel movement was much shorter. If the global candidate is
-                // materially better, prefer it. This is the exact class of ambiguity missing from
-                // the v0.1.8 synthetic suite.
                 if (hasFull && (!hasNear || fullScore + 1.0 < nearScore))
                 {
                     delta = fullDelta;
@@ -264,6 +303,18 @@ internal static class ShareXModTransitionResolverV019
         delta = candidate;
         score = Math.Min(candidateScore, validatedScore);
         return true;
+    }
+
+    private static bool IsMateriallyBetterGlobal(int globalDelta, double globalScore, int priorDelta, double priorScore)
+    {
+        if (globalDelta <= 0 || double.IsInfinity(globalScore) || double.IsNaN(globalScore)) return false;
+        if (priorDelta <= 0 || double.IsInfinity(priorScore) || double.IsNaN(priorScore)) return true;
+        int tolerance = Math.Max(48, priorDelta / 8);
+        if (Math.Abs(globalDelta - priorDelta) <= tolerance) return false;
+
+        // Require both an absolute and relative score improvement so tiny noise does not destabilize
+        // a well-established prior, while a genuinely better short/variable movement can escape it.
+        return globalScore + 1.0 < priorScore && globalScore <= priorScore * 0.82;
     }
 
     private static void Remember(int delta)

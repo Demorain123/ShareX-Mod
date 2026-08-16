@@ -22,18 +22,24 @@ internal readonly record struct ShareXModV019CompositorTelemetry(
     double LatestStationaryRiskRatio,
     double MaxStationaryRiskRatio,
     bool CommittedBodyImmutable,
-    bool ProvisionalTailRepairEnabled);
+    bool ProvisionalTailRepairEnabled,
+    int RingValidatedRepairs,
+    int PersistentEdgeRepairs,
+    int RejectedLargeComponents);
 
 /// <summary>
-/// v0.1.9 keeps v0.1.8's central safety rule but makes it precise: committed body pixels are
-/// immutable, while only the most recently appended tail is provisional until the next validated
-/// raw frame arrives. A fixed control in that tail can then be reconstructed from the same document
-/// pixels after they have moved upward and become visible. No older body region is ever rewritten.
+/// v0.1.10 goal-loop hardening of the v0.1.9 trust-split compositor.
 ///
-/// Repair is intentionally limited to repeatedly confirmed stationary components near the right or
-/// bottom edge, uses an independently validated scroll delta, and refuses a source region that is
-/// itself stationary. The final tail is left untouched, so a real fixed control may remain once at
-/// the bottom instead of being repeated at every scroll step.
+/// The committed body remains immutable. Only the immediately previous append tail may be repaired,
+/// and only from the next raw frame after geometry has already been validated independently.
+///
+/// The important change is fixed/sticky evidence. The old source-stationary veto produced false
+/// negatives on real Linux.do captures because legitimate underlying document pixels can be white or
+/// otherwise unchanged at the same screen coordinate. Instead, a repair candidate must now be a
+/// screen-coordinate component that persists in BOTH adjacent transition masks. It is then accepted
+/// only when either the surrounding ring demonstrates document motion, or a small edge component has
+/// strong persistent evidence. Large components are rejected outright. This keeps the repair local to
+/// fixed/sticky controls while preserving the immutable-body safety rule.
 /// </summary>
 internal static class ShareXModTrustSplitCompositorV019
 {
@@ -68,6 +74,8 @@ internal static class ShareXModTrustSplitCompositorV019
         private const int TileWidth = 48;
         private const int TileHeight = 36;
         private const int SampleStep = 6;
+        private const double MaxRepairComponentAreaRatio = 0.05;
+        private const double StrongPersistentAreaRatio = 0.035;
 
         private int appendCount;
         private int rejectedAppendCount;
@@ -79,6 +87,9 @@ internal static class ShareXModTrustSplitCompositorV019
         private double maxStationaryRiskRatio;
         private int previousAppendDelta;
         private HashSet<int> previousStationaryTiles = new();
+        private int ringValidatedRepairs;
+        private int persistentEdgeRepairs;
+        private int rejectedLargeComponents;
 
         public Bitmap? TryAppend(Bitmap result, Bitmap previousRaw, Bitmap currentRaw, int scrollDelta)
         {
@@ -148,7 +159,10 @@ internal static class ShareXModTrustSplitCompositorV019
             latestStationaryRiskRatio,
             maxStationaryRiskRatio,
             true,
-            true);
+            true,
+            ringValidatedRepairs,
+            persistentEdgeRepairs,
+            rejectedLargeComponents);
 
         private void RepairProvisionalTail(
             Bitmap result,
@@ -166,11 +180,15 @@ internal static class ShareXModTrustSplitCompositorV019
             int provisionalTop = height - previousDelta;
             int resultViewportTop = result.Height - height;
 
-            foreach (List<int> component in ConnectedComponents(currentTiles, columns, rows))
+            // Only pixels that were independently stationary in BOTH adjacent transitions can
+            // become repair evidence. This is much stricter than merely requiring a small overlap
+            // ratio between two larger components.
+            var persistentTiles = new HashSet<int>(currentTiles);
+            persistentTiles.IntersectWith(priorTiles);
+
+            foreach (List<int> component in ConnectedComponents(persistentTiles, columns, rows))
             {
                 if (component.Count < 2) continue;
-                int overlap = component.Count(key => priorTiles.Contains(key));
-                if (overlap < Math.Max(1, (int)Math.Ceiling(component.Count * 0.15))) continue;
 
                 int minXTile = int.MaxValue, maxXTile = -1, minYTile = int.MaxValue, maxYTile = -1;
                 foreach (int key in component)
@@ -192,8 +210,16 @@ internal static class ShareXModTrustSplitCompositorV019
                 bool bottomEdge = rawY1 >= height * 0.88;
                 if (!rightEdge && !bottomEdge) continue;
 
-                // Two tile margins are deliberate: the stable interior of a button/counter often
-                // confirms first while antialiased text/borders sit just outside the strict mask.
+                long rawArea = (long)(rawX1 - rawX0) * (rawY1 - rawY0);
+                long viewportArea = (long)width * height;
+                if (rawArea > viewportArea * MaxRepairComponentAreaRatio)
+                {
+                    rejectedLargeComponents++;
+                    continue;
+                }
+
+                // Two tile margins recover antialiased borders/text around the stable interior of a
+                // fixed control. The component itself already passed two-transition persistence.
                 int marginX = TileWidth * 2;
                 int marginY = TileHeight * 2;
                 int x0 = Math.Max(0, rawX0 - marginX);
@@ -216,17 +242,13 @@ internal static class ShareXModTrustSplitCompositorV019
                 }
                 if (x1 <= x0 || y1 <= y0 || sourceY1 <= sourceY0) continue;
 
+                bool ringValidated = HasSurroundingDocumentMotion(
+                    previous, current, x0, y0, x1, y1, currentDelta);
+                bool strongPersistentEdge = component.Count >= 4 && rawArea <= viewportArea * StrongPersistentAreaRatio;
+                if (!ringValidated && !strongPersistentEdge) continue;
+
                 int repairWidth = x1 - x0;
                 int repairHeight = y1 - y0;
-
-                // Do not copy another fixed/sticky surface into the repair. Same-screen stability at
-                // the source coordinate is a strong sign that the source is itself an overlay.
-                double sourceStationary = MeanAbsoluteError(
-                    previous, x0, sourceY0,
-                    current, x0, sourceY0,
-                    repairWidth, repairHeight);
-                if (sourceStationary <= 10.0) continue;
-
                 using (Graphics graphics = Graphics.FromImage(result))
                 {
                     graphics.CompositingMode = CompositingMode.SourceCopy;
@@ -241,7 +263,55 @@ internal static class ShareXModTrustSplitCompositorV019
 
                 tailRepairComponents++;
                 tailRepairPixelsApprox += repairWidth * repairHeight;
+                if (ringValidated) ringValidatedRepairs++;
+                else persistentEdgeRepairs++;
             }
+        }
+
+        private static bool HasSurroundingDocumentMotion(
+            Bitmap previous,
+            Bitmap current,
+            int x0,
+            int y0,
+            int x1,
+            int y1,
+            int delta)
+        {
+            int good = 0;
+            int marginY = TileHeight;
+            int marginX = TileWidth;
+
+            // A fixed overlay hides the inner pixels in the previous frame, so validate geometry on
+            // the immediately surrounding ring instead. At least one ring segment must agree with
+            // document motion: previous(y) ~= current(y-delta), while same-screen coordinates differ.
+            if (TryMotionSegment(previous, current, x0, y0 - marginY, x1, y0, delta)) good++;
+            if (TryMotionSegment(previous, current, x0, y1, x1, y1 + marginY, delta)) good++;
+            if (TryMotionSegment(previous, current, x0 - marginX, y0, x0, y1, delta)) good++;
+            if (TryMotionSegment(previous, current, x1, y0, x1 + marginX, y1, delta)) good++;
+            return good >= 1;
+        }
+
+        private static bool TryMotionSegment(
+            Bitmap previous,
+            Bitmap current,
+            int x0,
+            int y0,
+            int x1,
+            int y1,
+            int delta)
+        {
+            x0 = Math.Max(0, x0);
+            y0 = Math.Max(0, y0);
+            x1 = Math.Min(previous.Width, x1);
+            y1 = Math.Min(previous.Height, y1);
+            if (x1 - x0 < 8 || y1 - y0 < 8) return false;
+            if (y0 - delta < 0 || y1 - delta > current.Height) return false;
+
+            int width = x1 - x0;
+            int height = y1 - y0;
+            double shifted = MeanAbsoluteError(previous, x0, y0, current, x0, y0 - delta, width, height);
+            double same = MeanAbsoluteError(previous, x0, y0, current, x0, y0, width, height);
+            return shifted <= 20.0 && same >= Math.Max(4.0, shifted * 1.15);
         }
 
         private static StationaryMap DetectStationaryTiles(
@@ -374,7 +444,7 @@ internal static class ShareXModTrustSplitCompositorV019
                         viewport = new { viewport.Width, viewport.Height },
                         delta,
                         stationaryRisk,
-                        policy = "committed-body-immutable-provisional-tail-repair",
+                        policy = "committed-body-immutable-persistent-edge-provisional-tail-repair-v020",
                         telemetry = SnapshotTelemetry()
                     }) + Environment.NewLine,
                     new UTF8Encoding(false));

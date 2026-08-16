@@ -54,6 +54,7 @@ jobs:
             "scripts\apply-longcapture-v018-rc-evidence.ps1",
             "scripts\apply-longcapture-v019-recovery-tail-hooks.ps1",
             "scripts\apply-longcapture-v020-goal-loop-hooks.ps1",
+            "scripts\apply-longcapture-v020-loop7-component-gate.ps1",
             "scripts\apply-longcapture-v020-goal-loop-cleanup.ps1"
           )
           foreach ($hook in $hooks) {
@@ -70,7 +71,9 @@ jobs:
           $automation = Get-Content "LongCapture.Standalone\AutomationTestRunner.cs" -Raw
           $compositor = Get-Content "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModTrustSplitCompositorV019.cs" -Raw
           $safeCopy = Get-Content "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModSafeTailCopyV020.cs" -Raw
+          $grouping = Get-Content "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModComponentGroupingV020.cs" -Raw
           $goalTest = Get-Content "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModV020GoalLoopSelfTests.cs" -Raw
+          $legacyFixture = Get-Content "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModV019RecoveryTailSelfTests.cs" -Raw
           $replay = Get-Content "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModReplayDiagnostics.cs" -Raw
 
           foreach ($forbidden in @(
@@ -93,16 +96,19 @@ jobs:
             "HasSurroundingDocumentMotion",
             "MaxRepairComponentAreaRatio",
             "StrongPersistentAreaRatio",
-            "repairRiskAcceptable",
             "initialRawBeforeScroll",
             "forcedResultViewportTop",
             "ShareXModSafeTailCopyV020.Copy",
+            "ShareXModComponentGroupingV020.Group",
             "CommittedBodyImmutable",
             "RejectedLargeComponents"
           )) { if ($compositor -notmatch [regex]::Escape($required)) { throw "Missing v0.1.10 compositor safety invariant: $required" } }
 
           foreach ($required in @("SourceIntersectsStationaryTiles", "StripHeight", "currentStationaryTiles")) {
             if ($safeCopy -notmatch [regex]::Escape($required)) { throw "Missing source-safe tail copy invariant: $required" }
+          }
+          foreach ($required in @("Radius 2", "Math.Abs(dx) + Math.Abs(dy) > 2", "yield return component")) {
+            if ($grouping -notmatch [regex]::Escape($required)) { throw "Missing fragmented-component grouping invariant: $required" }
           }
 
           if ($automation -notmatch [regex]::Escape("ShareXModV020GoalLoopSelfTests")) { throw "Goal-loop regression is not wired into QUICK" }
@@ -114,6 +120,9 @@ jobs:
             "CountFixedBlueBands(result) > 1",
             "final unresolved occurrence only"
           )) { if ($goalTest -notmatch [regex]::Escape($required)) { throw "Goal-loop adversarial gate missing: $required" } }
+          foreach ($required in @("Width * 0.68", "blueBands > 2", "safeCeiling=2")) {
+            if ($legacyFixture -notmatch [regex]::Escape($required)) { throw "Legacy compatibility fixture was not tightened for edge-only initial repair: $required" }
+          }
 
           foreach ($required in @("ShareXModTrustSplitCompositorV019.Session", "ShareXModTransitionResolverV019.TryResolve", "LongCapture-Replay-v019")) {
             if ($replay -notmatch [regex]::Escape($required)) { throw "Replay/live algorithm parity missing: $required" }
@@ -175,7 +184,7 @@ jobs:
           if ($total -lt 95) { throw "Goal-loop self-review score $total is below mandatory 95" }
 
           $review = [ordered]@{
-            schema = "longcapture.goal-review.v2"
+            schema = "longcapture.goal-review.v3"
             version = "0.1.10-rc1"
             status = "SELF_REVIEW_95_GATE_PASS"
             selfReviewScore = [int]$total
@@ -187,10 +196,10 @@ jobs:
             hardGates = @(
               "No legacy live mosaic fallback or retired v0.1.6 live flag",
               "Resolver-selected delta is the sole growth truth",
-              "Committed historical body remains immutable; only explicitly provisional initial/tail pixels can be repaired",
+              "Committed historical body remains immutable; only explicitly provisional initial/tail edge pixels can be repaired",
               "Fixed repair requires two-transition persistent edge evidence",
               "Safe repair source strips reject persistent fixed/sticky source pixels",
-              "Frame-level stationary-risk circuit breaker prevents fragmented large-panel destructive repair",
+              "Gap-tolerant component grouping prevents fragmented large panels from bypassing the 5 percent grouped-area cap",
               "Initial fixed occurrence is repaired only after later persistence confirmation; at most final unresolved occurrence remains",
               "Linux-like repeated-card ground-truth body regression",
               "12 deterministic adversarial variable-delta/fixed scenarios",

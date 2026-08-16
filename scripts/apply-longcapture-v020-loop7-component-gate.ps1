@@ -7,18 +7,18 @@ if (-not $repoRoot) { throw "Not inside a Git repository." }
 
 function Replace-Literal {
     param([string]$Path,[string]$Old,[string]$New,[string]$Marker)
-    if (-not (Test-Path -LiteralPath $Path)) { throw "Loop7 target missing: $Path" }
+    if (-not (Test-Path -LiteralPath $Path)) { throw "Loop7/8 target missing: $Path" }
     $text = [IO.File]::ReadAllText($Path)
     if ($text.Contains($Marker)) {
-        Write-Host "[loop7] already present: $Marker" -ForegroundColor DarkYellow
+        Write-Host "[loop7/8] already present: $Marker" -ForegroundColor DarkYellow
         return
     }
-    if (-not $text.Contains($Old)) { throw "Loop7 anchor missing: $Marker in $Path" }
+    if (-not $text.Contains($Old)) { throw "Loop7/8 anchor missing: $Marker in $Path" }
     if (-not $CheckOnly) {
         $text = $text.Replace($Old, $New)
         [IO.File]::WriteAllText($Path, $text, [Text.UTF8Encoding]::new($true))
     }
-    Write-Host "[loop7] applied/compatible: $Marker" -ForegroundColor Cyan
+    Write-Host "[loop7/8] applied/compatible: $Marker" -ForegroundColor Cyan
 }
 
 $compositor = Join-Path $repoRoot "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModTrustSplitCompositorV019.cs"
@@ -33,14 +33,48 @@ Replace-Literal -Path $compositor `
             if (!repairRiskAcceptable) rejectedLargeComponents++;
 '@ `
   -New @'
-            bool repairRiskAcceptable = true; // loop7: area safety is enforced on gap-grouped persistent components, not a global stationary percentage.
+            bool repairRiskAcceptable = true; // loop7: area safety is enforced on persistent edge structure, not a global stationary percentage.
 '@ `
-  -Marker 'area safety is enforced on gap-grouped persistent components'
+  -Marker 'area safety is enforced on persistent edge structure'
 
 Replace-Literal -Path $compositor `
   -Old '            foreach (List<int> component in ConnectedComponents(persistentTiles, columns, rows))' `
   -New '            foreach (List<int> component in ShareXModComponentGroupingV020.Group(persistentTiles, columns, rows))' `
   -Marker 'ShareXModComponentGroupingV020.Group(persistentTiles, columns, rows)'
+
+# Loop8: component grouping alone cannot catch a large fixed panel whose moving text/icons punch holes
+# through the stationary mask. Before component repair, evaluate dense right/bottom envelopes over the
+# whole two-transition persistent mask. Small controls stay below the 5% envelope threshold; a large
+# dense panel is fail-safe rejected without touching accepted pixels.
+Replace-Literal -Path $compositor `
+  -Old @'
+            var persistentTiles = new HashSet<int>(currentTiles);
+            persistentTiles.IntersectWith(priorTiles);
+
+            foreach (List<int> component in ShareXModComponentGroupingV020.Group(persistentTiles, columns, rows))
+'@ `
+  -New @'
+            var persistentTiles = new HashSet<int>(currentTiles);
+            persistentTiles.IntersectWith(priorTiles);
+
+            if (ShareXModEdgeEnvelopeGuardV020.IsUnsafe(
+                persistentTiles,
+                columns,
+                rows,
+                TileWidth,
+                TileHeight,
+                width,
+                height,
+                out double unsafeEnvelopeAreaRatio,
+                out double unsafeEnvelopeDensity))
+            {
+                rejectedLargeComponents++;
+                return;
+            }
+
+            foreach (List<int> component in ShareXModComponentGroupingV020.Group(persistentTiles, columns, rows))
+'@ `
+  -Marker 'out double unsafeEnvelopeAreaRatio'
 
 # v0.1.10 intentionally makes the initial right/bottom edge provisional after two-transition
 # persistence confirmation. Update the old v0.1.9 compatibility fixture so it still protects the
@@ -61,7 +95,7 @@ Replace-Literal -Path $legacyFixture `
   -Marker 'safeCeiling=2'
 
 if ($CheckOnly) {
-    Write-Host "LongCapture v0.1.10 loop7 component-gate compatibility passed." -ForegroundColor Green
+    Write-Host "LongCapture v0.1.10 loop7/8 safety compatibility passed." -ForegroundColor Green
 } else {
-    Write-Host "LongCapture v0.1.10 loop7 component-gate applied." -ForegroundColor Green
+    Write-Host "LongCapture v0.1.10 loop7/8 grouped-component + edge-envelope safety applied." -ForegroundColor Green
 }

@@ -123,14 +123,14 @@ Replace-Literal -Path $compositor `
                         y1,
                         currentDelta,
                         copyResult.RequiredPixels,
-                        persistentTiles);
+                        persistentTiles); // v0.1.10 deferred confirmed fixed evidence
                 }
                 if (copyResult.CopiedPixels <= 0) continue;
 
                 tailRepairComponents++;
                 tailRepairPixelsApprox += copyResult.CopiedPixels;
 '@ `
-  -Marker 'copyResult.RequiredPixels,`n                        persistentTiles);'
+  -Marker 'v0.1.10 deferred confirmed fixed evidence'
 
 Replace-Literal -Path $compositor `
   -Old @'

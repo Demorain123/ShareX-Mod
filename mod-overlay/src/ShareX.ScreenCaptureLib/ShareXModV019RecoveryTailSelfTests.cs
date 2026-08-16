@@ -73,9 +73,6 @@ internal static class ShareXModV019RecoveryTailSelfTests
         }
     }
 
-    // Evidence-shaped synthetic sequence derived from the user's real Linux.do failure pattern:
-    // stable large wheel movements, two far-away false direct anchors, then a much shorter final
-    // movement. This uses production resolver code rather than a separately reimplemented oracle.
     private static void VerifyEvidenceShapedSequenceRejectsAliasAnchors()
     {
         ShareXModTransitionResolverV019.ResetLive();
@@ -201,9 +198,6 @@ internal static class ShareXModV019RecoveryTailSelfTests
             if (telemetry.AppendCount != transitions || telemetry.RejectedAppendCount != 0 || telemetry.TailRepairComponents <= 0)
                 throw new InvalidOperationException($"v0.1.9 long-run compositor telemetry invalid: {telemetry}.");
 
-            // Two blue sub-bands per fixed control. A naive 13-viewport stitch would therefore leave
-            // 26 bands. The trust-split policy may intentionally retain only the first committed and
-            // final unresolved occurrences, giving a safe ceiling of 4 bands regardless of run length.
             int blueBands = CountFixedBlueBands(result!);
             if (blueBands > 4)
                 throw new InvalidOperationException($"v0.1.9 long-run fixed controls accumulated; bands={blueBands}, safeCeiling=4, transitions={transitions}.");
@@ -255,9 +249,9 @@ internal static class ShareXModV019RecoveryTailSelfTests
                 55 + row * 23 % 140));
             g.FillRectangle(ink, 34 + row * 31 % 650, y + 3, 72 + row * 5 % 180, 4);
 
-            // A sparse deterministic marker breaks perfect periodicity without making every row
-            // unique, which keeps repeated-content aliases realistically plausible.
-            if ((row + frame) % 11 == 0)
+            // The marker belongs to document coordinates, not frame number. It breaks perfect
+            // periodicity while remaining exactly scroll-stable across captures.
+            if (row % 11 == 0)
             {
                 using var marker = new SolidBrush(Color.FromArgb(60 + row * 3 % 120, 70, 90));
                 g.FillRectangle(marker, 690 + row * 7 % 90, y + 1, 10, 8);

@@ -7,18 +7,18 @@ if (-not $repoRoot) { throw "Not inside a Git repository." }
 
 function Replace-Literal {
     param([string]$Path,[string]$Old,[string]$New,[string]$Marker)
-    if (-not (Test-Path -LiteralPath $Path)) { throw "Loop11 target missing: $Path" }
+    if (-not (Test-Path -LiteralPath $Path)) { throw "Loop11/14 target missing: $Path" }
     $text = [IO.File]::ReadAllText($Path)
     if ($text.Contains($Marker)) {
-        Write-Host "[loop11] already present: $Marker" -ForegroundColor DarkYellow
+        Write-Host "[loop11/14] already present: $Marker" -ForegroundColor DarkYellow
         return
     }
-    if (-not $text.Contains($Old)) { throw "Loop11 anchor missing: $Marker in $Path" }
+    if (-not $text.Contains($Old)) { throw "Loop11/14 anchor missing: $Marker in $Path" }
     if (-not $CheckOnly) {
         $text = $text.Replace($Old, $New)
         [IO.File]::WriteAllText($Path, $text, [Text.UTF8Encoding]::new($true))
     }
-    Write-Host "[loop11] applied/compatible: $Marker" -ForegroundColor Cyan
+    Write-Host "[loop11/14] applied/compatible: $Marker" -ForegroundColor Cyan
 }
 
 $compositor = Join-Path $repoRoot "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModTrustSplitCompositorV019.cs"
@@ -122,14 +122,15 @@ Replace-Literal -Path $compositor `
                         x1,
                         y1,
                         currentDelta,
-                        copyResult.RequiredPixels);
+                        copyResult.RequiredPixels,
+                        persistentTiles);
                 }
                 if (copyResult.CopiedPixels <= 0) continue;
 
                 tailRepairComponents++;
                 tailRepairPixelsApprox += copyResult.CopiedPixels;
 '@ `
-  -Marker 'ShareXModSafeTailCopyResult copyResult ='
+  -Marker 'copyResult.RequiredPixels,`n                        persistentTiles);'
 
 Replace-Literal -Path $compositor `
   -Old @'
@@ -148,15 +149,12 @@ Replace-Literal -Path $compositor `
                         telemetry = SnapshotTelemetry()
 '@ `
   -New @'
-                        policy = "committed-body-immutable-persistent-edge-provisional-tail-repair-v020-multiframe-atomic",
+                        policy = "committed-body-immutable-persistent-edge-provisional-tail-repair-v020-multiframe-atomic-persistent-veto",
                         telemetry = SnapshotTelemetry(),
                         deferredTail = SnapshotDeferredTailTelemetry()
 '@ `
   -Marker 'deferredTail = SnapshotDeferredTailTelemetry()'
 
-# A final fixed control may legitimately remain because there is no future frame exposing the pixels
-# behind it. More than one pending deferred job, or any expired job, means an interior tail could not
-# be recovered and must be surfaced as unresolved/low confidence rather than a visually clean pass.
 Replace-Literal -Path $quality `
   -Old @'
             ShareXModV019CompositorTelemetry trustSplitV019 = ShareXModTrustSplitCompositorV019.SnapshotLiveTelemetry();
@@ -201,7 +199,7 @@ Replace-Literal -Path $quality `
   -Marker 'deferredTailV020.Queued'
 
 if ($CheckOnly) {
-    Write-Host "LongCapture v0.1.10 loop11 deferred-tail compatibility passed." -ForegroundColor Green
+    Write-Host "LongCapture v0.1.10 loop11/14 deferred-tail compatibility passed." -ForegroundColor Green
 } else {
-    Write-Host "LongCapture v0.1.10 loop11 multi-frame deferred-tail repair applied." -ForegroundColor Green
+    Write-Host "LongCapture v0.1.10 loop11/14 multi-frame atomic deferred-tail repair applied." -ForegroundColor Green
 }

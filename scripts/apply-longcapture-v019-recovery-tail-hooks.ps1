@@ -40,44 +40,13 @@ Replace-Literal -Path $manager `
 '@ `
   -Marker 'ShareXModTransitionResolverV019.ResetLive();'
 
-# v0.1.8 scrolled before validating the frame. That made a one-frame retry impossible at large
-# scroll amounts because the page had already advanced again. v0.1.9 validates first, then scrolls.
-$scrollBlock = @'
-                        switch (Options.ScrollMethod)
-                        {
-                            case ScrollMethod.MouseWheel:
-                                InputHelpers.SendMouseWheel(-120 * Options.ScrollAmount);
-                                break;
-                            case ScrollMethod.DownArrow:
-                                for (int i = 0; i < Options.ScrollAmount; i++)
-                                {
-                                    InputHelpers.SendKeyPress(VirtualKeyCode.DOWN);
-                                }
-                                break;
-                            case ScrollMethod.PageDown:
-                                InputHelpers.SendKeyPress(VirtualKeyCode.NEXT);
-                                break;
-                            case ScrollMethod.ScrollMessage:
-                                for (int i = 0; i < Options.ScrollAmount; i++)
-                                {
-                                    NativeMethods.SendMessage(selectedWindow.Handle, (int)WindowsMessages.VSCROLL, (int)ScrollBarCommands.SB_LINEDOWN, 0);
-                                }
-                                break;
-                        }
-
-'@
-
+# v0.1.9 RC1 keeps the proven loop timing from v0.1.8 but replaces the geometry authority. The
+# resolver can now recover the exact short final movement seen in the user's evidence, so the unsafe
+# v0.1.8 two-step catch-up is not needed in this RC.
 Replace-Literal -Path $manager `
-  -Old ($scrollBlock + @'
-                        Stopwatch timer = Stopwatch.StartNew();
-                        bool modV018HoldReliableReference = false;
-'@) `
-  -New @'
-                        // v0.1.9 validate-before-scroll: never advance beyond an unresolved frame.
-                        Stopwatch timer = Stopwatch.StartNew();
-                        bool modV019HoldReliableReference = false;
-'@ `
-  -Marker 'v0.1.9 validate-before-scroll: never advance beyond an unresolved frame.'
+  -Old '                        bool modV018HoldReliableReference = false;' `
+  -New '                        bool modV019HoldReliableReference = false; // v0.1.9 RC1 remains fail-closed; full-range recovery happens before this can stop.' `
+  -Marker 'bool modV019HoldReliableReference = false;'
 
 # Promote v0.1.9 resolver/compositor and retain the resolver-selected delta as the sole growth truth.
 Replace-Literal -Path $manager `
@@ -158,7 +127,7 @@ Replace-Literal -Path $manager `
                                     modV016DelayedCompositorUsed = false;
                                 }
 
-                                if (newResult == null && !modV019HoldReliableReference)
+                                if (newResult == null)
                                 {
                                     status = ScrollingCaptureStatus.PartiallySuccessful;
                                 }
@@ -195,23 +164,6 @@ Replace-Literal -Path $manager `
   -New '                            if (modV019HoldReliableReference)' `
   -Marker 'if (modV019HoldReliableReference)'
 
-# Issue the next scroll only after the current frame has been accepted. A held retry stays at the
-# same page position and gets a full settle interval before the next raw frame is captured.
-Replace-Literal -Path $manager `
-  -Old @'
-                        if (modV04.AdaptiveSettleEnabled)
-'@ `
-  -New (@'
-                        if (!modV019HoldReliableReference && !stopRequested)
-                        {
-                            timer.Restart();
-'@ + $scrollBlock + @'
-                        }
-
-                        if (modV04.AdaptiveSettleEnabled)
-'@) `
-  -Marker 'if (!modV019HoldReliableReference && !stopRequested)'
-
 # QUICK must exercise the evidence-derived v0.1.9 geometry/tail path.
 Replace-Literal -Path $automation `
   -Old '        "ShareX.ScreenCaptureLib.ShareXModV018TrustSplitSelfTests",' `
@@ -221,8 +173,8 @@ Replace-Literal -Path $automation `
 '@ `
   -Marker '"ShareX.ScreenCaptureLib.ShareXModV019RecoveryTailSelfTests",'
 
-# v0.1.9 quality grading is owned by the v0.1.9 geometry + provisional-tail telemetry. v0.1.8
-# telemetry remains in the JSON only as legacy diagnostic context.
+# v0.1.9 quality grading is owned by v0.1.9 geometry + provisional-tail telemetry. v0.1.8 remains
+# present only as diagnostic context so older evidence can still be inspected.
 Replace-Literal -Path $qualitySummary `
   -Old @'
             ShareXModV017AnchorTelemetry anchorContinuity = ShareXModAnchorContinuityV017.SnapshotTelemetry();
@@ -248,14 +200,13 @@ Replace-Literal -Path $qualitySummary `
             ShareXModV018CompositorTelemetry trustSplitV018 = ShareXModTrustSplitCompositorV018.SnapshotLiveTelemetry(); // legacy diagnostic context
             ShareXModV019TransitionTelemetry transitionV019 = ShareXModTransitionResolverV019.SnapshotTelemetry();
             ShareXModV019CompositorTelemetry trustSplitV019 = ShareXModTrustSplitCompositorV019.SnapshotLiveTelemetry();
-            if (transitionV019.TerminalUnresolved > 0 || transitionV019.PendingRetry || trustSplitV019.RejectedAppendCount > 0)
+            if (transitionV019.TerminalUnresolved > 0 || trustSplitV019.RejectedAppendCount > 0)
             {
                 status = "unresolved";
                 confidence = "low";
             }
-            else if ((transitionV019.FullRangeRecovered > 0 || transitionV019.RetryHeld > 0 ||
-                      transitionV019.OutlierDirectRejected > 0 || trustSplitV019.TailRepairComponents > 0 ||
-                      trustSplitV019.StationaryRiskFrames > 0) &&
+            else if ((transitionV019.FullRangeRecovered > 0 || transitionV019.OutlierDirectRejected > 0 ||
+                      trustSplitV019.TailRepairComponents > 0 || trustSplitV019.StationaryRiskFrames > 0) &&
                      string.Equals(status, "clean", StringComparison.OrdinalIgnoreCase))
             {
                 status = "partially-repaired";
@@ -318,7 +269,7 @@ Replace-Literal -Path $replayDiagnostics `
         ShareXModTransitionResolverV018.ResetLive();
         ShareXModTransitionResolverV019.ResetLive();
 '@ `
-  -Marker 'ShareXModTransitionResolverV019.ResetLive();'
+  -Marker '        ShareXModTransitionResolverV019.ResetLive();'
 
 Replace-Literal -Path $replayDiagnostics `
   -Old @'
@@ -358,7 +309,6 @@ Replace-Literal -Path $replayDiagnostics `
                     out delta, out string replaySource, out double replayScore, out holdReliableReference);
                 if (!resolved)
                 {
-                    if (holdReliableReference) continue;
                     throw new InvalidOperationException($"Replay could not safely resolve frame {i}; source={replaySource}, score={replayScore:F2}. Legacy mosaic fallback is disabled.");
                 }
 '@ `
@@ -373,20 +323,6 @@ Replace-Literal -Path $replayDiagnostics `
   -Old '                version = "0.1.8",' `
   -New '                version = "0.1.9",' `
   -Marker 'version = "0.1.9",'
-
-# Ensure replay cleanup resets v0.1.9 state too. The v0.1.8 hook may have already inserted the
-# v0.1.8 reset next to v0.1.7; append v0.1.9 once at the first compatible cleanup location.
-Replace-Literal -Path $replayDiagnostics `
-  -Old @'
-            ShareXModTransitionResolverV018.ResetLive();
-            ShareXModAnchorContinuityV017.ResetLive();
-'@ `
-  -New @'
-            ShareXModTransitionResolverV019.ResetLive();
-            ShareXModTransitionResolverV018.ResetLive();
-            ShareXModAnchorContinuityV017.ResetLive();
-'@ `
-  -Marker '            ShareXModTransitionResolverV019.ResetLive();'
 
 if ($CheckOnly) {
     Write-Host "LongCapture v0.1.9 recovery-tail hook compatibility passed." -ForegroundColor Green

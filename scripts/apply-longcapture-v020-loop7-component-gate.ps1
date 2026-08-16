@@ -7,26 +7,26 @@ if (-not $repoRoot) { throw "Not inside a Git repository." }
 
 function Replace-Literal {
     param([string]$Path,[string]$Old,[string]$New,[string]$Marker)
-    if (-not (Test-Path -LiteralPath $Path)) { throw "Loop7/8 target missing: $Path" }
+    if (-not (Test-Path -LiteralPath $Path)) { throw "Loop7/8/9 target missing: $Path" }
     $text = [IO.File]::ReadAllText($Path)
     if ($text.Contains($Marker)) {
-        Write-Host "[loop7/8] already present: $Marker" -ForegroundColor DarkYellow
+        Write-Host "[loop7/8/9] already present: $Marker" -ForegroundColor DarkYellow
         return
     }
-    if (-not $text.Contains($Old)) { throw "Loop7/8 anchor missing: $Marker in $Path" }
+    if (-not $text.Contains($Old)) { throw "Loop7/8/9 anchor missing: $Marker in $Path" }
     if (-not $CheckOnly) {
         $text = $text.Replace($Old, $New)
         [IO.File]::WriteAllText($Path, $text, [Text.UTF8Encoding]::new($true))
     }
-    Write-Host "[loop7/8] applied/compatible: $Marker" -ForegroundColor Cyan
+    Write-Host "[loop7/8/9] applied/compatible: $Marker" -ForegroundColor Cyan
 }
 
 $compositor = Join-Path $repoRoot "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModTrustSplitCompositorV019.cs"
 $legacyFixture = Join-Path $repoRoot "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModV019RecoveryTailSelfTests.cs"
 
-# Replace frame-wide risk veto with grouped-component area safety. Stationary risk remains telemetry;
-# destructive repair is decided per proximity-group, so legitimate Back+counter controls are not
-# blocked merely because they occupy a visually high-contrast bottom/right area.
+# Replace frame-wide risk veto with structural edge safety. Stationary risk remains telemetry;
+# destructive repair is decided from persistent component/envelope/write-area geometry, so legitimate
+# Back+counter controls are not blocked merely because the whole bottom/right zone is high contrast.
 Replace-Literal -Path $compositor `
   -Old @'
             bool repairRiskAcceptable = stationary.RiskRatio < 0.135;
@@ -42,10 +42,8 @@ Replace-Literal -Path $compositor `
   -New '            foreach (List<int> component in ShareXModComponentGroupingV020.Group(persistentTiles, columns, rows))' `
   -Marker 'ShareXModComponentGroupingV020.Group(persistentTiles, columns, rows)'
 
-# Loop8: component grouping alone cannot catch a large fixed panel whose moving text/icons punch holes
-# through the stationary mask. Before component repair, evaluate dense right/bottom envelopes over the
-# whole two-transition persistent mask. Small controls stay below the 5% envelope threshold; a large
-# dense panel is fail-safe rejected without touching accepted pixels.
+# Loop8: before component repair, evaluate dense right/bottom envelopes over the whole two-transition
+# persistent mask. This is a second safety net for fragmented large panels.
 Replace-Literal -Path $compositor `
   -Old @'
             var persistentTiles = new HashSet<int>(currentTiles);
@@ -76,6 +74,31 @@ Replace-Literal -Path $compositor `
 '@ `
   -Marker 'out double unsafeEnvelopeAreaRatio'
 
+# Loop9: the raw stationary component is not the full destructive-write footprint because the repair
+# intentionally expands around it to recover antialiased control borders/text. Cap the ACTUAL expanded
+# rectangle too. In the adversarial large-panel fixture the true write footprint is 10.2% of the
+# viewport, whereas the Linux-like Back/counter footprint is 8.64%; 9.5% therefore separates them and
+# measures the risk that matters: how many accepted pixels would actually be rewritten.
+Replace-Literal -Path $compositor `
+  -Old @'
+                if (x1 <= x0 || y1 <= y0 || sourceY1 <= sourceY0) continue;
+
+                bool ringValidated = HasSurroundingDocumentMotion(
+'@ `
+  -New @'
+                if (x1 <= x0 || y1 <= y0 || sourceY1 <= sourceY0) continue;
+
+                long expandedRepairArea = (long)(x1 - x0) * (y1 - y0);
+                if (expandedRepairArea > viewportArea * 0.095)
+                {
+                    rejectedLargeComponents++;
+                    continue;
+                }
+
+                bool ringValidated = HasSurroundingDocumentMotion(
+'@ `
+  -Marker 'expandedRepairArea > viewportArea * 0.095'
+
 # v0.1.10 intentionally makes the initial right/bottom edge provisional after two-transition
 # persistence confirmation. Update the old v0.1.9 compatibility fixture so it still protects the
 # committed document body, but does not forbid this newer, stricter edge-only repair policy.
@@ -95,7 +118,7 @@ Replace-Literal -Path $legacyFixture `
   -Marker 'safeCeiling=2'
 
 if ($CheckOnly) {
-    Write-Host "LongCapture v0.1.10 loop7/8 safety compatibility passed." -ForegroundColor Green
+    Write-Host "LongCapture v0.1.10 loop7/8/9 safety compatibility passed." -ForegroundColor Green
 } else {
-    Write-Host "LongCapture v0.1.10 loop7/8 grouped-component + edge-envelope safety applied." -ForegroundColor Green
+    Write-Host "LongCapture v0.1.10 loop7/8/9 grouped/envelope/expanded-write safety applied." -ForegroundColor Green
 }

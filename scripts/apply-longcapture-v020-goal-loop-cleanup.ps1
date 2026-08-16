@@ -4,6 +4,16 @@ param([switch]$CheckOnly)
 $ErrorActionPreference = "Stop"
 $repoRoot = (& git rev-parse --show-toplevel).Trim()
 if (-not $repoRoot) { throw "Not inside a Git repository." }
+
+$loop11 = Join-Path $repoRoot "scripts\apply-longcapture-v020-loop11-deferred-tail.ps1"
+if (-not (Test-Path -LiteralPath $loop11)) { throw "Loop11 deferred-tail hook is missing." }
+if ($CheckOnly) {
+    & pwsh -NoProfile -File $loop11 -CheckOnly
+} else {
+    & pwsh -NoProfile -File $loop11
+}
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 $manager = Join-Path $repoRoot "ShareX.ScreenCaptureLib\ScrollingCaptureManager.cs"
 if (-not (Test-Path -LiteralPath $manager)) { throw "ScrollingCaptureManager.cs not found." }
 

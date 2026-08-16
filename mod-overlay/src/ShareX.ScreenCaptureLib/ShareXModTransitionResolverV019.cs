@@ -23,28 +23,26 @@ internal readonly record struct ShareXModV019TransitionTelemetry(
     bool PendingRetry);
 
 /// <summary>
-/// v0.1.9 geometry resolver. Real v0.1.8 Linux.do evidence exposed two separate failure modes:
-/// low-consensus direct anchors could jump to a visually similar short offset, while a legitimate
-/// one-off short wheel movement was rejected because the temporal prior was treated as the only
-/// admissible search neighbourhood. v0.1.9 therefore treats every geometry source as evidence:
-/// a stable prior can override a conflicting direct anchor, an outlier direct anchor must validate
-/// against the raw pair, and a prior miss may fall back to a full-range raw-pixel search. If all of
-/// those fail, validate-before-scroll lets one same-position retry occur without advancing the page.
-/// There is still no legacy mosaic matcher fallback.
+/// v0.1.9 RC1 geometry resolver derived from the real v0.1.8 Linux.do evidence. Two independent
+/// defects were visible in the recorded raw frames: low-consensus direct anchors could jump to a
+/// visually similar short offset, while a legitimate one-off short wheel movement was rejected
+/// because the temporal prior was treated as the only admissible search neighbourhood.
+///
+/// Every accepted delta now has to survive raw-pair validation. A stable prior may override a
+/// conflicting direct anchor, an outlier direct anchor needs stronger consensus, and a prior miss
+/// may recover via a full-range raw-pixel search followed by exact validation. RC1 intentionally
+/// remains fail-closed if all evidence fails; it does not use the old mosaic matcher or an unsafe
+/// multi-frame catch-up whose overlap could exceed the viewport.
 /// </summary>
 internal static class ShareXModTransitionResolverV019
 {
     private static readonly object Sync = new();
     private static readonly Queue<int> RecentAcceptedDeltas = new();
 
-    private static bool pendingRetry;
-    private static int retryExpectedDelta;
     private static int directAccepted;
     private static int priorResolved;
     private static int outlierDirectRejected;
     private static int fullRangeRecovered;
-    private static int retryHeld;
-    private static int retryResolved;
     private static int terminalUnresolved;
     private static int latestDelta;
     private static string latestSource = "none";
@@ -67,51 +65,13 @@ internal static class ShareXModTransitionResolverV019
             holdReliableReference = false;
 
             ShareXModRobustScrollingSettings settings = ShareXModRobustScrollingSettings.Load();
-
-            // The manager does not issue another scroll while this state is pending, so this is a
-            // second look at the same page position after extra settle time, not a two-step catch-up.
-            if (pendingRetry)
-            {
-                int expected = retryExpectedDelta;
-                pendingRetry = false;
-
-                if (TryResolveExpected(previousReliable, current, hasDirectAnchor, directAnchor,
-                        settings, expected, out delta, out source, out score))
-                {
-                    source = source.StartsWith("direct", StringComparison.Ordinal)
-                        ? "settle-retry-direct"
-                        : "settle-retry-validated-prior";
-                    retryResolved++;
-                    Remember(delta);
-                    Complete(delta, source, true, false);
-                    return true;
-                }
-
-                // A second full-range pass is useful when dynamic content settled into a different
-                // but now unambiguous geometry. It must still pass the raw-pixel validator.
-                if (TryFullRange(previousReliable, current, settings, out delta, out score))
-                {
-                    source = "settle-retry-full-range";
-                    retryResolved++;
-                    fullRangeRecovered++;
-                    Remember(delta);
-                    Complete(delta, source, true, false);
-                    return true;
-                }
-
-                terminalUnresolved++;
-                source = "settle-retry-unresolved";
-                Complete(0, source, false, false);
-                return false;
-            }
-
             bool hasPrior = TryGetStablePrior(out int prior);
 
             if (hasDirectAnchor && directAnchor.ScrollDelta > 0 && directAnchor.ScrollDelta < current.Height)
             {
                 if (!hasPrior)
                 {
-                    // Bootstrap direct evidence still needs at least two agreeing bands.
+                    // Bootstrap direct evidence needs agreement plus exact raw-frame validation.
                     if (directAnchor.AgreementCount >= 2 &&
                         ShareXModVerticalFallbackMatcher.TryValidateSpecificDelta(
                             previousReliable, current, settings, directAnchor.ScrollDelta, out double directScore))
@@ -121,7 +81,7 @@ internal static class ShareXModTransitionResolverV019
                         source = "validated-direct-bootstrap";
                         directAccepted++;
                         Remember(delta);
-                        Complete(delta, source, true, false);
+                        Complete(delta, source, true);
                         return true;
                     }
                 }
@@ -132,8 +92,6 @@ internal static class ShareXModTransitionResolverV019
 
                     if (nearPrior && directAnchor.AgreementCount >= 2)
                     {
-                        // A near-prior anchor is still validated against the complete raw-frame pair;
-                        // this rejects accidental repeated-pattern aliases before they enter geometry.
                         if (ShareXModVerticalFallbackMatcher.TryValidateSpecificDelta(
                                 previousReliable, current, settings, directAnchor.ScrollDelta, out double directScore))
                         {
@@ -142,14 +100,14 @@ internal static class ShareXModTransitionResolverV019
                             source = "validated-direct-near-prior";
                             directAccepted++;
                             Remember(delta);
-                            Complete(delta, source, true, false);
+                            Complete(delta, source, true);
                             return true;
                         }
                     }
                     else
                     {
-                        // v0.1.8 accepted 200/404px low-consensus anchors in a run whose real motion
-                        // was ~750px. Prefer a stable prior when the raw pair validates it.
+                        // The user's v0.1.8 run contained 200/404px direct anchors among a strong
+                        // ~750px history. A conflicting direct anchor no longer bypasses the prior.
                         if (ShareXModVerticalFallbackMatcher.TryValidateSpecificDelta(
                                 previousReliable, current, settings, prior, out double priorScore))
                         {
@@ -159,12 +117,12 @@ internal static class ShareXModTransitionResolverV019
                             outlierDirectRejected++;
                             priorResolved++;
                             Remember(delta);
-                            Complete(delta, source, true, false);
+                            Complete(delta, source, true);
                             return true;
                         }
 
-                        // A real variable scroll amount is allowed, but only with stronger direct
-                        // consensus plus exact raw-pair validation.
+                        // Genuine variable wheel motion is possible. Outlier direct evidence therefore
+                        // remains admissible only with stronger consensus and exact validation.
                         if (directAnchor.AgreementCount >= 3 &&
                             ShareXModVerticalFallbackMatcher.TryValidateSpecificDelta(
                                 previousReliable, current, settings, directAnchor.ScrollDelta, out double outlierScore))
@@ -174,7 +132,7 @@ internal static class ShareXModTransitionResolverV019
                             source = "validated-direct-outlier";
                             directAccepted++;
                             Remember(delta);
-                            Complete(delta, source, true, false);
+                            Complete(delta, source, true);
                             return true;
                         }
 
@@ -193,7 +151,7 @@ internal static class ShareXModTransitionResolverV019
                     source = "validated-prior-v019";
                     priorResolved++;
                     Remember(delta);
-                    Complete(delta, source, true, false);
+                    Complete(delta, source, true);
                     return true;
                 }
 
@@ -205,38 +163,26 @@ internal static class ShareXModTransitionResolverV019
                     source = "near-prior-v019";
                     priorResolved++;
                     Remember(delta);
-                    Complete(delta, source, true, false);
+                    Complete(delta, source, true);
                     return true;
                 }
             }
 
-            // Crucial v0.1.9 difference: a stable prior is not a prison. Real wheel scrolling can
-            // occasionally move a much shorter distance. A full-range candidate is accepted only
-            // after the same raw-pixel validator confirms the exact candidate delta.
+            // A stable prior is guidance, not a prison. The real frame-17 evidence was a legitimate
+            // much shorter movement. Full-range recovery is still constrained by the matcher and is
+            // then revalidated at the exact chosen delta before it can affect the mosaic.
             if (TryFullRange(previousReliable, current, settings, out delta, out score))
             {
                 source = hasPrior ? "full-range-recovered-prior-outlier" : "full-range-bootstrap-v019";
                 fullRangeRecovered++;
                 Remember(delta);
-                Complete(delta, source, true, false);
+                Complete(delta, source, true);
                 return true;
-            }
-
-            int retryDelta = hasPrior ? prior : GetLastAcceptedDelta();
-            if (retryDelta > 0 && retryDelta < current.Height)
-            {
-                retryExpectedDelta = retryDelta;
-                pendingRetry = true;
-                retryHeld++;
-                holdReliableReference = true;
-                source = "hold-current-position-for-settle-retry";
-                Complete(0, source, false, true);
-                return false;
             }
 
             terminalUnresolved++;
             source = "unresolved-no-reliable-geometry";
-            Complete(0, source, false, false);
+            Complete(0, source, false);
             return false;
         }
     }
@@ -246,8 +192,8 @@ internal static class ShareXModTransitionResolverV019
         lock (Sync)
             return new ShareXModV019TransitionTelemetry(
                 directAccepted, priorResolved, outlierDirectRejected, fullRangeRecovered,
-                retryHeld, retryResolved, terminalUnresolved,
-                latestDelta, latestSource, pendingRetry);
+                0, 0, terminalUnresolved,
+                latestDelta, latestSource, false);
     }
 
     public static void ResetLive()
@@ -255,10 +201,8 @@ internal static class ShareXModTransitionResolverV019
         lock (Sync)
         {
             RecentAcceptedDeltas.Clear();
-            pendingRetry = false;
-            retryExpectedDelta = 0;
             directAccepted = priorResolved = outlierDirectRejected = fullRangeRecovered = 0;
-            retryHeld = retryResolved = terminalUnresolved = 0;
+            terminalUnresolved = 0;
             latestDelta = 0;
             latestSource = "none";
         }
@@ -271,56 +215,6 @@ internal static class ShareXModTransitionResolverV019
             RecentAcceptedDeltas.Clear();
             foreach (int value in deltas.Where(x => x > 0)) Remember(value);
         }
-    }
-
-    internal static void ForcePendingRetryForSelfTest(int expectedDelta)
-    {
-        lock (Sync)
-        {
-            retryExpectedDelta = expectedDelta;
-            pendingRetry = expectedDelta > 0;
-        }
-    }
-
-    private static bool TryResolveExpected(
-        Bitmap previous,
-        Bitmap current,
-        bool hasDirectAnchor,
-        ShareXModAnchorMatch directAnchor,
-        ShareXModRobustScrollingSettings settings,
-        int expected,
-        out int delta,
-        out string source,
-        out double score)
-    {
-        delta = 0;
-        source = "retry-unresolved";
-        score = double.MaxValue;
-        int tolerance = Math.Max(40, Math.Max(1, expected) / 10);
-
-        if (hasDirectAnchor && directAnchor.ScrollDelta > 0 &&
-            Math.Abs(directAnchor.ScrollDelta - expected) <= tolerance &&
-            directAnchor.AgreementCount >= 2 &&
-            ShareXModVerticalFallbackMatcher.TryValidateSpecificDelta(
-                previous, current, settings, directAnchor.ScrollDelta, out double directScore))
-        {
-            delta = directAnchor.ScrollDelta;
-            score = directScore;
-            source = "direct-retry";
-            return true;
-        }
-
-        if (expected > 0 && expected < current.Height &&
-            ShareXModVerticalFallbackMatcher.TryValidateSpecificDelta(
-                previous, current, settings, expected, out double expectedScore))
-        {
-            delta = expected;
-            score = expectedScore;
-            source = "validated-retry-prior";
-            return true;
-        }
-
-        return false;
     }
 
     private static bool TryFullRange(
@@ -355,8 +249,6 @@ internal static class ShareXModTransitionResolverV019
         while (RecentAcceptedDeltas.Count > 7) RecentAcceptedDeltas.Dequeue();
     }
 
-    private static int GetLastAcceptedDelta() => RecentAcceptedDeltas.Count == 0 ? 0 : RecentAcceptedDeltas.Last();
-
     private static bool TryGetStablePrior(out int prior)
     {
         prior = 0;
@@ -370,14 +262,14 @@ internal static class ShareXModTransitionResolverV019
         return prior > 0;
     }
 
-    private static void Complete(int delta, string source, bool resolved, bool held)
+    private static void Complete(int delta, string source, bool resolved)
     {
         latestDelta = delta;
         latestSource = source;
-        TryWriteEvidence(delta, source, resolved, held);
+        TryWriteEvidence(delta, source, resolved);
     }
 
-    private static void TryWriteEvidence(int delta, string source, bool resolved, bool held)
+    private static void TryWriteEvidence(int delta, string source, bool resolved)
     {
         try
         {
@@ -392,7 +284,7 @@ internal static class ShareXModTransitionResolverV019
                 {
                     timestamp = DateTimeOffset.Now,
                     resolved,
-                    held,
+                    held = false,
                     delta,
                     source,
                     telemetry = SnapshotTelemetry()

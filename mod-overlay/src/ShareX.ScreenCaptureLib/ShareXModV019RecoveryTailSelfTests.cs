@@ -1,6 +1,7 @@
 #nullable enable
 
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 
 namespace ShareX.ScreenCaptureLib;
@@ -15,8 +16,11 @@ internal static class ShareXModV019RecoveryTailSelfTests
     {
         VerifyOutlierDirectCannotOverrideValidatedPrior();
         VerifyVariableShortMovementCanRecoverFullRange();
+        VerifyEvidenceShapedSequenceRejectsAliasAnchors();
+        VerifyVariableDeltaMatrix();
         VerifyOnlyNewestTailMayBeRepaired();
-        return "v0.1.9 recovery-tail passed: outlier direct anchor gated, variable short movement full-range recovered, committed body immutable, provisional fixed/sticky tail repair exercised, safe first/final fixed occurrences retained, legacy mosaic fallback forbidden.";
+        VerifyFixedControlsDoNotAccumulateAcrossLongRun();
+        return "v0.1.9 recovery-tail passed: outlier direct anchor gated, variable short movement full-range recovered, evidence-shaped false 200/404-style aliases rejected, variable-delta matrix passed, committed body immutable, provisional fixed/sticky tail repair exercised, long-run fixed controls bounded to safe first/final occurrences, legacy mosaic fallback forbidden.";
     }
 
     private static void VerifyOutlierDirectCannotOverrideValidatedPrior()
@@ -69,6 +73,73 @@ internal static class ShareXModV019RecoveryTailSelfTests
         }
     }
 
+    // Evidence-shaped synthetic sequence derived from the user's real Linux.do failure pattern:
+    // stable large wheel movements, two far-away false direct anchors, then a much shorter final
+    // movement. This uses production resolver code rather than a separately reimplemented oracle.
+    private static void VerifyEvidenceShapedSequenceRejectsAliasAnchors()
+    {
+        ShareXModTransitionResolverV019.ResetLive();
+        try
+        {
+            int[] actual = { 260, 258, 262, 260, 259, 261, 260, 258, 262, 260, 259, 261, 260, 258, 262, 260, 92 };
+            var offsets = new List<int> { 0 };
+            foreach (int delta in actual) offsets.Add(offsets[^1] + delta);
+
+            for (int i = 1; i < offsets.Count; i++)
+            {
+                using Bitmap previous = BuildViewport(offsets[i - 1], i - 1, includeFixed: true);
+                using Bitmap current = BuildViewport(offsets[i], i, includeFixed: true);
+
+                bool falseAlias = i == 3 || i == 14;
+                bool omitDirect = i == offsets.Count - 1;
+                int directDelta = falseAlias ? (i == 3 ? 70 : 140) : actual[i - 1];
+                ShareXModAnchorMatch direct = new(directDelta, 0, falseAlias ? 2 : 3);
+
+                bool ok = ShareXModTransitionResolverV019.TryResolve(
+                    previous, current, !omitDirect, direct,
+                    out int resolved, out string source, out _, out bool hold);
+
+                if (!ok || hold || Math.Abs(resolved - actual[i - 1]) > 12)
+                    throw new InvalidOperationException($"v0.1.9 evidence-shaped sequence failed frame={i} expected={actual[i - 1]} resolved={resolved} source={source} ok={ok} hold={hold}.");
+
+                if (falseAlias && resolved == directDelta)
+                    throw new InvalidOperationException($"v0.1.9 accepted evidence-shaped false alias frame={i} alias={directDelta} source={source}.");
+            }
+
+            ShareXModV019TransitionTelemetry telemetry = ShareXModTransitionResolverV019.SnapshotTelemetry();
+            if (telemetry.OutlierDirectRejected < 2 || telemetry.FullRangeRecovered < 1 || telemetry.TerminalUnresolved != 0)
+                throw new InvalidOperationException($"v0.1.9 evidence-shaped telemetry insufficient: {telemetry}.");
+        }
+        finally
+        {
+            ShareXModTransitionResolverV019.ResetLive();
+        }
+    }
+
+    private static void VerifyVariableDeltaMatrix()
+    {
+        int[] deltas = { 64, 92, 128, 180, 220, 260, 340, 420 };
+        foreach (int expected in deltas)
+        {
+            ShareXModTransitionResolverV019.ResetLive();
+            try
+            {
+                ShareXModTransitionResolverV019.SeedForSelfTest(Delta, Delta, Delta, Delta);
+                using Bitmap previous = BuildViewport(0, 0, includeFixed: false);
+                using Bitmap current = BuildViewport(expected, 1, includeFixed: false);
+                bool ok = ShareXModTransitionResolverV019.TryResolve(
+                    previous, current, false, default,
+                    out int resolved, out string source, out _, out bool hold);
+                if (!ok || hold || Math.Abs(resolved - expected) > 12)
+                    throw new InvalidOperationException($"v0.1.9 variable-delta matrix failed expected={expected} resolved={resolved} source={source} ok={ok} hold={hold}.");
+            }
+            finally
+            {
+                ShareXModTransitionResolverV019.ResetLive();
+            }
+        }
+    }
+
     private static void VerifyOnlyNewestTailMayBeRepaired()
     {
         using Bitmap frame0 = BuildViewport(0, 0, includeFixed: true);
@@ -85,14 +156,7 @@ internal static class ShareXModV019RecoveryTailSelfTests
             result = Replace(result, session.TryAppend(result!, frame1, frame2, Delta));
             result = Replace(result, session.TryAppend(result!, frame2, frame3, Delta));
 
-            for (int y = 0; y < Height; y += 9)
-            {
-                for (int x = 0; x < Width; x += 11)
-                {
-                    if (result!.GetPixel(x, y).ToArgb() != committedBodySnapshot.GetPixel(x, y).ToArgb())
-                        throw new InvalidOperationException($"v0.1.9 rewrote committed first-frame body at {x},{y}.");
-                }
-            }
+            AssertFirstViewportImmutable(result!, committedBodySnapshot);
 
             ShareXModV019CompositorTelemetry telemetry = session.SnapshotTelemetry();
             if (telemetry.AppendCount != 3 || !telemetry.CommittedBodyImmutable || !telemetry.ProvisionalTailRepairEnabled)
@@ -100,10 +164,6 @@ internal static class ShareXModV019RecoveryTailSelfTests
             if (telemetry.TailRepairComponents <= 0 || telemetry.TailRepairPixelsApprox <= 0)
                 throw new InvalidOperationException($"v0.1.9 synthetic fixed overlay did not exercise provisional tail repair: {telemetry}.");
 
-            // The fixture contains two blue fixed sub-controls per viewport. With four captured
-            // viewports there would be 8 blue bands if nothing were deduplicated. The safety policy
-            // intentionally preserves the first committed occurrence and the newest unresolved tail,
-            // therefore 4 bands (two occurrences) is the expected safe ceiling, not a failure.
             int blueBands = CountFixedBlueBands(result!);
             if (blueBands > 4)
                 throw new InvalidOperationException($"v0.1.9 provisional tail repair left too many repeated fixed controls; bands={blueBands}, safeCeiling=4.");
@@ -111,6 +171,59 @@ internal static class ShareXModV019RecoveryTailSelfTests
         finally
         {
             result?.Dispose();
+        }
+    }
+
+    private static void VerifyFixedControlsDoNotAccumulateAcrossLongRun()
+    {
+        const int transitions = 12;
+        using Bitmap first = BuildViewport(0, 0, includeFixed: true);
+        using Bitmap committedBodySnapshot = (Bitmap)first.Clone();
+        using var session = new ShareXModTrustSplitCompositorV019.Session();
+        Bitmap? result = (Bitmap)first.Clone();
+        Bitmap? previous = (Bitmap)first.Clone();
+        try
+        {
+            int offset = 0;
+            for (int i = 1; i <= transitions; i++)
+            {
+                int delta = i == transitions ? 92 : Delta;
+                offset += delta;
+                using Bitmap current = BuildViewport(offset, i, includeFixed: true);
+                Bitmap? next = session.TryAppend(result!, previous!, current, delta);
+                result = Replace(result!, next);
+                previous.Dispose();
+                previous = (Bitmap)current.Clone();
+            }
+
+            AssertFirstViewportImmutable(result!, committedBodySnapshot);
+            ShareXModV019CompositorTelemetry telemetry = session.SnapshotTelemetry();
+            if (telemetry.AppendCount != transitions || telemetry.RejectedAppendCount != 0 || telemetry.TailRepairComponents <= 0)
+                throw new InvalidOperationException($"v0.1.9 long-run compositor telemetry invalid: {telemetry}.");
+
+            // Two blue sub-bands per fixed control. A naive 13-viewport stitch would therefore leave
+            // 26 bands. The trust-split policy may intentionally retain only the first committed and
+            // final unresolved occurrences, giving a safe ceiling of 4 bands regardless of run length.
+            int blueBands = CountFixedBlueBands(result!);
+            if (blueBands > 4)
+                throw new InvalidOperationException($"v0.1.9 long-run fixed controls accumulated; bands={blueBands}, safeCeiling=4, transitions={transitions}.");
+        }
+        finally
+        {
+            previous?.Dispose();
+            result?.Dispose();
+        }
+    }
+
+    private static void AssertFirstViewportImmutable(Bitmap result, Bitmap snapshot)
+    {
+        for (int y = 0; y < Height; y += 9)
+        {
+            for (int x = 0; x < Width; x += 11)
+            {
+                if (result.GetPixel(x, y).ToArgb() != snapshot.GetPixel(x, y).ToArgb())
+                    throw new InvalidOperationException($"v0.1.9 rewrote committed first-frame body at {x},{y}.");
+            }
         }
     }
 
@@ -141,6 +254,14 @@ internal static class ShareXModV019RecoveryTailSelfTests
                 45 + row * 19 % 150,
                 55 + row * 23 % 140));
             g.FillRectangle(ink, 34 + row * 31 % 650, y + 3, 72 + row * 5 % 180, 4);
+
+            // A sparse deterministic marker breaks perfect periodicity without making every row
+            // unique, which keeps repeated-content aliases realistically plausible.
+            if ((row + frame) % 11 == 0)
+            {
+                using var marker = new SolidBrush(Color.FromArgb(60 + row * 3 % 120, 70, 90));
+                g.FillRectangle(marker, 690 + row * 7 % 90, y + 1, 10, 8);
+            }
         }
 
         if (includeFixed)

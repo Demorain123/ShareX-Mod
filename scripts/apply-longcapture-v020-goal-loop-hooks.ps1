@@ -22,8 +22,6 @@ function Replace-Literal {
 }
 
 $automation = Join-Path $repoRoot "LongCapture.Standalone\AutomationTestRunner.cs"
-# ShareX-Mod sources are linked into ShareX.ScreenCaptureLib from mod-overlay by the build target;
-# they are not physically copied into ShareX.ScreenCaptureLib. Patch the actual linked source files.
 $compositor = Join-Path $repoRoot "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModTrustSplitCompositorV019.cs"
 $goalTest = Join-Path $repoRoot "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModV020GoalLoopSelfTests.cs"
 
@@ -35,10 +33,6 @@ Replace-Literal -Path $automation `
 '@ `
   -Marker '"ShareX.ScreenCaptureLib.ShareXModV020GoalLoopSelfTests",'
 
-# Loop-5: the original viewport is not truly safe to commit when it contains a fixed bottom/right
-# control. Keep just the first transition's raw pair until a second transition confirms the same
-# screen-coordinate stationary component. Then the initial viewport can be repaired from the first
-# scrolled raw frame without guessing underlying pixels. After that, the initial raw pair is freed.
 Replace-Literal -Path $compositor `
   -Old '        private int rejectedLargeComponents;' `
   -New @'
@@ -79,11 +73,6 @@ Replace-Literal -Path $compositor `
   -New '            int resultViewportTop = forcedResultViewportTop >= 0 ? forcedResultViewportTop : result.Height - height;' `
   -Marker 'forcedResultViewportTop >= 0 ? forcedResultViewportTop'
 
-# Loop-2 review found a short-scroll hazard: a large expanded repair rectangle can map its source
-# back into the fixed control itself. Expand enough to cover a control+counter group, but copy only
-# narrow source strips that do NOT intersect a two-transition persistent fixed mask. A one-frame
-# stationary tile is not enough to veto source pixels because real Linux.do has broad white/right-edge
-# regions that can be coincidentally stable for one transition.
 Replace-Literal -Path $compositor `
   -Old '                int marginY = TileHeight * 2;' `
   -New '                int marginY = TileHeight * 3; // v0.1.10: cover separated control/counter subparts while source-safe strips prevent self-copy.' `
@@ -131,15 +120,6 @@ Replace-Literal -Path $compositor `
 '@ `
   -Marker 'int copiedPixels = ShareXModSafeTailCopyV020.Copy('
 
-# A large fixed panel can fragment into several individually-small tile components and bypass a
-# per-component 5% area cap. Add a frame-level circuit breaker. The 13.5% threshold is intentionally
-# above the maximum 12.86% stationary-risk observed in the user's v0.1.8 Linux.do evidence, while the
-# adversarial giant-panel fixture produces roughly 14-18%. When tripped we preserve pixels and only
-# report risk; destructive tail repair is disabled for that transition.
-#
-# The same block also handles the initial viewport: first transition stores the raw pair; a later
-# transition with persistent stationary evidence can repair viewport 0 using the first scrolled raw
-# frame. This removes the first fixed-control occurrence without weakening committed-body safety.
 Replace-Literal -Path $compositor `
   -Old @'
             if (stationary.RiskRatio >= 0.015) stationaryRiskFrames++;
@@ -204,31 +184,9 @@ Replace-Literal -Path $compositor `
 '@ `
   -Marker 'initialRawBeforeScroll = (Bitmap)previousRaw.Clone();'
 
-Replace-Literal -Path $compositor `
-  -Old @'
-        public void Dispose()
-        {
-            previousStationaryTiles.Clear();
-            previousAppendDelta = 0;
-        }
-'@ `
-  -New @'
-        public void Dispose()
-        {
-            previousStationaryTiles.Clear();
-            previousAppendDelta = 0;
-            initialRawBeforeScroll?.Dispose();
-            initialRawAfterFirstScroll?.Dispose();
-            initialRawBeforeScroll = null;
-            initialRawAfterFirstScroll = null;
-            initialRepairPending = false;
-        }
-'@ `
-  -Marker 'initialRawBeforeScroll?.Dispose();'
+# The cleanup script later replaces the exact Dispose method. This marker is intentionally unique to
+# that exact cleanup now; do not use a generic initialRawBeforeScroll?.Dispose() marker here.
 
-# The first loop fixture intentionally had two solid blue rectangles. Real Linux.do has one large
-# blue Back button plus a pale counter with small blue glyphs. Keep the counter present, but model its
-# shape accurately so the gate counts repeated controls rather than counting every internal glyph row.
 Replace-Literal -Path $goalTest `
   -Old '            g.FillRectangle(blue, x + 16, y + 94, 140, 46);' `
   -New @'
@@ -243,17 +201,15 @@ Replace-Literal -Path $goalTest `
   -New '            bool hit = hits >= 20; // count a fixed control body, not tiny blue counter glyphs.' `
   -Marker 'bool hit = hits >= 20; // count a fixed control body'
 
-# Real-test parity: after two-transition confirmation, the first occurrence must be recoverable too;
-# only the newest unresolved/final viewport may retain the fixed control.
 Replace-Literal -Path $goalTest `
   -Old '            if (blueBands > 2)' `
   -New '            if (blueBands > 1)' `
   -Marker 'if (blueBands > 1)'
 
 Replace-Literal -Path $goalTest `
-  -Old '            if (CountFixedBlueBands(result) > 2)' `
-  -New '            if (CountFixedBlueBands(result) > 1)' `
-  -Marker 'if (CountFixedBlueBands(result) > 1)'
+  -Old '                if (bands > 2)' `
+  -New '                if (bands > 1)' `
+  -Marker 'if (bands > 1)'
 
 Replace-Literal -Path $goalTest `
   -Old 'Linux-like fixed control reduced to first/final occurrences' `

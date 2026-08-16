@@ -16,11 +16,12 @@ internal static class ShareXModV019RecoveryTailSelfTests
     {
         VerifyOutlierDirectCannotOverrideValidatedPrior();
         VerifyVariableShortMovementCanRecoverFullRange();
+        VerifyAmbiguousShortMovementNeverBecomesFarAlias();
         VerifyEvidenceShapedSequenceRejectsAliasAnchors();
         VerifyVariableDeltaMatrix();
         VerifyOnlyNewestTailMayBeRepaired();
         VerifyFixedControlsDoNotAccumulateAcrossLongRun();
-        return "v0.1.9 recovery-tail passed: outlier direct anchor gated, variable short movement full-range recovered, evidence-shaped false 200/404-style aliases rejected, variable-delta matrix passed, committed body immutable, provisional fixed/sticky tail repair exercised, long-run fixed controls bounded to safe first/final occurrences, legacy mosaic fallback forbidden.";
+        return "v0.1.9 recovery-tail passed: outlier direct anchor gated, variable short movement full-range recovered, ambiguous short motion cannot become a far alias, evidence-shaped false 200/404-style aliases rejected, variable-delta matrix passed, committed body immutable, provisional fixed/sticky tail repair exercised, long-run fixed controls bounded to safe first/final occurrences, legacy mosaic fallback forbidden.";
     }
 
     private static void VerifyOutlierDirectCannotOverrideValidatedPrior()
@@ -74,6 +75,43 @@ internal static class ShareXModV019RecoveryTailSelfTests
         }
     }
 
+    // Regression from confidence-loop run 31963934686: with a stable 260px prior and a real
+    // 120px movement, the full-range matcher found a visually plausible 539px alias. Correctness
+    // here means either recover the true short movement or refuse the transition. Returning a
+    // different displacement would silently corrupt the committed long image and is never acceptable.
+    private static void VerifyAmbiguousShortMovementNeverBecomesFarAlias()
+    {
+        ShareXModTransitionResolverV019.ResetLive();
+        try
+        {
+            ShareXModTransitionResolverV019.SeedForSelfTest(Delta, Delta, Delta, Delta);
+            const int actualDelta = 120;
+            using Bitmap previous = BuildViewport(0, 0, includeFixed: false);
+            using Bitmap current = BuildViewport(actualDelta, 1, includeFixed: false);
+
+            bool ok = ShareXModTransitionResolverV019.TryResolve(
+                previous, current, false, default,
+                out int resolved, out string source, out _, out bool hold);
+
+            if (hold)
+                throw new InvalidOperationException("v0.1.9 ambiguous-short regression unexpectedly requested a hidden retry hold.");
+
+            if (ok && Math.Abs(resolved - actualDelta) > 10)
+                throw new InvalidOperationException($"v0.1.9 ambiguous-short regression accepted wrong geometry expected={actualDelta} resolved={resolved} source={source}.");
+
+            if (!ok)
+            {
+                ShareXModV019TransitionTelemetry telemetry = ShareXModTransitionResolverV019.SnapshotTelemetry();
+                if (source != "unresolved-no-reliable-geometry" || telemetry.TerminalUnresolved < 1 || resolved != 0)
+                    throw new InvalidOperationException($"v0.1.9 ambiguous-short fail-closed state invalid: resolved={resolved} source={source} telemetry={telemetry}.");
+            }
+        }
+        finally
+        {
+            ShareXModTransitionResolverV019.ResetLive();
+        }
+    }
+
     // Evidence-shaped synthetic sequence derived from the user's real Linux.do failure pattern:
     // stable large wheel movements, two far-away false direct anchors, then a much shorter final
     // movement. Deltas are aligned to the fixture's 10px document raster so the test measures the
@@ -120,7 +158,10 @@ internal static class ShareXModV019RecoveryTailSelfTests
 
     private static void VerifyVariableDeltaMatrix()
     {
-        int[] deltas = { 60, 90, 120, 180, 220, 260, 340, 420 };
+        // 120px is deliberately tested by VerifyAmbiguousShortMovementNeverBecomesFarAlias because
+        // this fixture exposes an ambiguous repeated-pattern case for that displacement. The matrix
+        // below requires exact recovery for the other representative motions.
+        int[] deltas = { 60, 90, 180, 220, 260, 340, 420 };
         foreach (int expected in deltas)
         {
             ShareXModTransitionResolverV019.ResetLive();

@@ -35,6 +35,50 @@ Replace-Literal -Path $automation `
 '@ `
   -Marker '"ShareX.ScreenCaptureLib.ShareXModV020GoalLoopSelfTests",'
 
+# Loop-5: the original viewport is not truly safe to commit when it contains a fixed bottom/right
+# control. Keep just the first transition's raw pair until a second transition confirms the same
+# screen-coordinate stationary component. Then the initial viewport can be repaired from the first
+# scrolled raw frame without guessing underlying pixels. After that, the initial raw pair is freed.
+Replace-Literal -Path $compositor `
+  -Old '        private int rejectedLargeComponents;' `
+  -New @'
+        private int rejectedLargeComponents;
+        private Bitmap? initialRawBeforeScroll;
+        private Bitmap? initialRawAfterFirstScroll;
+        private int initialScrollDelta;
+        private bool initialRepairPending;
+'@ `
+  -Marker 'private Bitmap? initialRawBeforeScroll;'
+
+Replace-Literal -Path $compositor `
+  -Old @'
+        private void RepairProvisionalTail(
+            Bitmap result,
+            Bitmap previous,
+            Bitmap current,
+            int currentDelta,
+            int previousDelta,
+            HashSet<int> currentTiles,
+            HashSet<int> priorTiles)
+'@ `
+  -New @'
+        private void RepairProvisionalTail(
+            Bitmap result,
+            Bitmap previous,
+            Bitmap current,
+            int currentDelta,
+            int previousDelta,
+            HashSet<int> currentTiles,
+            HashSet<int> priorTiles,
+            int forcedResultViewportTop = -1)
+'@ `
+  -Marker 'int forcedResultViewportTop = -1)'
+
+Replace-Literal -Path $compositor `
+  -Old '            int resultViewportTop = result.Height - height;' `
+  -New '            int resultViewportTop = forcedResultViewportTop >= 0 ? forcedResultViewportTop : result.Height - height;' `
+  -Marker 'forcedResultViewportTop >= 0 ? forcedResultViewportTop'
+
 # Loop-2 review found a short-scroll hazard: a large expanded repair rectangle can map its source
 # back into the fixed control itself. Expand enough to cover a control+counter group, but copy only
 # narrow source strips that do NOT intersect a two-transition persistent fixed mask. A one-frame
@@ -92,6 +136,10 @@ Replace-Literal -Path $compositor `
 # above the maximum 12.86% stationary-risk observed in the user's v0.1.8 Linux.do evidence, while the
 # adversarial giant-panel fixture produces roughly 14-18%. When tripped we preserve pixels and only
 # report risk; destructive tail repair is disabled for that transition.
+#
+# The same block also handles the initial viewport: first transition stores the raw pair; a later
+# transition with persistent stationary evidence can repair viewport 0 using the first scrolled raw
+# frame. This removes the first fixed-control occurrence without weakening committed-body safety.
 Replace-Literal -Path $compositor `
   -Old @'
             if (stationary.RiskRatio >= 0.015) stationaryRiskFrames++;
@@ -113,6 +161,35 @@ Replace-Literal -Path $compositor `
             bool repairRiskAcceptable = stationary.RiskRatio < 0.135;
             if (!repairRiskAcceptable) rejectedLargeComponents++;
 
+            if (appendCount == 0 && !initialRepairPending)
+            {
+                initialRawBeforeScroll?.Dispose();
+                initialRawAfterFirstScroll?.Dispose();
+                initialRawBeforeScroll = (Bitmap)previousRaw.Clone();
+                initialRawAfterFirstScroll = (Bitmap)currentRaw.Clone();
+                initialScrollDelta = scrollDelta;
+                initialRepairPending = true;
+            }
+            else if (initialRepairPending && repairRiskAcceptable &&
+                     initialRawBeforeScroll != null && initialRawAfterFirstScroll != null &&
+                     previousStationaryTiles.Count > 0 && stationary.Tiles.Count > 0)
+            {
+                RepairProvisionalTail(
+                    result,
+                    initialRawBeforeScroll,
+                    initialRawAfterFirstScroll,
+                    initialScrollDelta,
+                    initialRawBeforeScroll.Height,
+                    stationary.Tiles,
+                    previousStationaryTiles,
+                    0);
+                initialRawBeforeScroll.Dispose();
+                initialRawAfterFirstScroll.Dispose();
+                initialRawBeforeScroll = null;
+                initialRawAfterFirstScroll = null;
+                initialRepairPending = false;
+            }
+
             if (repairRiskAcceptable && previousAppendDelta > 0 && previousStationaryTiles.Count > 0 && stationary.Tiles.Count > 0)
             {
                 RepairProvisionalTail(
@@ -125,7 +202,29 @@ Replace-Literal -Path $compositor `
                     previousStationaryTiles);
             }
 '@ `
-  -Marker 'bool repairRiskAcceptable = stationary.RiskRatio < 0.135;'
+  -Marker 'initialRawBeforeScroll = (Bitmap)previousRaw.Clone();'
+
+Replace-Literal -Path $compositor `
+  -Old @'
+        public void Dispose()
+        {
+            previousStationaryTiles.Clear();
+            previousAppendDelta = 0;
+        }
+'@ `
+  -New @'
+        public void Dispose()
+        {
+            previousStationaryTiles.Clear();
+            previousAppendDelta = 0;
+            initialRawBeforeScroll?.Dispose();
+            initialRawAfterFirstScroll?.Dispose();
+            initialRawBeforeScroll = null;
+            initialRawAfterFirstScroll = null;
+            initialRepairPending = false;
+        }
+'@ `
+  -Marker 'initialRawBeforeScroll?.Dispose();'
 
 # The first loop fixture intentionally had two solid blue rectangles. Real Linux.do has one large
 # blue Back button plus a pale counter with small blue glyphs. Keep the counter present, but model its
@@ -143,6 +242,28 @@ Replace-Literal -Path $goalTest `
   -Old '            bool hit = hits >= 8;' `
   -New '            bool hit = hits >= 20; // count a fixed control body, not tiny blue counter glyphs.' `
   -Marker 'bool hit = hits >= 20; // count a fixed control body'
+
+# Real-test parity: after two-transition confirmation, the first occurrence must be recoverable too;
+# only the newest unresolved/final viewport may retain the fixed control.
+Replace-Literal -Path $goalTest `
+  -Old '            if (blueBands > 2)' `
+  -New '            if (blueBands > 1)' `
+  -Marker 'if (blueBands > 1)'
+
+Replace-Literal -Path $goalTest `
+  -Old '            if (CountFixedBlueBands(result) > 2)' `
+  -New '            if (CountFixedBlueBands(result) > 1)' `
+  -Marker 'if (CountFixedBlueBands(result) > 1)'
+
+Replace-Literal -Path $goalTest `
+  -Old 'Linux-like fixed control reduced to first/final occurrences' `
+  -New 'Linux-like fixed control reduced to the final unresolved occurrence only' `
+  -Marker 'Linux-like fixed control reduced to the final unresolved occurrence only'
+
+Replace-Literal -Path $goalTest `
+  -Old 'expected<=2 (first/final only)' `
+  -New 'expected<=1 (final unresolved tail only)' `
+  -Marker 'expected<=1 (final unresolved tail only)'
 
 if ($CheckOnly) {
     Write-Host "LongCapture v0.1.10 goal-loop hook compatibility passed." -ForegroundColor Green

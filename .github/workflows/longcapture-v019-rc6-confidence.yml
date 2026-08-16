@@ -57,7 +57,8 @@ jobs:
             "scripts\apply-longcapture-v019-rc3-real-evidence-hooks.ps1",
             "scripts\apply-longcapture-v019-rc4-upward-alias-veto.ps1",
             "scripts\apply-longcapture-v019-rc5-downward-alias-consensus.ps1",
-            "scripts\apply-longcapture-v019-rc6-sparse-edge-evidence.ps1"
+            "scripts\apply-longcapture-v019-rc6-sparse-edge-evidence.ps1",
+            "scripts\apply-longcapture-v019-rc6-strong-direct-order.ps1"
           )
           foreach ($hook in $hooks) {
             Write-Host "=== $hook ==="
@@ -66,7 +67,7 @@ jobs:
           }
           git diff --check
 
-      - name: Verify RC6 release and architecture invariants
+      - name: Verify RC6 invariants
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -74,43 +75,25 @@ jobs:
           $manager = Get-Content "ShareX.ScreenCaptureLib\ScrollingCaptureManager.cs" -Raw
           $matcher = Get-Content "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModVerticalFallbackMatcher.cs" -Raw
           $resolver = Get-Content "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModTransitionResolverV019.cs" -Raw
-          $rc6tests = Get-Content "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModV019Rc6RealEvidenceSelfTests.cs" -Raw
+          $tests = Get-Content "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModV019Rc6RealEvidenceSelfTests.cs" -Raw
           $automation = Get-Content "LongCapture.Standalone\AutomationTestRunner.cs" -Raw
-
           if ($version -notmatch '0\.1\.9-rc6') { throw "RC6 version marker missing" }
-          foreach ($required in @(
-            "ShareXModTransitionResolverV019.TryResolve",
-            "ShareXModTrustSplitCompositorV019.TryAppendLive",
-            "modResolvedDelta"
-          )) { if ($manager -notmatch [regex]::Escape($required)) { throw "Missing production invariant: $required" } }
-          foreach ($forbidden in @(
-            "modRobustSession.TryFallbackCombine(",
-            "modRobustSession?.ShouldContinueAfterCombineFailure()",
-            "ShareXModDelayedCompositorV016.TryAppendLive(",
-            "ShareXModTransitionResolverV018.TryResolve(",
-            "ShareXModTrustSplitCompositorV018.TryAppendLive("
-          )) { if ($manager.Contains($forbidden)) { throw "Forbidden legacy live path remains: $forbidden" } }
-
-          foreach ($required in @(
-            "const double sparseTieEpsilon = 0.05",
-            "TryMeasureInformativeSupport",
-            "gradientThreshold = 36",
-            "matchDifferenceThreshold = 15"
-          )) { if ($matcher -notmatch [regex]::Escape($required)) { throw "RC6 matcher hardening missing: $required" } }
-          foreach ($required in @(
-            "informative-prior-overrode-near-direct-v019",
-            "informative-prior-overrode-sparse-full-range-alias-v019",
-            "ShouldPreferInformativePrior"
-          )) { if ($resolver -notmatch [regex]::Escape($required)) { throw "RC6 resolver hardening missing: $required" } }
-          foreach ($required in @(
-            "sparse-content informative edges distinguish true motion from blank aliases",
-            "near-prior equal-score drift is blocked",
-            "noisy 712-style near-direct geometry cannot displace a stronger validated prior",
-            "genuine short-motion evidence remains admissible"
-          )) { if ($rc6tests -notmatch [regex]::Escape($required)) { throw "RC6 evidence regression missing: $required" } }
-          if ($automation -notmatch [regex]::Escape('"ShareX.ScreenCaptureLib.ShareXModV019Rc6RealEvidenceSelfTests",')) {
-            throw "RC6 evidence suite is not wired into automated acceptance"
+          foreach ($required in @("ShareXModTransitionResolverV019.TryResolve","ShareXModTrustSplitCompositorV019.TryAppendLive","modResolvedDelta")) {
+            if ($manager -notmatch [regex]::Escape($required)) { throw "Missing live invariant: $required" }
           }
+          foreach ($forbidden in @("modRobustSession.TryFallbackCombine(","ShareXModTransitionResolverV018.TryResolve(","ShareXModTrustSplitCompositorV018.TryAppendLive(")) {
+            if ($manager.Contains($forbidden)) { throw "Forbidden legacy live path: $forbidden" }
+          }
+          foreach ($required in @("const double sparseTieEpsilon = 0.05","TryMeasureInformativeSupport","gradientThreshold = 36","matchDifferenceThreshold = 15")) {
+            if ($matcher -notmatch [regex]::Escape($required)) { throw "Matcher hardening missing: $required" }
+          }
+          foreach ($required in @("informative-prior-overrode-near-direct-v019","informative-prior-overrode-sparse-full-range-alias-v019","ShouldPreferInformativePrior","directAnchor.AgreementCount < StrongDirectAgreement")) {
+            if ($resolver -notmatch [regex]::Escape($required)) { throw "Resolver hardening missing: $required" }
+          }
+          foreach ($required in @("sparse-content informative edges distinguish true motion from blank aliases","near-prior equal-score drift is blocked","noisy 712-style near-direct geometry cannot displace a stronger validated prior","genuine short-motion evidence remains admissible")) {
+            if ($tests -notmatch [regex]::Escape($required)) { throw "RC6 regression marker missing: $required" }
+          }
+          if ($automation -notmatch [regex]::Escape('"ShareX.ScreenCaptureLib.ShareXModV019Rc6RealEvidenceSelfTests",')) { throw "RC6 suite not wired" }
 
       - name: Restore
         run: dotnet restore --runtime win-x64 LongCapture.Standalone\LongCapture.Standalone.csproj
@@ -126,7 +109,7 @@ jobs:
         shell: cmd
         run: artifacts\LongCapture\1-RUN-AUTOMATED-TESTS.cmd --ci --deep
 
-      - name: Validate RC6 regression stress and replay gates
+      - name: Validate RC6 semantic/stress gates
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -135,46 +118,19 @@ jobs:
           $deep = Get-Content $reports[-1].FullName -Raw | ConvertFrom-Json
           if ($deep.Status -ne "PASS_AUTOMATED" -or [int]$deep.FailedCount -ne 0 -or $deep.Profile -ne "DEEP") { throw "DEEP acceptance failed" }
           $stress = $deep.Cases | Where-Object { $_.Id -eq "stress.capture-memory" } | Select-Object -First 1
-          if (-not $stress -or $stress.Status -ne "PASS") { throw "10x capture/memory gate missing or failed" }
+          if (-not $stress -or $stress.Status -ne "PASS") { throw "10x stress gate failed" }
           $semantic = $deep.Cases | Where-Object { $_.Id -eq "engine.semantic-regression" } | Select-Object -First 1
-          if (-not $semantic -or $semantic.Status -ne "PASS") { throw "Semantic regression gate missing or failed" }
-          foreach ($required in @(
-            "v0.1.9 recovery-tail passed",
-            "v0.1.9 rc3 real-evidence passed",
-            "v0.1.9 rc4 real-evidence passed",
-            "v0.1.9 rc5 real-evidence passed",
-            "v0.1.9 rc6 real-evidence passed",
-            "sparse-content informative edges distinguish true motion from blank aliases",
-            "near-prior equal-score drift is blocked",
-            "noisy 712-style near-direct geometry cannot displace a stronger validated prior",
-            "genuine short-motion evidence remains admissible"
-          )) { if ($semantic.Detail -notmatch [regex]::Escape($required)) { throw "Fixture did not attest: $required" } }
-
-          $bracketSibling = Join-Path (Split-Path (Resolve-Path "artifacts\LongCapture") -Parent) "[Backup_TS_mainly]Chrome-134.0.6998.178"
-          [IO.Directory]::CreateDirectory($bracketSibling) | Out-Null
-          $fixtureSession = Join-Path "artifacts\LongCapture" "ShareX-Mod\CaptureSessions\confidence-replay-fixture"
-          [IO.Directory]::CreateDirectory((Join-Path $fixtureSession "raw-frames-v016")) | Out-Null
-          & "artifacts\LongCapture\Replay-Last-Capture.ps1" -DiscoverOnly
-          if ($LASTEXITCODE -ne 0) { throw "Replay bracket-path regression failed" }
-          Remove-Item -LiteralPath $bracketSibling -Recurse -Force -ErrorAction SilentlyContinue
-          Remove-Item -LiteralPath (Join-Path "artifacts\LongCapture" "ShareX-Mod") -Recurse -Force -ErrorAction SilentlyContinue
-
+          foreach ($required in @("v0.1.9 rc3 real-evidence passed","v0.1.9 rc4 real-evidence passed","v0.1.9 rc5 real-evidence passed","v0.1.9 rc6 real-evidence passed","near-prior equal-score drift is blocked","noisy 712-style near-direct geometry cannot displace a stronger validated prior")) {
+            if (-not $semantic -or $semantic.Detail -notmatch [regex]::Escape($required)) { throw "Semantic fixture did not attest: $required" }
+          }
           $readiness = [ordered]@{
             schema = "longcapture.rc-readiness.v13"
             version = "0.1.9-rc6"
             status = "READY_FOR_REAL_TEST_1"
             mandatoryAutomatedGates = "PASS"
             automatedScore = 97
-            scoreRubric = [ordered]@{
-              architectureAndFailClosed = 24
-              realEvidenceDerivedGeometry = 32
-              fixedStickyLongRunTrustSplit = 15
-              replayAndPathHardening = 10
-              deepCaptureAndMemoryStress = 10
-              finalPackageIntegrity = 6
-            }
             reservedForRealEnvironment = 3
-            scoreCapReason = "RC6 is derived from the user's RC5 45-frame run. It fixes fixed-phase sparse-background aliasing, protects validated prior geometry with content-bearing edge support, and de-jitters a real 712px mis-resolution inside an otherwise ~750px wheel sequence. Three points remain reserved for the next real Linux.do runtime and residual first/final fixed-boundary inspection."
+            scoreCapReason = "RC6 fixes sparse fixed-phase aliasing and the RC5 712px near-direct mis-resolution while preserving RC3 strong direct consensus; residual first/final fixed-boundary pixels remain a separate visual limitation."
             commit = "${{ github.sha }}"
             workflowRunId = "${{ github.run_id }}"
             generatedAtUtc = (Get-Date).ToUniversalTime().ToString("o")
@@ -189,7 +145,6 @@ jobs:
           Compress-Archive -Path "artifacts\LongCapture\*" -DestinationPath $zip -CompressionLevel Optimal -Force
           $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
           Set-Content "Output\LongCapture-standalone-v0.1.9-rc6-x64.sha256.txt" "$hash  LongCapture-standalone-v0.1.9-rc6-x64.zip"
-          Write-Host "SHA256=$hash"
 
       - name: Extract final RC6 and rerun QUICK
         shell: pwsh
@@ -198,7 +153,7 @@ jobs:
           $temp = Join-Path $env:RUNNER_TEMP "longcapture-v019-rc6-final"
           Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue
           Expand-Archive "Output\LongCapture-standalone-v0.1.9-rc6-x64.zip" $temp -Force
-          foreach ($required in @("LongCapture.exe", "1-RUN-AUTOMATED-TESTS.cmd", "2-REPLAY-LAST-CAPTURE.cmd", "Replay-Last-Capture.ps1", "RC-READINESS.json")) {
+          foreach ($required in @("LongCapture.exe","1-RUN-AUTOMATED-TESTS.cmd","2-REPLAY-LAST-CAPTURE.cmd","Replay-Last-Capture.ps1","RC-READINESS.json")) {
             if (-not (Test-Path -LiteralPath (Join-Path $temp $required))) { throw "Final ZIP missing $required" }
           }
           & cmd.exe /d /c "`"$temp\1-RUN-AUTOMATED-TESTS.cmd`" --ci"

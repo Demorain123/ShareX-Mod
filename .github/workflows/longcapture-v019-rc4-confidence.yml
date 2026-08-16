@@ -1,0 +1,218 @@
+name: LongCapture v0.1.9 RC4 Upward-Alias Confidence
+
+on:
+  push:
+    branches:
+      - "standalone/longcapture-v0.1.9-rc4-upward-alias-veto"
+    paths:
+      - "LongCapture.Standalone/**"
+      - "ShareX.ScreenCaptureLib/**"
+      - "ShareX.Avalonia/**"
+      - "mod-overlay/**"
+      - "scripts/**"
+      - ".github/workflows/longcapture-v019-rc4-confidence.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: longcapture-v019-rc4-confidence-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  confidence:
+    runs-on: windows-2025
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Apply full overlay chain
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $hooks = @(
+            "scripts\run-v04-hooks.ps1",
+            "scripts\apply-v041-post-hooks.ps1",
+            "scripts\apply-v042-post-hooks.ps1",
+            "scripts\apply-v043-post-hooks.ps1",
+            "scripts\apply-v044-post-hooks.ps1",
+            "scripts\apply-v050-post-hooks.ps1",
+            "scripts\apply-v051-post-hooks.ps1",
+            "scripts\apply-v052-post-hooks.ps1",
+            "scripts\apply-v061-post-hooks.ps1",
+            "scripts\apply-v062-post-hooks.ps1",
+            "scripts\apply-v064-post-hooks.ps1",
+            "scripts\apply-longcapture-v013-standalone-hooks.ps1",
+            "scripts\apply-longcapture-v013-rc-hardening.ps1",
+            "scripts\apply-longcapture-v014-core-hooks.ps1",
+            "scripts\apply-longcapture-v015-fixed-overlay-hooks.ps1",
+            "scripts\apply-longcapture-v016-replay-compositor-hooks.ps1",
+            "scripts\apply-longcapture-v017-anchor-continuity-hooks.ps1",
+            "scripts\apply-longcapture-v018-precut.ps1",
+            "scripts\apply-longcapture-v018-trust-split-hooks.ps1",
+            "scripts\apply-longcapture-v018-rc-evidence.ps1",
+            "scripts\apply-longcapture-v019-recovery-tail-hooks.ps1",
+            "scripts\apply-longcapture-v019-rc3-real-evidence-hooks.ps1",
+            "scripts\apply-longcapture-v019-rc4-upward-alias-veto.ps1"
+          )
+          foreach ($hook in $hooks) {
+            Write-Host "=== $hook ==="
+            & pwsh -NoProfile -File $hook
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          git diff --check
+
+      - name: Verify RC4 release and architecture invariants
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = Get-Content "LongCapture.Standalone\StandaloneVersion.cs" -Raw
+          $manager = Get-Content "ShareX.ScreenCaptureLib\ScrollingCaptureManager.cs" -Raw
+          $resolver = Get-Content "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModTransitionResolverV019.cs" -Raw
+          $compositor = Get-Content "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModTrustSplitCompositorV019.cs" -Raw
+          $rc4tests = Get-Content "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModV019Rc4RealEvidenceSelfTests.cs" -Raw
+          $automation = Get-Content "LongCapture.Standalone\AutomationTestRunner.cs" -Raw
+          $helper = Get-Content "LongCapture.Standalone\Replay-Last-Capture.ps1" -Raw
+
+          if ($version -notmatch '0\.1\.9-rc4') { throw "RC4 version marker missing" }
+          foreach ($required in @(
+            "ShareXModTransitionResolverV019.TryResolve",
+            "ShareXModTrustSplitCompositorV019.TryAppendLive",
+            "modResolvedDelta"
+          )) { if ($manager -notmatch [regex]::Escape($required)) { throw "Missing production invariant: $required" } }
+          foreach ($forbidden in @(
+            "modRobustSession.TryFallbackCombine(",
+            "modRobustSession?.ShouldContinueAfterCombineFailure()",
+            "ShareXModDelayedCompositorV016.TryAppendLive(",
+            "ShareXModTransitionResolverV018.TryResolve(",
+            "ShareXModTrustSplitCompositorV018.TryAppendLive("
+          )) { if ($manager.Contains($forbidden)) { throw "Forbidden legacy live path remains: $forbidden" } }
+
+          foreach ($required in @(
+            "ShouldFullRangeVetoValidatedPrior",
+            "fullDisagreesWithPrior = hasFull && ShouldFullRangeVetoValidatedPrior",
+            "larger uncorroborated full-range candidate"
+          )) { if ($resolver -notmatch [regex]::Escape($required)) { throw "RC4 resolver hardening missing: $required" } }
+          foreach ($required in @(
+            "bottomRightConfirmed = rightEdge && bottomEdge",
+            "!bottomRightConfirmed && sourceStationary <= 10.0"
+          )) { if ($compositor -notmatch [regex]::Escape($required)) { throw "RC4 fixed-control repair missing: $required" } }
+          foreach ($required in @(
+            "upward full-range alias cannot veto validated prior",
+            "short conflicting evidence still vetoes",
+            "blank-source bottom fixed controls stay bounded",
+            "premature no-direct stop regression blocked"
+          )) { if ($rc4tests -notmatch [regex]::Escape($required)) { throw "RC4 real-evidence regression missing: $required" } }
+          if ($automation -notmatch [regex]::Escape('"ShareX.ScreenCaptureLib.ShareXModV019Rc4RealEvidenceSelfTests",')) {
+            throw "RC4 real-evidence suite is not wired into automated acceptance"
+          }
+          foreach ($required in @("-LiteralPath", "DiscoverOnly", "LongCapture\CaptureSessions", "ProcessStartInfo", "WaitForExit", '$process.ExitCode')) {
+            if ($helper -notmatch [regex]::Escape($required)) { throw "Replay hardening missing: $required" }
+          }
+
+      - name: Restore
+        run: dotnet restore --runtime win-x64 LongCapture.Standalone\LongCapture.Standalone.csproj
+
+      - name: Publish portable
+        run: dotnet publish LongCapture.Standalone\LongCapture.Standalone.csproj --no-restore --configuration Release --runtime win-x64 --self-contained true --output artifacts\LongCapture /m:1
+
+      - name: QUICK acceptance
+        shell: cmd
+        run: artifacts\LongCapture\1-RUN-AUTOMATED-TESTS.cmd --ci
+
+      - name: DEEP 10x capture and memory acceptance
+        shell: cmd
+        run: artifacts\LongCapture\1-RUN-AUTOMATED-TESTS.cmd --ci --deep
+
+      - name: Validate RC4 adversarial, stress and replay gates
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $reports = Get-ChildItem "artifacts\LongCapture\AutomationReports" -Filter automation-report.json -Recurse | Sort-Object LastWriteTime
+          if ($reports.Count -lt 2) { throw "Expected QUICK and DEEP reports" }
+          $deep = Get-Content $reports[-1].FullName -Raw | ConvertFrom-Json
+          if ($deep.Status -ne "PASS_AUTOMATED" -or [int]$deep.FailedCount -ne 0 -or $deep.Profile -ne "DEEP") { throw "DEEP acceptance failed" }
+          $stress = $deep.Cases | Where-Object { $_.Id -eq "stress.capture-memory" } | Select-Object -First 1
+          if (-not $stress -or $stress.Status -ne "PASS") { throw "10x capture/memory gate missing or failed" }
+
+          $semantic = $deep.Cases | Where-Object { $_.Id -eq "engine.semantic-regression" } | Select-Object -First 1
+          if (-not $semantic -or $semantic.Status -ne "PASS") { throw "Semantic regression gate missing or failed" }
+          foreach ($required in @(
+            "v0.1.9 recovery-tail passed",
+            "ambiguous short motion cannot become a far alias",
+            "long-run fixed controls bounded to safe first/final occurrences",
+            "v0.1.9 rc3 real-evidence passed",
+            "strong direct/prior consensus cannot be short-overridden",
+            "v0.1.9 rc4 real-evidence passed",
+            "upward full-range alias cannot veto validated prior",
+            "short conflicting evidence still vetoes",
+            "blank-source bottom fixed controls stay bounded",
+            "premature no-direct stop regression blocked"
+          )) { if ($semantic.Detail -notmatch [regex]::Escape($required)) { throw "Fixture did not attest: $required" } }
+
+          $bracketSibling = Join-Path (Split-Path (Resolve-Path "artifacts\LongCapture") -Parent) "[Backup_TS_mainly]Chrome-134.0.6998.178"
+          [IO.Directory]::CreateDirectory($bracketSibling) | Out-Null
+          $fixtureSession = Join-Path "artifacts\LongCapture" "ShareX-Mod\CaptureSessions\confidence-replay-fixture"
+          [IO.Directory]::CreateDirectory((Join-Path $fixtureSession "raw-frames-v016")) | Out-Null
+          & "artifacts\LongCapture\Replay-Last-Capture.ps1" -DiscoverOnly
+          if ($LASTEXITCODE -ne 0) { throw "Replay bracket-path regression failed" }
+          Remove-Item -LiteralPath $bracketSibling -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath (Join-Path "artifacts\LongCapture" "ShareX-Mod") -Recurse -Force -ErrorAction SilentlyContinue
+
+          $readiness = [ordered]@{
+            schema = "longcapture.rc-readiness.v11"
+            version = "0.1.9-rc4"
+            status = "READY_FOR_REAL_TEST_1"
+            mandatoryAutomatedGates = "PASS"
+            automatedScore = 95
+            scoreRubric = [ordered]@{
+              architectureAndFailClosed = 24
+              realEvidenceDerivedGeometry = 30
+              fixedStickyLongRunTrustSplit = 15
+              replayAndPathHardening = 10
+              deepCaptureAndMemoryStress = 10
+              finalPackageIntegrity = 6
+            }
+            reservedForRealEnvironment = 5
+            scoreCapReason = "RC4 is derived from the user's RC3 failure: it prevents an uncorroborated upward full-range alias from vetoing a validated prior and adds a blank-source bottom-right fixed-control regression. Five points remain reserved for the real Linux.do runtime."
+            commit = "${{ github.sha }}"
+            workflowRunId = "${{ github.run_id }}"
+            generatedAtUtc = (Get-Date).ToUniversalTime().ToString("o")
+          }
+          $readiness | ConvertTo-Json -Depth 8 | Set-Content "artifacts\LongCapture\RC-READINESS.json" -Encoding UTF8
+
+      - name: Package RC4
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force Output | Out-Null
+          $zip = "Output\LongCapture-standalone-v0.1.9-rc4-x64.zip"
+          Compress-Archive -Path "artifacts\LongCapture\*" -DestinationPath $zip -CompressionLevel Optimal -Force
+          $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
+          Set-Content "Output\LongCapture-standalone-v0.1.9-rc4-x64.sha256.txt" "$hash  LongCapture-standalone-v0.1.9-rc4-x64.zip"
+          Write-Host "SHA256=$hash"
+
+      - name: Extract final RC4 and rerun QUICK
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $temp = Join-Path $env:RUNNER_TEMP "longcapture-v019-rc4-final"
+          Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue
+          Expand-Archive "Output\LongCapture-standalone-v0.1.9-rc4-x64.zip" $temp -Force
+          foreach ($required in @("LongCapture.exe", "1-RUN-AUTOMATED-TESTS.cmd", "2-REPLAY-LAST-CAPTURE.cmd", "Replay-Last-Capture.ps1", "RC-READINESS.json")) {
+            if (-not (Test-Path -LiteralPath (Join-Path $temp $required))) { throw "Final ZIP missing $required" }
+          }
+          & cmd.exe /d /c "`"$temp\1-RUN-AUTOMATED-TESTS.cmd`" --ci"
+          if ($LASTEXITCODE -ne 0) { throw "Extracted RC4 QUICK failed" }
+          $final = Get-ChildItem (Join-Path $temp "AutomationReports") -Filter automation-report.json -Recurse | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          $data = Get-Content $final.FullName -Raw | ConvertFrom-Json
+          if ($data.Status -ne "PASS_AUTOMATED" -or [int]$data.FailedCount -ne 0) { throw "Extracted RC4 report failed" }
+
+      - name: Upload RC4 confidence artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: LongCapture-standalone-v0.1.9-rc4-x64-confidence
+          path: |
+            Output\LongCapture-standalone-v0.1.9-rc4-x64.zip
+            Output\LongCapture-standalone-v0.1.9-rc4-x64.sha256.txt

@@ -31,7 +31,7 @@ internal static class ShareXModV019RecoveryTailSelfTests
             ShareXModTransitionResolverV019.SeedForSelfTest(Delta, Delta, Delta);
             using Bitmap previous = BuildViewport(0, 0, includeFixed: false);
             using Bitmap current = BuildViewport(Delta, 1, includeFixed: false);
-            ShareXModAnchorMatch wrong = new(96, 0, 2);
+            ShareXModAnchorMatch wrong = new(100, 0, 2);
 
             bool ok = ShareXModTransitionResolverV019.TryResolve(
                 previous, current, true, wrong,
@@ -56,7 +56,7 @@ internal static class ShareXModV019RecoveryTailSelfTests
         try
         {
             ShareXModTransitionResolverV019.SeedForSelfTest(Delta, Delta, Delta, Delta);
-            int shortDelta = 92;
+            int shortDelta = 90;
             using Bitmap previous = BuildViewport(0, 0, includeFixed: false);
             using Bitmap current = BuildViewport(shortDelta, 1, includeFixed: false);
 
@@ -64,7 +64,7 @@ internal static class ShareXModV019RecoveryTailSelfTests
                 previous, current, false, default,
                 out int resolved, out string source, out _, out bool hold);
 
-            if (!ok || hold || Math.Abs(resolved - shortDelta) > 12 || !source.StartsWith("full-range", StringComparison.Ordinal))
+            if (!ok || hold || Math.Abs(resolved - shortDelta) > 10 || !source.StartsWith("full-range", StringComparison.Ordinal))
                 throw new InvalidOperationException($"v0.1.9 full-range variable scroll recovery failed: ok={ok} hold={hold} delta={resolved} source={source}.");
         }
         finally
@@ -73,12 +73,16 @@ internal static class ShareXModV019RecoveryTailSelfTests
         }
     }
 
+    // Evidence-shaped synthetic sequence derived from the user's real Linux.do failure pattern:
+    // stable large wheel movements, two far-away false direct anchors, then a much shorter final
+    // movement. Deltas are aligned to the fixture's 10px document raster so the test measures the
+    // production resolver rather than sub-row artifacts in the synthetic renderer.
     private static void VerifyEvidenceShapedSequenceRejectsAliasAnchors()
     {
         ShareXModTransitionResolverV019.ResetLive();
         try
         {
-            int[] actual = { 260, 258, 262, 260, 259, 261, 260, 258, 262, 260, 259, 261, 260, 258, 262, 260, 92 };
+            int[] actual = { 260, 250, 270, 260, 250, 270, 260, 250, 270, 260, 250, 270, 260, 250, 270, 260, 90 };
             var offsets = new List<int> { 0 };
             foreach (int delta in actual) offsets.Add(offsets[^1] + delta);
 
@@ -96,7 +100,7 @@ internal static class ShareXModV019RecoveryTailSelfTests
                     previous, current, !omitDirect, direct,
                     out int resolved, out string source, out _, out bool hold);
 
-                if (!ok || hold || Math.Abs(resolved - actual[i - 1]) > 12)
+                if (!ok || hold || Math.Abs(resolved - actual[i - 1]) > 10)
                     throw new InvalidOperationException($"v0.1.9 evidence-shaped sequence failed frame={i} expected={actual[i - 1]} resolved={resolved} source={source} ok={ok} hold={hold}.");
 
                 if (falseAlias && resolved == directDelta)
@@ -115,7 +119,7 @@ internal static class ShareXModV019RecoveryTailSelfTests
 
     private static void VerifyVariableDeltaMatrix()
     {
-        int[] deltas = { 64, 92, 128, 180, 220, 260, 340, 420 };
+        int[] deltas = { 60, 90, 120, 180, 220, 260, 340, 420 };
         foreach (int expected in deltas)
         {
             ShareXModTransitionResolverV019.ResetLive();
@@ -127,7 +131,7 @@ internal static class ShareXModV019RecoveryTailSelfTests
                 bool ok = ShareXModTransitionResolverV019.TryResolve(
                     previous, current, false, default,
                     out int resolved, out string source, out _, out bool hold);
-                if (!ok || hold || Math.Abs(resolved - expected) > 12)
+                if (!ok || hold || Math.Abs(resolved - expected) > 10)
                     throw new InvalidOperationException($"v0.1.9 variable-delta matrix failed expected={expected} resolved={resolved} source={source} ok={ok} hold={hold}.");
             }
             finally
@@ -184,7 +188,7 @@ internal static class ShareXModV019RecoveryTailSelfTests
             int offset = 0;
             for (int i = 1; i <= transitions; i++)
             {
-                int delta = i == transitions ? 92 : Delta;
+                int delta = i == transitions ? 90 : Delta;
                 offset += delta;
                 using Bitmap current = BuildViewport(offset, i, includeFixed: true);
                 Bitmap? next = session.TryAppend(result!, previous!, current, delta);

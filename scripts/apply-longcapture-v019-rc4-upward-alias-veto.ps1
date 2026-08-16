@@ -14,37 +14,50 @@ foreach ($path in @($resolver, $compositor, $automation)) {
 
 $resolverText = [IO.File]::ReadAllText($resolver)
 $oldDecision = '                bool fullDisagreesWithPrior = hasFull && !AreIndependentCandidatesConsistent(fullDelta, prior);'
-$newDecision = '                bool fullDisagreesWithPrior = hasFull && ShouldFullRangeVetoValidatedPrior(fullDelta, prior);'
-if ($resolverText.Contains($newDecision)) {
-    Write-Host "[v0.1.9-rc4] already present: asymmetric full-range veto" -ForegroundColor DarkYellow
+$newDecision = @'
+                bool hasNearForVeto = ShareXModVerticalFallbackMatcher.TryEstimateNearDelta(
+                    previousReliable, current, settings, prior, out int nearDeltaForVeto, out _);
+                bool fullDisagreesWithPrior = hasFull && ShouldFullRangeVetoValidatedPrior(
+                    fullDelta, prior, hasNearForVeto, nearDeltaForVeto);
+'@
+if ($resolverText.Contains('bool hasNearForVeto = ShareXModVerticalFallbackMatcher.TryEstimateNearDelta(')) {
+    Write-Host "[v0.1.9-rc4] already present: corroborated asymmetric full-range veto" -ForegroundColor DarkYellow
 }
 else {
     if (-not $resolverText.Contains($oldDecision)) { throw "RC4 resolver decision anchor missing." }
-    $resolverText = $resolverText.Replace($oldDecision, $newDecision)
+    $resolverText = $resolverText.Replace($oldDecision, $newDecision.TrimEnd("`r", "`n"))
 }
 
-$helperMarker = '    internal static bool ShouldFullRangeVetoValidatedPrior(int fullDelta, int priorDelta)'
+$helperMarker = '    internal static bool ShouldFullRangeVetoValidatedPrior(int fullDelta, int priorDelta, bool hasNear, int nearDelta)'
 if (-not $resolverText.Contains($helperMarker)) {
-    $helperAnchor = @'
-    private static bool IsSafeUncorroboratedPriorCandidate(int candidateDelta, int priorDelta)
-'@
+    $helperAnchor = '    private static bool IsSafeUncorroboratedPriorCandidate(int candidateDelta, int priorDelta)'
     $helper = @'
-    // RC4 real evidence: with no direct anchor, the full-range search can prefer a much larger
-    // repeated-content alias simply because the larger displacement has less overlap to score.
-    // Such an upward candidate is already forbidden from being accepted without corroboration;
-    // therefore it is not independent negative evidence against a strongly validated temporal prior.
-    // Same-size/shorter conflicting candidates remain able to veto the prior, preserving the
-    // ambiguous-short fail-closed regression introduced in RC3.
-    internal static bool ShouldFullRangeVetoValidatedPrior(int fullDelta, int priorDelta)
+    // RC4 real evidence: a full-range search can prefer a much larger repeated-content alias because
+    // the larger displacement scores fewer overlap rows. Do not blindly ignore that disagreement:
+    // only suppress an upward full-range veto when the restricted near-prior search independently
+    // corroborates the validated prior. Same-size/shorter conflicts continue to veto, and an upward
+    // conflict with no near-prior corroboration also remains fail-closed. This preserves the older
+    // ambiguous-short regression while fixing the real RC3 752-prior / 737-near / 1068-full failure.
+    internal static bool ShouldFullRangeVetoValidatedPrior(
+        int fullDelta, int priorDelta, bool hasNear, int nearDelta)
     {
-        if (!IsSafeUncorroboratedPriorCandidate(fullDelta, priorDelta)) return false;
-        return !AreIndependentCandidatesConsistent(fullDelta, priorDelta);
+        if (fullDelta <= 0 || priorDelta <= 0) return false;
+        if (AreIndependentCandidatesConsistent(fullDelta, priorDelta)) return false;
+
+        if (fullDelta > priorDelta)
+        {
+            bool nearCorroboratesPrior = hasNear &&
+                AreIndependentCandidatesConsistent(nearDelta, priorDelta);
+            return !nearCorroboratesPrior;
+        }
+
+        return true;
     }
 
     private static bool IsSafeUncorroboratedPriorCandidate(int candidateDelta, int priorDelta)
 '@
-    if (-not $resolverText.Contains($helperAnchor.TrimStart("`r", "`n"))) { throw "RC4 resolver helper anchor missing." }
-    $resolverText = $resolverText.Replace($helperAnchor.TrimStart("`r", "`n"), $helper.TrimStart("`r", "`n"))
+    if (-not $resolverText.Contains($helperAnchor)) { throw "RC4 resolver helper anchor missing." }
+    $resolverText = $resolverText.Replace($helperAnchor, $helper.TrimEnd("`r", "`n"))
 }
 
 $oldComment = @'
@@ -54,11 +67,11 @@ $oldComment = @'
                 // choose the temporal prior merely because both scores happen to be below threshold.
 '@
 $newComment = @'
-                // A robust prior score can itself be a repeated-pattern alias, so a materially
-                // different same-size/shorter full-range candidate may veto it. RC4 makes this
-                // asymmetric: a larger uncorroborated full-range candidate is already unsafe to
-                // accept and, because its reduced overlap can produce deceptively low scores, it
-                // cannot by itself veto a strongly validated temporal prior.
+                // A robust prior score can itself be a repeated-pattern alias, so disagreement still
+                // matters. RC4 makes the upward case evidence-aware rather than absolute: a larger
+                // full-range candidate cannot veto a validated prior when a restricted near-prior
+                // search independently corroborates that prior. Without that corroboration we still
+                // fail closed, preserving the ambiguous-short regression from the confidence loop.
 '@
 if ($resolverText.Contains($oldComment.TrimStart("`r", "`n"))) {
     $resolverText = $resolverText.Replace($oldComment.TrimStart("`r", "`n"), $newComment.TrimStart("`r", "`n"))
@@ -111,11 +124,11 @@ else {
 }
 
 if ($CheckOnly) {
-    Write-Host "LongCapture v0.1.9 RC4 upward-alias/fixed-control compatibility passed." -ForegroundColor Green
+    Write-Host "LongCapture v0.1.9 RC4 corroborated-upward-alias/fixed-control compatibility passed." -ForegroundColor Green
     exit 0
 }
 
 [IO.File]::WriteAllText($resolver, $resolverText, [Text.UTF8Encoding]::new($true))
 [IO.File]::WriteAllText($compositor, $compositorText, [Text.UTF8Encoding]::new($true))
 [IO.File]::WriteAllText($automation, $automationText, [Text.UTF8Encoding]::new($true))
-Write-Host "LongCapture v0.1.9 RC4 upward-alias veto + bottom-right fixed-control repair applied." -ForegroundColor Green
+Write-Host "LongCapture v0.1.9 RC4 corroborated upward-alias veto + bottom-right fixed-control repair applied." -ForegroundColor Green

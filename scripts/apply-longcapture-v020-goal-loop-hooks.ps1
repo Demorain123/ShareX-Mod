@@ -85,6 +85,46 @@ Replace-Literal -Path $compositor `
 '@ `
   -Marker 'int copiedPixels = ShareXModSafeTailCopyV020.Copy('
 
+# A large fixed panel can fragment into several individually-small tile components and bypass a
+# per-component 5% area cap. Add a frame-level circuit breaker. The 13.5% threshold is intentionally
+# above the maximum 12.86% stationary-risk observed in the user's v0.1.8 Linux.do evidence, while the
+# adversarial giant-panel fixture produces roughly 14-18%. When tripped we preserve pixels and only
+# report risk; destructive tail repair is disabled for that transition.
+Replace-Literal -Path $compositor `
+  -Old @'
+            if (stationary.RiskRatio >= 0.015) stationaryRiskFrames++;
+
+            if (previousAppendDelta > 0 && previousStationaryTiles.Count > 0 && stationary.Tiles.Count > 0)
+            {
+                RepairProvisionalTail(
+                    result,
+                    previousRaw,
+                    currentRaw,
+                    scrollDelta,
+                    previousAppendDelta,
+                    stationary.Tiles,
+                    previousStationaryTiles);
+            }
+'@ `
+  -New @'
+            if (stationary.RiskRatio >= 0.015) stationaryRiskFrames++;
+            bool repairRiskAcceptable = stationary.RiskRatio < 0.135;
+            if (!repairRiskAcceptable) rejectedLargeComponents++;
+
+            if (repairRiskAcceptable && previousAppendDelta > 0 && previousStationaryTiles.Count > 0 && stationary.Tiles.Count > 0)
+            {
+                RepairProvisionalTail(
+                    result,
+                    previousRaw,
+                    currentRaw,
+                    scrollDelta,
+                    previousAppendDelta,
+                    stationary.Tiles,
+                    previousStationaryTiles);
+            }
+'@ `
+  -Marker 'bool repairRiskAcceptable = stationary.RiskRatio < 0.135;'
+
 # The first loop fixture intentionally had two solid blue rectangles. Real Linux.do has one large
 # blue Back button plus a pale counter with small blue glyphs. Keep the counter present, but model its
 # shape accurately so the gate counts repeated controls rather than counting every internal glyph row.

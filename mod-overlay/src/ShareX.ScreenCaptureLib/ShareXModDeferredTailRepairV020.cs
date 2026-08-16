@@ -16,10 +16,9 @@ internal readonly record struct ShareXModDeferredTailRepairTelemetry(
 
 /// <summary>
 /// Holds fixed/sticky repair rectangles that are not fully revealed by the immediately following raw
-/// frame. Each future accepted transition advances the cumulative document movement. A job is retried
-/// only against that future raw frame, using the same source-safe strip copier as immediate repair.
-/// This avoids the impossible one-frame assumption when a wheel event moves less than the height of a
-/// fixed control.
+/// frame. Each job also retains the two-transition fixed mask that created it. Future retries veto
+/// source pixels against that historical confirmed mask UNION the current persistent mask, so dynamic
+/// text/color changes inside a fixed control cannot make the safety condition forget that location.
 /// </summary>
 internal sealed class ShareXModDeferredTailRepairV020
 {
@@ -40,12 +39,11 @@ internal sealed class ShareXModDeferredTailRepairV020
         int x1,
         int y1,
         int initialCumulativeDelta,
-        int requiredPixels)
+        int requiredPixels,
+        HashSet<int> confirmedFixedTiles)
     {
         if (x1 <= x0 || y1 <= y0 || initialCumulativeDelta <= 0 || requiredPixels <= 0) return;
 
-        // Duplicate component evidence from the same target viewport should refresh the existing job,
-        // not create multiple writers for the same provisional pixels.
         for (int i = 0; i < jobs.Count; i++)
         {
             Job existing = jobs[i];
@@ -58,6 +56,7 @@ internal sealed class ShareXModDeferredTailRepairV020
                 existing.Y1 = Math.Max(existing.Y1, y1);
                 existing.CumulativeDelta = Math.Max(existing.CumulativeDelta, initialCumulativeDelta);
                 existing.RequiredPixels = Math.Max(existing.RequiredPixels, requiredPixels);
+                existing.ConfirmedFixedTiles.UnionWith(confirmedFixedTiles);
                 return;
             }
         }
@@ -67,7 +66,15 @@ internal sealed class ShareXModDeferredTailRepairV020
             jobs.RemoveAt(0);
             expired++;
         }
-        jobs.Add(new Job(resultViewportTop, x0, y0, x1, y1, initialCumulativeDelta, requiredPixels));
+        jobs.Add(new Job(
+            resultViewportTop,
+            x0,
+            y0,
+            x1,
+            y1,
+            initialCumulativeDelta,
+            requiredPixels,
+            confirmedFixedTiles));
         queued++;
     }
 
@@ -89,10 +96,12 @@ internal sealed class ShareXModDeferredTailRepairV020
             job.AgeTransitions++;
             retried++;
 
+            var sourceVetoTiles = new HashSet<int>(job.ConfirmedFixedTiles);
+            sourceVetoTiles.UnionWith(currentPersistentFixedTiles);
             ShareXModSafeTailCopyResult copy = ShareXModSafeTailCopyV020.CopyDetailed(
                 result,
                 currentRaw,
-                currentPersistentFixedTiles,
+                sourceVetoTiles,
                 columns,
                 job.ResultViewportTop,
                 job.X0,
@@ -111,9 +120,6 @@ internal sealed class ShareXModDeferredTailRepairV020
                 continue;
             }
 
-            // If cumulative motion moved the entire target region above the top of the current
-            // viewport, the missing strips can never become visible again. Fail-safe expiry leaves the
-            // pixels untouched rather than guessing. Quality telemetry will expose Pending/Expired.
             if (job.CumulativeDelta >= job.Y1 || job.AgeTransitions >= MaxAgeTransitions)
             {
                 jobs.RemoveAt(i);
@@ -125,10 +131,7 @@ internal sealed class ShareXModDeferredTailRepairV020
     internal ShareXModDeferredTailRepairTelemetry Snapshot() =>
         new(queued, completed, jobs.Count, expired, retried, copiedPixels);
 
-    internal void Clear()
-    {
-        jobs.Clear();
-    }
+    internal void Clear() => jobs.Clear();
 
     private static bool RectanglesOverlap(
         int ax0, int ay0, int ax1, int ay1,
@@ -137,7 +140,15 @@ internal sealed class ShareXModDeferredTailRepairV020
 
     private sealed class Job
     {
-        internal Job(int resultViewportTop, int x0, int y0, int x1, int y1, int cumulativeDelta, int requiredPixels)
+        internal Job(
+            int resultViewportTop,
+            int x0,
+            int y0,
+            int x1,
+            int y1,
+            int cumulativeDelta,
+            int requiredPixels,
+            HashSet<int> confirmedFixedTiles)
         {
             ResultViewportTop = resultViewportTop;
             X0 = x0;
@@ -146,6 +157,7 @@ internal sealed class ShareXModDeferredTailRepairV020
             Y1 = y1;
             CumulativeDelta = cumulativeDelta;
             RequiredPixels = requiredPixels;
+            ConfirmedFixedTiles = new HashSet<int>(confirmedFixedTiles);
         }
 
         internal int ResultViewportTop { get; }
@@ -156,5 +168,6 @@ internal sealed class ShareXModDeferredTailRepairV020
         internal int CumulativeDelta { get; set; }
         internal int RequiredPixels { get; set; }
         internal int AgeTransitions { get; set; }
+        internal HashSet<int> ConfirmedFixedTiles { get; }
     }
 }

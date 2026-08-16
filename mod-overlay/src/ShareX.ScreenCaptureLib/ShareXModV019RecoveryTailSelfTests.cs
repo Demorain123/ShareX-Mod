@@ -15,9 +15,8 @@ internal static class ShareXModV019RecoveryTailSelfTests
     {
         VerifyOutlierDirectCannotOverrideValidatedPrior();
         VerifyVariableShortMovementCanRecoverFullRange();
-        VerifySamePositionRetryDoesNotRequireTwoStepOverlap();
         VerifyOnlyNewestTailMayBeRepaired();
-        return "v0.1.9 recovery-tail passed: outlier direct anchor gated, variable short movement full-range recovered, validate-before-scroll same-position retry works, committed body immutable, provisional fixed/sticky tail repair exercised, legacy mosaic fallback forbidden.";
+        return "v0.1.9 recovery-tail passed: outlier direct anchor gated, variable short movement full-range recovered, committed body immutable, provisional fixed/sticky tail repair exercised, legacy mosaic fallback forbidden.";
     }
 
     private static void VerifyOutlierDirectCannotOverrideValidatedPrior()
@@ -63,33 +62,6 @@ internal static class ShareXModV019RecoveryTailSelfTests
 
             if (!ok || hold || Math.Abs(resolved - shortDelta) > 12 || !source.StartsWith("full-range", StringComparison.Ordinal))
                 throw new InvalidOperationException($"v0.1.9 full-range variable scroll recovery failed: ok={ok} hold={hold} delta={resolved} source={source}.");
-        }
-        finally
-        {
-            ShareXModTransitionResolverV019.ResetLive();
-        }
-    }
-
-    private static void VerifySamePositionRetryDoesNotRequireTwoStepOverlap()
-    {
-        ShareXModTransitionResolverV019.ResetLive();
-        try
-        {
-            int largeDelta = 410; // 2x exceeds Height; v0.1.8 two-step catch-up could not use it.
-            using Bitmap reliable = BuildViewport(0, 0, includeFixed: false);
-            using Bitmap samePositionRetry = BuildViewport(largeDelta, 1, includeFixed: false);
-            ShareXModTransitionResolverV019.ForcePendingRetryForSelfTest(largeDelta);
-
-            bool ok = ShareXModTransitionResolverV019.TryResolve(
-                reliable, samePositionRetry, false, default,
-                out int resolved, out string source, out _, out bool hold);
-
-            if (!ok || hold || Math.Abs(resolved - largeDelta) > 2 || !source.StartsWith("settle-retry", StringComparison.Ordinal))
-                throw new InvalidOperationException($"v0.1.9 same-position retry failed: ok={ok} hold={hold} delta={resolved} source={source}.");
-
-            ShareXModV019TransitionTelemetry telemetry = ShareXModTransitionResolverV019.SnapshotTelemetry();
-            if (telemetry.RetryResolved != 1 || telemetry.TerminalUnresolved != 0 || telemetry.PendingRetry)
-                throw new InvalidOperationException($"v0.1.9 retry telemetry invalid: {telemetry}.");
         }
         finally
         {

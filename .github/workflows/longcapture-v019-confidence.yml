@@ -84,6 +84,7 @@ jobs:
             "ShareXModTrustSplitCompositorV018.TryAppendLive("
           )) { if ($manager.Contains($forbidden)) { throw "Forbidden legacy live path remains: $forbidden" } }
           foreach ($required in @(
+            "ambiguous short motion cannot become a far alias",
             "evidence-shaped false 200/404-style aliases rejected",
             "variable-delta matrix passed",
             "long-run fixed controls bounded to safe first/final occurrences"
@@ -121,6 +122,7 @@ jobs:
           foreach ($required in @(
             "outlier direct anchor gated",
             "variable short movement full-range recovered",
+            "ambiguous short motion cannot become a far alias",
             "evidence-shaped false 200/404-style aliases rejected",
             "variable-delta matrix passed",
             "committed body immutable",

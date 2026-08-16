@@ -27,11 +27,10 @@ internal readonly record struct ShareXModV019TransitionTelemetry(
 /// anchors can jump to visually similar offsets, while legitimate wheel movements can vary sharply
 /// from the temporal prior. Every accepted delta must survive raw-pair validation. A stable prior is
 /// useful evidence, but repeated content can make both prior and global searches produce plausible
-/// aliases. The resolver therefore treats downward escapes from a validated prior asymmetrically:
-/// a materially better shorter movement may override it (important near document ends), while a
-/// much larger jump requires corroboration from a high-consensus direct anchor plus the independent
-/// full-range matcher. This keeps the live path fail-closed rather than following a single attractive
-/// repeated-pattern score.
+/// aliases. The resolver therefore treats escapes from a validated prior asymmetrically: a materially
+/// better shorter movement may override it (important near document ends), while a much larger jump
+/// requires corroboration from a high-consensus direct anchor plus the independent full-range matcher.
+/// This keeps the live path fail-closed rather than following a single attractive repeated-pattern score.
 /// </summary>
 internal static class ShareXModTransitionResolverV019
 {
@@ -108,9 +107,14 @@ internal static class ShareXModTransitionResolverV019
                             previousReliable, current, settings, prior, out double priorScore);
                         bool globalValid = TryFullRange(
                             previousReliable, current, settings, out int globalDelta, out double globalScore);
-                        bool strongDirectValid = directAnchor.AgreementCount >= 3 &&
-                            ShareXModVerticalFallbackMatcher.TryValidateSpecificDelta(
-                                previousReliable, current, settings, directAnchor.ScrollDelta, out double strongDirectScore);
+
+                        double strongDirectScore = double.MaxValue;
+                        bool strongDirectValid = false;
+                        if (directAnchor.AgreementCount >= 3)
+                        {
+                            strongDirectValid = ShareXModVerticalFallbackMatcher.TryValidateSpecificDelta(
+                                previousReliable, current, settings, directAnchor.ScrollDelta, out strongDirectScore);
+                        }
 
                         // Larger-than-prior jumps are the dangerous direction on repeated content:
                         // a long-offset alias has less overlap and can look deceptively clean. Permit

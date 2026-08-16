@@ -25,18 +25,23 @@ internal readonly record struct ShareXModV019TransitionTelemetry(
 /// <summary>
 /// v0.1.9 geometry resolver derived from the real v0.1.8 Linux.do evidence. Low-consensus direct
 /// anchors can jump to visually similar offsets, while legitimate wheel movements can vary sharply
-/// from the temporal prior. Every accepted delta must survive raw-pair validation. A stable prior is
-/// useful evidence, but repeated content can make both prior and global searches produce plausible
-/// aliases. The resolver therefore treats escapes from a validated prior asymmetrically: a materially
-/// better shorter movement may override it (important near document ends), while a much larger jump
-/// requires corroboration from a high-consensus direct anchor plus the independent full-range matcher.
-/// If a prior becomes invalid and the remaining search mechanisms disagree, the resolver fails closed
-/// rather than appending geometry that can corrupt the committed long image.
+/// from the temporal prior. Every accepted delta normally survives raw-pair validation. The one
+/// exception is a deliberately narrow two-source consensus rule added after the real v0.1.9-rc2
+/// evidence: when a stable temporal prior and a high-consensus, low-score direct anchor independently
+/// agree on the same displacement, fixed/dynamic rows are not allowed to veto that geometry merely
+/// because a whole-overlap RGB score is polluted. A stable prior is useful evidence, but repeated
+/// content can make both prior and global searches produce plausible aliases. Escapes from a validated
+/// prior remain asymmetric: a materially better shorter movement may override it, while a much larger
+/// jump requires corroboration from a high-consensus direct anchor plus the independent full-range
+/// matcher. If the remaining mechanisms disagree, the resolver fails closed rather than appending
+/// geometry that can corrupt the committed long image.
 /// </summary>
 internal static class ShareXModTransitionResolverV019
 {
     private static readonly object Sync = new();
     private static readonly Queue<int> RecentAcceptedDeltas = new();
+    private const int StrongDirectAgreement = 3;
+    private const double StrongDirectMaxAnchorScore = 8.5;
 
     private static int directAccepted;
     private static int priorResolved;
@@ -88,9 +93,28 @@ internal static class ShareXModTransitionResolverV019
                     int tolerance = Math.Max(48, prior / 8);
                     bool nearPrior = Math.Abs(directAnchor.ScrollDelta - prior) <= tolerance;
 
-                    if (nearPrior && directAnchor.AgreementCount >= 2)
+                    if (nearPrior)
                     {
-                        if (ShareXModVerticalFallbackMatcher.TryValidateSpecificDelta(
+                        // RC2 real evidence: prior ~= 750, direct=748, agreement=3, anchor score=4.38.
+                        // The old whole-height RGB validator rejected 748 because sticky/dynamic rows
+                        // polluted every horizontal tile, then a repeated-content 253px candidate won.
+                        // Temporal prior + independent multi-anchor consensus is already two-source
+                        // geometry evidence, so this narrowly-scoped agreement may not be displaced by
+                        // a short global alias. Bootstrap still requires pixel validation.
+                        if (directAnchor.AgreementCount >= StrongDirectAgreement &&
+                            directAnchor.Score <= StrongDirectMaxAnchorScore)
+                        {
+                            delta = directAnchor.ScrollDelta;
+                            score = directAnchor.Score;
+                            source = "strong-direct-prior-consensus-v019";
+                            directAccepted++;
+                            Remember(delta);
+                            Complete(delta, source, true);
+                            return true;
+                        }
+
+                        if (directAnchor.AgreementCount >= 2 &&
+                            ShareXModVerticalFallbackMatcher.TryValidateSpecificDelta(
                                 previousReliable, current, settings, directAnchor.ScrollDelta, out double directScore))
                         {
                             delta = directAnchor.ScrollDelta;
@@ -111,7 +135,7 @@ internal static class ShareXModTransitionResolverV019
 
                         double strongDirectScore = double.MaxValue;
                         bool strongDirectValid = false;
-                        if (directAnchor.AgreementCount >= 3)
+                        if (directAnchor.AgreementCount >= StrongDirectAgreement)
                         {
                             strongDirectValid = ShareXModVerticalFallbackMatcher.TryValidateSpecificDelta(
                                 previousReliable, current, settings, directAnchor.ScrollDelta, out strongDirectScore);

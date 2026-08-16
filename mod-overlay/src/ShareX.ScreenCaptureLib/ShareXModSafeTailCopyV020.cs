@@ -14,13 +14,14 @@ internal readonly record struct ShareXModSafeTailCopyResult(
     int OutOfViewPixels)
 {
     public bool Complete => RequiredPixels > 0 && CopiedPixels >= RequiredPixels;
+    public bool ReadyForAtomicCopy => RequiredPixels > 0 && BlockedPixels == 0 && OutOfViewPixels == 0;
 }
 
 /// <summary>
 /// Copies a provisional-tail repair from a later raw frame without ever sampling pixels that are
-/// themselves inside the persistent stationary/fixed mask. The detailed result tells the caller
-/// whether the current frame actually exposes the whole hidden region. If it does not, v0.1.10 keeps
-/// that tail provisional and retries it against a later frame with a larger cumulative scroll offset.
+/// themselves inside the persistent stationary/fixed mask. Repair is atomic: the whole target region
+/// must be visible and source-safe before a single pixel is rewritten. A short scroll therefore queues
+/// the entire region for a later raw frame instead of creating a time-mixed partial repair seam.
 /// </summary>
 internal static class ShareXModSafeTailCopyV020
 {
@@ -70,16 +71,12 @@ internal static class ShareXModSafeTailCopyV020
         if (result is null || current is null || x1 <= x0 || y1 <= y0 || delta <= 0)
             return default;
 
-        int copiedPixels = 0;
         int blockedPixels = 0;
         int outOfViewPixels = 0;
         int requiredPixels = checked((x1 - x0) * (y1 - y0));
 
-        using Graphics graphics = Graphics.FromImage(result);
-        graphics.CompositingMode = CompositingMode.SourceCopy;
-        graphics.InterpolationMode = InterpolationMode.NearestNeighbor;
-        graphics.PixelOffsetMode = PixelOffsetMode.None;
-
+        // Pass 1 is read-only. Do not mutate the accepted image unless every strip has a valid source
+        // in this same raw frame. This preserves temporal consistency for lazy/dynamic page content.
         for (int targetY0 = y0; targetY0 < y1; targetY0 += StripHeight)
         {
             int targetY1 = Math.Min(y1, targetY0 + StripHeight);
@@ -104,20 +101,33 @@ internal static class ShareXModSafeTailCopyV020
                 current.Height))
             {
                 blockedPixels += stripPixels;
-                continue;
             }
+        }
 
+        if (blockedPixels > 0 || outOfViewPixels > 0)
+            return new ShareXModSafeTailCopyResult(0, requiredPixels, blockedPixels, outOfViewPixels);
+
+        // Pass 2 commits the whole region from one raw frame.
+        using Graphics graphics = Graphics.FromImage(result);
+        graphics.CompositingMode = CompositingMode.SourceCopy;
+        graphics.InterpolationMode = InterpolationMode.NearestNeighbor;
+        graphics.PixelOffsetMode = PixelOffsetMode.None;
+
+        for (int targetY0 = y0; targetY0 < y1; targetY0 += StripHeight)
+        {
+            int targetY1 = Math.Min(y1, targetY0 + StripHeight);
+            int sourceY0 = targetY0 - delta;
+            int sourceY1 = targetY1 - delta;
             int height = targetY1 - targetY0;
             int width = x1 - x0;
             graphics.DrawImage(
                 current,
                 new Rectangle(x0, resultViewportTop + targetY0, width, height),
-                new Rectangle(x0, sourceY0, width, height),
+                new Rectangle(x0, sourceY0, width, sourceY1 - sourceY0),
                 GraphicsUnit.Pixel);
-            copiedPixels += stripPixels;
         }
 
-        return new ShareXModSafeTailCopyResult(copiedPixels, requiredPixels, blockedPixels, outOfViewPixels);
+        return new ShareXModSafeTailCopyResult(requiredPixels, requiredPixels, 0, 0);
     }
 
     private static bool SourceIntersectsStationaryTiles(

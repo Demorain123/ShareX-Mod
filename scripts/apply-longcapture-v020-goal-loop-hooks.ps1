@@ -22,8 +22,10 @@ function Replace-Literal {
 }
 
 $automation = Join-Path $repoRoot "LongCapture.Standalone\AutomationTestRunner.cs"
-$compositor = Join-Path $repoRoot "ShareX.ScreenCaptureLib\ShareXModTrustSplitCompositorV019.cs"
-$goalTest = Join-Path $repoRoot "ShareX.ScreenCaptureLib\ShareXModV020GoalLoopSelfTests.cs"
+# ShareX-Mod sources are linked into ShareX.ScreenCaptureLib from mod-overlay by the build target;
+# they are not physically copied into ShareX.ScreenCaptureLib. Patch the actual linked source files.
+$compositor = Join-Path $repoRoot "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModTrustSplitCompositorV019.cs"
+$goalTest = Join-Path $repoRoot "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModV020GoalLoopSelfTests.cs"
 
 Replace-Literal -Path $automation `
   -Old '        "ShareX.ScreenCaptureLib.ShareXModV019RecoveryTailSelfTests",' `

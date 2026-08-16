@@ -333,7 +333,10 @@ internal static class ShareXModV019RecoveryTailSelfTests
             for (int x = Width - 230; x < Width - 10; x += 4)
             {
                 Color c = bitmap.GetPixel(x, y);
-                if (c.B > 175 && c.G > 105 && c.R < 40)
+                // Match the synthetic fixed-control paint rather than generic cyan/blue page ink.
+                // The previous broad predicate also matched normal document content such as
+                // RGB(39,193,191), producing a false fifth "fixed" band after a correct repair.
+                if (c.R <= 12 && c.G >= 132 && c.G <= 158 && c.B >= 207 && c.B <= 232)
                 {
                     hit = true;
                     break;

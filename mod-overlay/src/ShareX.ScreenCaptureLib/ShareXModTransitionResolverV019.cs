@@ -30,9 +30,9 @@ internal readonly record struct ShareXModV019TransitionTelemetry(
 ///
 /// Every accepted delta now has to survive raw-pair validation. A stable prior may override a
 /// conflicting direct anchor, an outlier direct anchor needs stronger consensus, and a prior miss
-/// may recover via a full-range raw-pixel search followed by exact validation. RC1 intentionally
-/// remains fail-closed if all evidence fails; it does not use the old mosaic matcher or an unsafe
-/// multi-frame catch-up whose overlap could exceed the viewport.
+/// compares near-prior and full-range raw-pixel hypotheses instead of allowing a plausible repeated
+/// pattern close to the prior to mask a much better global match. RC1 remains fail-closed if all
+/// evidence fails; it does not use the old mosaic matcher or unsafe multi-frame catch-up.
 /// </summary>
 internal static class ShareXModTransitionResolverV019
 {
@@ -71,7 +71,6 @@ internal static class ShareXModTransitionResolverV019
             {
                 if (!hasPrior)
                 {
-                    // Bootstrap direct evidence needs agreement plus exact raw-frame validation.
                     if (directAnchor.AgreementCount >= 2 &&
                         ShareXModVerticalFallbackMatcher.TryValidateSpecificDelta(
                             previousReliable, current, settings, directAnchor.ScrollDelta, out double directScore))
@@ -121,8 +120,8 @@ internal static class ShareXModTransitionResolverV019
                             return true;
                         }
 
-                        // Genuine variable wheel motion is possible. Outlier direct evidence therefore
-                        // remains admissible only with stronger consensus and exact validation.
+                        // Genuine variable wheel motion is possible. Outlier direct evidence remains
+                        // admissible only with stronger consensus and exact raw-pair validation.
                         if (directAnchor.AgreementCount >= 3 &&
                             ShareXModVerticalFallbackMatcher.TryValidateSpecificDelta(
                                 previousReliable, current, settings, directAnchor.ScrollDelta, out double outlierScore))
@@ -155,8 +154,26 @@ internal static class ShareXModTransitionResolverV019
                     return true;
                 }
 
-                if (ShareXModVerticalFallbackMatcher.TryEstimateNearDelta(
-                        previousReliable, current, settings, prior, out int nearDelta, out double nearScore))
+                bool hasNear = ShareXModVerticalFallbackMatcher.TryEstimateNearDelta(
+                    previousReliable, current, settings, prior, out int nearDelta, out double nearScore);
+                bool hasFull = TryFullRange(previousReliable, current, settings, out int fullDelta, out double fullScore);
+
+                // A repeated page pattern can produce a threshold-passing candidate near the prior
+                // even when the actual wheel movement was much shorter. If the global candidate is
+                // materially better, prefer it. This is the exact class of ambiguity missing from
+                // the v0.1.8 synthetic suite.
+                if (hasFull && (!hasNear || fullScore + 1.0 < nearScore))
+                {
+                    delta = fullDelta;
+                    score = fullScore;
+                    source = "full-range-recovered-prior-outlier";
+                    fullRangeRecovered++;
+                    Remember(delta);
+                    Complete(delta, source, true);
+                    return true;
+                }
+
+                if (hasNear)
                 {
                     delta = nearDelta;
                     score = nearScore;
@@ -166,14 +183,21 @@ internal static class ShareXModTransitionResolverV019
                     Complete(delta, source, true);
                     return true;
                 }
-            }
 
-            // A stable prior is guidance, not a prison. The real frame-17 evidence was a legitimate
-            // much shorter movement. Full-range recovery is still constrained by the matcher and is
-            // then revalidated at the exact chosen delta before it can affect the mosaic.
-            if (TryFullRange(previousReliable, current, settings, out delta, out score))
+                if (hasFull)
+                {
+                    delta = fullDelta;
+                    score = fullScore;
+                    source = "full-range-recovered-prior-outlier";
+                    fullRangeRecovered++;
+                    Remember(delta);
+                    Complete(delta, source, true);
+                    return true;
+                }
+            }
+            else if (TryFullRange(previousReliable, current, settings, out delta, out score))
             {
-                source = hasPrior ? "full-range-recovered-prior-outlier" : "full-range-bootstrap-v019";
+                source = "full-range-bootstrap-v019";
                 fullRangeRecovered++;
                 Remember(delta);
                 Complete(delta, source, true);

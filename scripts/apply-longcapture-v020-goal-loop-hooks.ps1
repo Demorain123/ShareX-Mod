@@ -37,7 +37,9 @@ Replace-Literal -Path $automation `
 
 # Loop-2 review found a short-scroll hazard: a large expanded repair rectangle can map its source
 # back into the fixed control itself. Expand enough to cover a control+counter group, but copy only
-# narrow source strips that do NOT intersect the current stationary mask.
+# narrow source strips that do NOT intersect a two-transition persistent fixed mask. A one-frame
+# stationary tile is not enough to veto source pixels because real Linux.do has broad white/right-edge
+# regions that can be coincidentally stable for one transition.
 Replace-Literal -Path $compositor `
   -Old '                int marginY = TileHeight * 2;' `
   -New '                int marginY = TileHeight * 3; // v0.1.10: cover separated control/counter subparts while source-safe strips prevent self-copy.' `
@@ -68,7 +70,7 @@ Replace-Literal -Path $compositor `
                 int copiedPixels = ShareXModSafeTailCopyV020.Copy(
                     result,
                     current,
-                    currentTiles,
+                    persistentTiles,
                     columns,
                     resultViewportTop,
                     x0,

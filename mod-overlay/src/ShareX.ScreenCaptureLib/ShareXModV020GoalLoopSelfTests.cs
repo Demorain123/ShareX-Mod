@@ -40,8 +40,6 @@ internal static class ShareXModV020GoalLoopSelfTests
             using Bitmap previous = Slice(document, 0);
             using Bitmap current = Slice(document, NormalDelta);
 
-            // Mimic the real Linux.do failure class: a short repeated-content alias is reported by
-            // the direct anchor even though temporal geometry and raw pixels support the true delta.
             ShareXModAnchorMatch wrong = new(92, 0, 3);
             bool ok = ShareXModTransitionResolverV019.TryResolve(
                 previous, current, true, wrong,
@@ -110,11 +108,11 @@ internal static class ShareXModV020GoalLoopSelfTests
 
             int blueBands = CountFixedBlueBands(result);
             if (blueBands > 2)
-                throw new InvalidOperationException($"Goal-loop Linux-like fixed control repeated: bands={blueBands}, expected<=2 (first/final only).");
+                throw new InvalidOperationException($"Goal-loop Linux-like fixed control repeated: bands={blueBands}, expected<=2 (first/final only); compositor={session.SnapshotTelemetry()}; deferred={session.SnapshotDeferredTailTelemetry()}.");
 
             ShareXModV019CompositorTelemetry telemetry = session.SnapshotTelemetry();
             if (!telemetry.CommittedBodyImmutable || telemetry.TailRepairComponents < deltas.Length / 2)
-                throw new InvalidOperationException($"Goal-loop fixed repair evidence too weak: {telemetry}.");
+                throw new InvalidOperationException($"Goal-loop fixed repair evidence too weak: {telemetry}; deferred={session.SnapshotDeferredTailTelemetry()}.");
             if (telemetry.RingValidatedRepairs + telemetry.PersistentEdgeRepairs <= 0)
                 throw new InvalidOperationException($"Goal-loop did not exercise the hardened fixed evidence paths: {telemetry}.");
         }
@@ -143,10 +141,8 @@ internal static class ShareXModV020GoalLoopSelfTests
 
             ShareXModV019CompositorTelemetry telemetry = session.SnapshotTelemetry();
             if (telemetry.RejectedLargeComponents <= 0)
-                throw new InvalidOperationException($"Goal-loop large-overlay area cap was not exercised: {telemetry}.");
+                throw new InvalidOperationException($"Goal-loop large-overlay area cap was not exercised: {telemetry}; deferred={session.SnapshotDeferredTailTelemetry()}.");
 
-            // The safety goal here is not to erase a huge fixed panel. It is to refuse destructive
-            // repair of a region large enough to plausibly be real application/page content.
             AssertCommittedFirstFrameUnchanged(result!, frame0);
         }
         finally
@@ -190,8 +186,9 @@ internal static class ShareXModV020GoalLoopSelfTests
                 if (result!.Height != totalHeight)
                     throw new InvalidOperationException($"Goal-loop adversarial scenario {scenario} height mismatch: {result.Height}!={totalHeight}.");
                 AssertCentralBodyMatchesDocument(result, document);
-                if (CountFixedBlueBands(result) > 2)
-                    throw new InvalidOperationException($"Goal-loop adversarial scenario {scenario} retained repeated fixed controls.");
+                int bands = CountFixedBlueBands(result);
+                if (bands > 2)
+                    throw new InvalidOperationException($"Goal-loop adversarial scenario {scenario} retained repeated fixed controls: bands={bands}; deltas=[{string.Join(',', deltas)}]; compositor={session.SnapshotTelemetry()}; deferred={session.SnapshotDeferredTailTelemetry()}.");
             }
             finally
             {
@@ -208,8 +205,6 @@ internal static class ShareXModV020GoalLoopSelfTests
         g.Clear(Color.White);
         var rng = new Random(seed);
 
-        // Linux-like repeated cards, white gaps, avatars and dark code/image blocks. Rows deliberately
-        // repeat every few hundred pixels so a matcher sees plausible aliases.
         for (int y = 0; y < height; y += 96)
         {
             bool alternate = (y / 96) % 5 == 0;

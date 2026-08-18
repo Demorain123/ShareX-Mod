@@ -32,6 +32,8 @@ function Replace-Literal {
     }
 }
 
+# Keep this integration post-RC6 and anchor-small. The RC overlays intentionally
+# rename Advanced modes and add F7/debug controls, so do not replace whole UI blocks.
 Replace-Literal -Path $mainForm `
     -Old @'
     private readonly ToolStripMenuItem trayStopItem = new("Stop capture (F8)");
@@ -47,24 +49,10 @@ Replace-Literal -Path $mainForm `
     -Marker 'BrowserAgentIntegratedController browserAgentController'
 
 Replace-Literal -Path $mainForm `
-    -Old @'
-        modeSelector.Items.AddRange(new object[]
-        {
-            "Normal Long Capture",
-            "Smart Web Capture",
-            "Teach Capture",
-            "Run Recipe"
-        });
-'@ `
+    -Old '            "Normal Long Capture",' `
     -New @'
-        modeSelector.Items.AddRange(new object[]
-        {
             "Normal Long Capture",
             "Browser Assisted Capture",
-            "Smart Web Capture",
-            "Teach Capture",
-            "Run Recipe"
-        });
 '@ `
     -Marker '"Browser Assisted Capture"'
 
@@ -87,12 +75,8 @@ Replace-Literal -Path $mainForm `
     -Marker 'browserAgentController.StateChanged += OnBrowserAgentStateChanged'
 
 Replace-Literal -Path $mainForm `
-    -Old @'
-            trayIcon.Dispose();
-            activeService?.Dispose();
-'@ `
+    -Old '            activeService?.Dispose();' `
     -New @'
-            trayIcon.Dispose();
             activeService?.Dispose();
             browserAgentController.Dispose();
 '@ `
@@ -138,7 +122,16 @@ Replace-Literal -Path $mainForm `
             browseRecipeButton.Enabled = false;
             reviewButton.Enabled = false;
             targetSelector.Enabled = false;
+            foregroundTargetButton.Enabled = false;
             refreshTargetsButton.Enabled = false;
+            startDelay.Enabled = false;
+            scrollDelay.Enabled = false;
+            scrollAmount.Enabled = false;
+            scrollMethod.Enabled = false;
+            autoScrollTop.Enabled = false;
+            wholeWindowCapture.Enabled = false;
+            debugCaptureUi.Enabled = false;
+            includeInternalDebugWindows.Enabled = false;
             outputLabel.Text = Path.Combine(AppContext.BaseDirectory, "BrowserAgentCaptures");
             if (!captureBusy) captureButton.Text = "Start Browser Assisted Capture   (F8)";
             readinessLabel.Text = browserAgentController.IsConnected
@@ -151,7 +144,16 @@ Replace-Literal -Path $mainForm `
         }
 
         targetSelector.Enabled = !captureBusy;
+        foregroundTargetButton.Enabled = !captureBusy;
         refreshTargetsButton.Enabled = !captureBusy;
+        startDelay.Enabled = !captureBusy;
+        scrollDelay.Enabled = !captureBusy;
+        scrollAmount.Enabled = !captureBusy;
+        scrollMethod.Enabled = !captureBusy;
+        autoScrollTop.Enabled = !captureBusy;
+        wholeWindowCapture.Enabled = !captureBusy;
+        debugCaptureUi.Enabled = !captureBusy;
+        includeInternalDebugWindows.Enabled = !captureBusy && debugCaptureUi.Checked;
         outputLabel.Text = outputDirectory;
         browserButton.Text = "Open Capture Browser";
         if (!captureBusy) captureButton.Text = "Start long capture   (F8)";
@@ -252,8 +254,8 @@ Replace-Literal -Path $mainForm `
         captureBusy = true;
         SetControlsEnabled(false);
         captureButton.Text = "Stop Browser Assisted Capture   (F8)";
-        statusLabel.Text = "Browser Assisted Capture starting — the web viewport will be outlined briefly.";
-        qualityLabel.Text = "Browser Agent: Auto until confirmed page end; press F8 again for a partial manual stop.";
+        statusLabel.Text = "Browser Assisted Capture starting — the exact web viewport will be outlined briefly.";
+        qualityLabel.Text = "Browser Agent: Auto until confirmed page end; press F8 again for a Partial manual stop.";
         trayStopItem.Enabled = true;
         trayIcon.Visible = true;
 
@@ -283,7 +285,7 @@ Replace-Literal -Path $mainForm `
                 : $"Partial: {result.StopReason} · {result.FrameCount} frames · {result.Width} × {result.Height}px{pageHint} — {result.OutputPath}";
             qualityLabel.Text = result.IsComplete
                 ? "Browser Agent: true page end confirmed; verified-overlap stitch completed."
-                : "Browser Agent: partial capture saved; verified frames were stitched without claiming a complete page.";
+                : "Browser Agent: Partial capture saved; verified frames were stitched without claiming a complete page.";
         }
         catch (Exception ex)
         {
@@ -384,48 +386,22 @@ Replace-Literal -Path $mainForm `
 '@ `
     -Marker 'capture stop forwarded to integrated Browser Agent'
 
-Replace-Literal -Path $mainForm `
-    -Old @'
-    private void SetControlsEnabled(bool enabled)
-    {
-        modeSelector.Enabled = enabled;
-        targetSelector.Enabled = enabled;
-        refreshTargetsButton.Enabled = enabled;
-        openLogsButton.Enabled = true;
-        startDelay.Enabled = enabled;
-        scrollDelay.Enabled = enabled;
-        scrollAmount.Enabled = enabled;
-        scrollMethod.Enabled = enabled;
-        autoScrollTop.Enabled = enabled;
-        if (enabled)
-        {
-            browserButton.Enabled = SelectedMode != LongCaptureStandaloneMode.Normal;
-            recipePath.Enabled = SelectedMode == LongCaptureStandaloneMode.RunRecipe;
-            browseRecipeButton.Enabled = SelectedMode == LongCaptureStandaloneMode.RunRecipe;
-            reviewButton.Enabled = SelectedMode == LongCaptureStandaloneMode.RunRecipe;
-        }
-'@ `
-    -New @'
-    private void SetControlsEnabled(bool enabled)
-    {
-        modeSelector.Enabled = enabled;
-        targetSelector.Enabled = enabled && !BrowserAgentSelected;
-        refreshTargetsButton.Enabled = enabled && !BrowserAgentSelected;
-        openLogsButton.Enabled = true;
-        startDelay.Enabled = enabled && !BrowserAgentSelected;
-        scrollDelay.Enabled = enabled && !BrowserAgentSelected;
-        scrollAmount.Enabled = enabled && !BrowserAgentSelected;
-        scrollMethod.Enabled = enabled && !BrowserAgentSelected;
-        autoScrollTop.Enabled = enabled && !BrowserAgentSelected;
-        if (enabled)
-        {
-            browserButton.Enabled = BrowserAgentSelected || SelectedMode != LongCaptureStandaloneMode.Normal;
-            recipePath.Enabled = !BrowserAgentSelected && SelectedMode == LongCaptureStandaloneMode.RunRecipe;
-            browseRecipeButton.Enabled = !BrowserAgentSelected && SelectedMode == LongCaptureStandaloneMode.RunRecipe;
-            reviewButton.Enabled = !BrowserAgentSelected && SelectedMode == LongCaptureStandaloneMode.RunRecipe;
-        }
-'@ `
-    -Marker 'startDelay.Enabled = enabled && !BrowserAgentSelected;'
+# Patch individual enable lines so v0.1.4/v0.1.6-added controls do not break the anchor.
+Replace-Literal -Path $mainForm -Old '        targetSelector.Enabled = enabled;' -New '        targetSelector.Enabled = enabled && !BrowserAgentSelected;' -Marker 'targetSelector.Enabled = enabled && !BrowserAgentSelected;'
+Replace-Literal -Path $mainForm -Old '        foregroundTargetButton.Enabled = enabled;' -New '        foregroundTargetButton.Enabled = enabled && !BrowserAgentSelected;' -Marker 'foregroundTargetButton.Enabled = enabled && !BrowserAgentSelected;'
+Replace-Literal -Path $mainForm -Old '        refreshTargetsButton.Enabled = enabled;' -New '        refreshTargetsButton.Enabled = enabled && !BrowserAgentSelected;' -Marker 'refreshTargetsButton.Enabled = enabled && !BrowserAgentSelected;'
+Replace-Literal -Path $mainForm -Old '        startDelay.Enabled = enabled;' -New '        startDelay.Enabled = enabled && !BrowserAgentSelected;' -Marker 'startDelay.Enabled = enabled && !BrowserAgentSelected;'
+Replace-Literal -Path $mainForm -Old '        scrollDelay.Enabled = enabled;' -New '        scrollDelay.Enabled = enabled && !BrowserAgentSelected;' -Marker 'scrollDelay.Enabled = enabled && !BrowserAgentSelected;'
+Replace-Literal -Path $mainForm -Old '        scrollAmount.Enabled = enabled;' -New '        scrollAmount.Enabled = enabled && !BrowserAgentSelected;' -Marker 'scrollAmount.Enabled = enabled && !BrowserAgentSelected;'
+Replace-Literal -Path $mainForm -Old '        scrollMethod.Enabled = enabled;' -New '        scrollMethod.Enabled = enabled && !BrowserAgentSelected;' -Marker 'scrollMethod.Enabled = enabled && !BrowserAgentSelected;'
+Replace-Literal -Path $mainForm -Old '        autoScrollTop.Enabled = enabled;' -New '        autoScrollTop.Enabled = enabled && !BrowserAgentSelected;' -Marker 'autoScrollTop.Enabled = enabled && !BrowserAgentSelected;'
+Replace-Literal -Path $mainForm -Old '        wholeWindowCapture.Enabled = enabled;' -New '        wholeWindowCapture.Enabled = enabled && !BrowserAgentSelected;' -Marker 'wholeWindowCapture.Enabled = enabled && !BrowserAgentSelected;'
+Replace-Literal -Path $mainForm -Old '        debugCaptureUi.Enabled = enabled;' -New '        debugCaptureUi.Enabled = enabled && !BrowserAgentSelected;' -Marker 'debugCaptureUi.Enabled = enabled && !BrowserAgentSelected;'
+Replace-Literal -Path $mainForm -Old '        includeInternalDebugWindows.Enabled = enabled && debugCaptureUi.Checked;' -New '        includeInternalDebugWindows.Enabled = enabled && !BrowserAgentSelected && debugCaptureUi.Checked;' -Marker 'includeInternalDebugWindows.Enabled = enabled && !BrowserAgentSelected && debugCaptureUi.Checked;'
+Replace-Literal -Path $mainForm -Old '            browserButton.Enabled = SelectedMode != LongCaptureStandaloneMode.Normal;' -New '            browserButton.Enabled = BrowserAgentSelected || SelectedMode != LongCaptureStandaloneMode.Normal;' -Marker 'browserButton.Enabled = BrowserAgentSelected || SelectedMode != LongCaptureStandaloneMode.Normal;'
+Replace-Literal -Path $mainForm -Old '            recipePath.Enabled = SelectedMode == LongCaptureStandaloneMode.RunRecipe;' -New '            recipePath.Enabled = !BrowserAgentSelected && SelectedMode == LongCaptureStandaloneMode.RunRecipe;' -Marker 'recipePath.Enabled = !BrowserAgentSelected && SelectedMode == LongCaptureStandaloneMode.RunRecipe;'
+Replace-Literal -Path $mainForm -Old '            browseRecipeButton.Enabled = SelectedMode == LongCaptureStandaloneMode.RunRecipe;' -New '            browseRecipeButton.Enabled = !BrowserAgentSelected && SelectedMode == LongCaptureStandaloneMode.RunRecipe;' -Marker 'browseRecipeButton.Enabled = !BrowserAgentSelected && SelectedMode == LongCaptureStandaloneMode.RunRecipe;'
+Replace-Literal -Path $mainForm -Old '            reviewButton.Enabled = SelectedMode == LongCaptureStandaloneMode.RunRecipe;' -New '            reviewButton.Enabled = !BrowserAgentSelected && SelectedMode == LongCaptureStandaloneMode.RunRecipe;' -Marker 'reviewButton.Enabled = !BrowserAgentSelected && SelectedMode == LongCaptureStandaloneMode.RunRecipe;'
 
 Replace-Literal -Path $mainForm `
     -Old @'
@@ -444,6 +420,40 @@ Replace-Literal -Path $mainForm `
                 FileName = activeOutputDirectory,
 '@ `
     -Marker 'string activeOutputDirectory = BrowserAgentSelected'
+
+Replace-Literal -Path $mainForm `
+    -Old @'
+    private void ExportDiagnostics()
+    {
+        try
+        {
+            Directory.CreateDirectory(outputDirectory);
+'@ `
+    -New @'
+    private void ExportDiagnostics()
+    {
+        if (BrowserAgentSelected)
+        {
+            try
+            {
+                string zip = browserAgentController.ExportLastDiagnostics();
+                string directory = Path.GetDirectoryName(zip) ?? Path.Combine(AppContext.BaseDirectory, "BrowserAgentCaptures", "Diagnostics");
+                Process.Start(new ProcessStartInfo { FileName = directory, UseShellExecute = true });
+                MessageBox.Show(this, "Browser Agent diagnostics created:\n\n" + zip, "LongCapture diagnostics", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                LongCaptureLog.Error("Browser Agent diagnostic bundle export failed", ex);
+                MessageBox.Show(this, ex.Message, "Export Browser Agent diagnostics", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            return;
+        }
+
+        try
+        {
+            Directory.CreateDirectory(outputDirectory);
+'@ `
+    -Marker 'Browser Agent diagnostics created:'
 
 if ($CheckOnly) {
     Write-Host "Browser Agent v0.1.2 main-window integration compatibility passed." -ForegroundColor Green

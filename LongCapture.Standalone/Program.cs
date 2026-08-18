@@ -17,6 +17,15 @@ internal static class Program
     private static int Main(string[] args)
     {
         LongCaptureLog.Initialize();
+
+        // Chrome launches a Native Messaging host with the calling extension
+        // origin as argv[0]. Handle that path before any desktop UI setup so the
+        // process remains a pure stdin/stdout <-> Named Pipe proxy.
+        if (BrowserAgentNativeHost.IsChromeNativeMessagingLaunch(args))
+        {
+            return BrowserAgentNativeHost.Run(args);
+        }
+
         RegisterGlobalExceptionLogging();
         LongCaptureLog.Info(
             $"process start version={StandaloneVersion.Value} runtime={Environment.Version} os={LongCaptureLog.OneLine(Environment.OSVersion.ToString())} arch={System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture} baseDir={LongCaptureLog.OneLine(AppContext.BaseDirectory)} args={LongCaptureLog.OneLine(string.Join(' ', args))}");
@@ -25,6 +34,13 @@ internal static class Program
         {
             int code = File.Exists(Path.Combine(AppContext.BaseDirectory, "ShareX.Mod.VERSION.json")) ? 0 : 2;
             LongCaptureLog.Info($"--version completed exitCode={code}");
+            return code;
+        }
+
+        if (args.Any(x => string.Equals(x, "--browser-agent-poc-self-test", StringComparison.OrdinalIgnoreCase)))
+        {
+            int code = BrowserAgentPocSelfTest.Run();
+            LongCaptureLog.Info($"--browser-agent-poc-self-test completed exitCode={code}");
             return code;
         }
 
@@ -47,6 +63,16 @@ internal static class Program
         }
 
         InitializeDesktopUiHosts();
+
+        if (args.Any(x => string.Equals(x, "--browser-agent-poc", StringComparison.OrdinalIgnoreCase)))
+        {
+            using var pocForm = new BrowserAgentPocForm();
+            LongCaptureLog.Info("entering Browser Agent v0.1 PoC WinForms message loop");
+            Application.Run(pocForm);
+            LongCaptureLog.Info("Browser Agent v0.1 PoC WinForms message loop exited");
+            return 0;
+        }
+
         using var exclusionWatcher = CaptureExclusionWatcher.Start();
         using var form = new MainForm();
         StandaloneUiPolish.Apply(form);
@@ -113,6 +139,14 @@ internal static class Program
             string versionPath = Path.Combine(AppContext.BaseDirectory, "ShareX.Mod.VERSION.json");
             string settingsPath = Path.Combine(AppContext.BaseDirectory, "ShareX.Mod.v04.json");
             if (!File.Exists(versionPath) || !File.Exists(settingsPath)) return 10;
+
+            string browserAgentManifest = Path.Combine(AppContext.BaseDirectory, "BrowserAgent", "Extension", "manifest.json");
+            string browserAgentWorker = Path.Combine(AppContext.BaseDirectory, "BrowserAgent", "Extension", "service-worker.js");
+            string browserAgentInstaller = Path.Combine(AppContext.BaseDirectory, "BrowserAgent", "INSTALL-BROWSER-AGENT.cmd");
+            if (!File.Exists(browserAgentManifest) || !File.Exists(browserAgentWorker) || !File.Exists(browserAgentInstaller)) return 30;
+
+            int browserAgentSmoke = BrowserAgentPocSelfTest.Run();
+            if (browserAgentSmoke != 0) return browserAgentSmoke;
 
             Type? modBuildInfo = Type.GetType("ShareX.ScreenCaptureLib.ShareXModBuildInfo, ShareX.ScreenCaptureLib", throwOnError: false);
             if (modBuildInfo is null) return 11;

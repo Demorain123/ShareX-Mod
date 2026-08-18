@@ -6,12 +6,20 @@ on:
       - "standalone/browser-agent-v0.1-poc"
     paths:
       - "LongCapture.Standalone/**"
+      - "ShareX.ScreenCaptureLib/**"
+      - "ShareX.Avalonia/**"
+      - "mod-overlay/**"
+      - "scripts/**"
       - ".github/workflows/browser-agent-v01-poc.yml"
   pull_request:
     branches:
       - "standalone/longcapture-v0.1.9-rc6-sparse-edge-evidence"
     paths:
       - "LongCapture.Standalone/**"
+      - "ShareX.ScreenCaptureLib/**"
+      - "ShareX.Avalonia/**"
+      - "mod-overlay/**"
+      - "scripts/**"
       - ".github/workflows/browser-agent-v01-poc.yml"
   workflow_dispatch:
 
@@ -25,10 +33,67 @@ permissions:
 jobs:
   build-and-test:
     runs-on: windows-2025
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Apply RC6 overlay chain
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $hooks = @(
+            "scripts\run-v04-hooks.ps1",
+            "scripts\apply-v041-post-hooks.ps1",
+            "scripts\apply-v042-post-hooks.ps1",
+            "scripts\apply-v043-post-hooks.ps1",
+            "scripts\apply-v044-post-hooks.ps1",
+            "scripts\apply-v050-post-hooks.ps1",
+            "scripts\apply-v051-post-hooks.ps1",
+            "scripts\apply-v052-post-hooks.ps1",
+            "scripts\apply-v061-post-hooks.ps1",
+            "scripts\apply-v062-post-hooks.ps1",
+            "scripts\apply-v064-post-hooks.ps1",
+            "scripts\apply-longcapture-v013-standalone-hooks.ps1",
+            "scripts\apply-longcapture-v013-rc-hardening.ps1",
+            "scripts\apply-longcapture-v014-core-hooks.ps1",
+            "scripts\apply-longcapture-v015-fixed-overlay-hooks.ps1",
+            "scripts\apply-longcapture-v016-replay-compositor-hooks.ps1",
+            "scripts\apply-longcapture-v017-anchor-continuity-hooks.ps1",
+            "scripts\apply-longcapture-v018-precut.ps1",
+            "scripts\apply-longcapture-v018-trust-split-hooks.ps1",
+            "scripts\apply-longcapture-v018-rc-evidence.ps1",
+            "scripts\apply-longcapture-v019-recovery-tail-hooks.ps1",
+            "scripts\apply-longcapture-v019-rc3-real-evidence-hooks.ps1",
+            "scripts\apply-longcapture-v019-rc4-upward-alias-veto.ps1",
+            "scripts\apply-longcapture-v019-rc5-downward-alias-consensus.ps1",
+            "scripts\apply-longcapture-v019-rc6-sparse-edge-evidence.ps1",
+            "scripts\apply-longcapture-v019-rc6-strong-direct-order.ps1"
+          )
+          foreach ($hook in $hooks) {
+            Write-Host "=== $hook ==="
+            & pwsh -NoProfile -File $hook
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          git diff --check
+
+      - name: Verify RC6 invariants survived PoC
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = Get-Content "LongCapture.Standalone\StandaloneVersion.cs" -Raw
+          $manager = Get-Content "ShareX.ScreenCaptureLib\ScrollingCaptureManager.cs" -Raw
+          $resolver = Get-Content "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModTransitionResolverV019.cs" -Raw
+          if ($version -notmatch '0\.1\.9-rc6') { throw "RC6 version marker missing" }
+          foreach ($required in @("ShareXModTransitionResolverV019.TryResolve","ShareXModTrustSplitCompositorV019.TryAppendLive","modResolvedDelta")) {
+            if ($manager -notmatch [regex]::Escape($required)) { throw "Missing RC6 live invariant: $required" }
+          }
+          foreach ($forbidden in @("modRobustSession.TryFallbackCombine(","ShareXModTransitionResolverV018.TryResolve(","ShareXModTrustSplitCompositorV018.TryAppendLive(")) {
+            if ($manager.Contains($forbidden)) { throw "Forbidden legacy live path reappeared: $forbidden" }
+          }
+          foreach ($required in @("informative-prior-overrode-near-direct-v019","informative-prior-overrode-sparse-full-range-alias-v019","ShouldPreferInformativePrior")) {
+            if ($resolver -notmatch [regex]::Escape($required)) { throw "RC6 resolver hardening missing: $required" }
+          }
 
       - name: Restore
         run: dotnet restore --runtime win-x64 LongCapture.Standalone\LongCapture.Standalone.csproj
@@ -40,11 +105,11 @@ jobs:
         shell: cmd
         run: artifacts\LongCapture\LongCapture.exe --browser-agent-poc-self-test
 
-      - name: Existing QUICK acceptance
+      - name: Existing RC6 QUICK acceptance
         shell: cmd
         run: artifacts\LongCapture\1-RUN-AUTOMATED-TESTS.cmd --ci
 
-      - name: Verify Browser Agent package
+      - name: Verify Browser Agent package boundary
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -69,12 +134,37 @@ jobs:
           }
           if ($permissions -contains "debugger" -or $manifest.host_permissions) { throw "PoC permission boundary expanded unexpectedly" }
 
+      - name: Package PoC
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force Output | Out-Null
+          $zip = "Output\LongCapture-Browser-Agent-v0.1-PoC-x64.zip"
+          Compress-Archive -Path "artifacts\LongCapture\*" -DestinationPath $zip -CompressionLevel Optimal -Force
+          $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
+          Set-Content "Output\LongCapture-Browser-Agent-v0.1-PoC-x64.sha256.txt" "$hash  LongCapture-Browser-Agent-v0.1-PoC-x64.zip"
+
+      - name: Extract final PoC and rerun Browser Agent self-test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $temp = Join-Path $env:RUNNER_TEMP "longcapture-browser-agent-v01-final"
+          Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue
+          Expand-Archive "Output\LongCapture-Browser-Agent-v0.1-PoC-x64.zip" $temp -Force
+          foreach ($required in @("LongCapture.exe","START-BROWSER-AGENT-POC.cmd","BrowserAgent\Extension\manifest.json","BrowserAgent\INSTALL-BROWSER-AGENT.cmd")) {
+            if (-not (Test-Path -LiteralPath (Join-Path $temp $required))) { throw "Final ZIP missing $required" }
+          }
+          & (Join-Path $temp "LongCapture.exe") --browser-agent-poc-self-test
+          if ($LASTEXITCODE -ne 0) { throw "Extracted Browser Agent PoC self-test failed with exit code $LASTEXITCODE" }
+
       - name: Upload PoC package
         if: success()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: LongCapture-Browser-Agent-v0.1-PoC-x64
-          path: artifacts\LongCapture\**
+          path: |
+            Output\LongCapture-Browser-Agent-v0.1-PoC-x64.zip
+            Output\LongCapture-Browser-Agent-v0.1-PoC-x64.sha256.txt
           if-no-files-found: error
 
       - name: Record push gate result
@@ -99,7 +189,7 @@ jobs:
             "- Tested commit: $tested",
             "- Result: $result",
             "- Runner: windows-2025",
-            "- Gate: restore + publish + deterministic Browser Agent self-test + existing QUICK + package boundary"
+            "- Gate: RC6 overlay chain + RC6 invariants + publish + deterministic Browser Agent self-test + RC6 QUICK + package boundary + extracted-package self-test"
           ) | Set-Content -LiteralPath $statusPath -Encoding utf8
 
           git config user.name "github-actions[bot]"

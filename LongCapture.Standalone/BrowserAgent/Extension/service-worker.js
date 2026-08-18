@@ -167,6 +167,7 @@ async function executeInTarget(func, args = []) {
 }
 
 function collectDocumentState() {
+  const round2Local = (value) => Math.round(Number(value || 0) * 100) / 100;
   const viewportWidth = window.innerWidth;
   const viewportHeight = window.innerHeight;
   const scrollY = window.scrollY || window.pageYOffset || 0;
@@ -206,10 +207,10 @@ function collectDocumentState() {
     fixedCandidates.push({
       tag: String(element.tagName || "").toLowerCase(),
       position: style.position,
-      left: round2(rect.left),
-      top: round2(rect.top),
-      width: round2(rect.width),
-      height: round2(rect.height),
+      left: round2Local(rect.left),
+      top: round2Local(rect.top),
+      width: round2Local(rect.width),
+      height: round2Local(rect.height),
       zIndex: style.zIndex || "auto",
       edge: [touchesTop ? "top" : "", touchesBottom ? "bottom" : "", touchesLeft ? "left" : "", touchesRight ? "right" : ""].filter(Boolean).join(",")
     });
@@ -228,6 +229,11 @@ function collectDocumentState() {
 }
 
 async function scrollDocumentToTop() {
+  const restore = (element, name, value, priority) => {
+    if (!element) return;
+    if (value) element.style.setProperty(name, value, priority || "");
+    else element.style.removeProperty(name);
+  };
   const html = document.documentElement;
   const body = document.body;
   const oldHtmlValue = html?.style.getPropertyValue("scroll-behavior") || "";
@@ -241,13 +247,18 @@ async function scrollDocumentToTop() {
     window.scrollTo(0, 0);
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   } finally {
-    restoreInlineProperty(html, "scroll-behavior", oldHtmlValue, oldHtmlPriority);
-    restoreInlineProperty(body, "scroll-behavior", oldBodyValue, oldBodyPriority);
+    restore(html, "scroll-behavior", oldHtmlValue, oldHtmlPriority);
+    restore(body, "scroll-behavior", oldBodyValue, oldBodyPriority);
   }
   return { scrollY: window.scrollY || 0 };
 }
 
 async function scrollDocumentBy(delta) {
+  const restore = (element, name, value, priority) => {
+    if (!element) return;
+    if (value) element.style.setProperty(name, value, priority || "");
+    else element.style.removeProperty(name);
+  };
   const html = document.documentElement;
   const body = document.body;
   const oldHtmlValue = html?.style.getPropertyValue("scroll-behavior") || "";
@@ -261,8 +272,8 @@ async function scrollDocumentBy(delta) {
     window.scrollBy(0, Number(delta) || 0);
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   } finally {
-    restoreInlineProperty(html, "scroll-behavior", oldHtmlValue, oldHtmlPriority);
-    restoreInlineProperty(body, "scroll-behavior", oldBodyValue, oldBodyPriority);
+    restore(html, "scroll-behavior", oldHtmlValue, oldHtmlPriority);
+    restore(body, "scroll-behavior", oldBodyValue, oldBodyPriority);
   }
   return { scrollY: window.scrollY || 0 };
 }
@@ -276,7 +287,18 @@ function hideSafeFixedCandidates() {
   const viewportArea = Math.max(1, viewportWidth * viewportHeight);
   let hiddenCount = 0;
 
-  restoreHiddenCandidates();
+  // Clean up any marker left by an interrupted previous command. This logic is
+  // intentionally inlined because executeScript serializes this function alone.
+  for (const element of document.querySelectorAll(`[${marker}="1"]`)) {
+    const value = element.getAttribute(valueAttr) || "";
+    const priority = element.getAttribute(priorityAttr) || "";
+    if (value) element.style.setProperty("visibility", value, priority);
+    else element.style.removeProperty("visibility");
+    element.removeAttribute(marker);
+    element.removeAttribute(valueAttr);
+    element.removeAttribute(priorityAttr);
+  }
+
   const elements = document.body ? document.body.getElementsByTagName("*") : [];
   for (const element of elements) {
     const style = getComputedStyle(element);
@@ -323,12 +345,6 @@ function restoreHiddenCandidates() {
   return { restoredCount };
 }
 
-function restoreInlineProperty(element, name, value, priority) {
-  if (!element) return;
-  if (value) element.style.setProperty(name, value, priority || "");
-  else element.style.removeProperty(name);
-}
-
 async function setBadge(text, title) {
   try {
     await chrome.action.setBadgeText({ text });
@@ -340,10 +356,6 @@ function clampNumber(value, min, max, fallback) {
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
   return Math.min(max, Math.max(min, number));
-}
-
-function round2(value) {
-  return Math.round(Number(value || 0) * 100) / 100;
 }
 
 function sleep(ms) {

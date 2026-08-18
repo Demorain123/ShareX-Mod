@@ -39,7 +39,11 @@ $manifest = [ordered]@{
     allowed_origins = @("chrome-extension://$ExtensionId/")
 }
 
-$manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $ManifestPath -Encoding UTF8
+# Chrome expects JSON text. Write explicit UTF-8 without BOM so the same helper
+# behaves identically under Windows PowerShell 5.1 and PowerShell 7+.
+$json = $manifest | ConvertTo-Json -Depth 4
+[System.IO.File]::WriteAllText($ManifestPath, $json, [System.Text.UTF8Encoding]::new($false))
+
 New-Item -Path $RegistryKey -Force | Out-Null
 Set-Item -Path $RegistryKey -Value $ManifestPath
 

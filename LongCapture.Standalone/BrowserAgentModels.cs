@@ -18,6 +18,11 @@ internal sealed class BrowserAgentFrameRecord
     public string StateHash { get; set; } = string.Empty;
     public DateTime CapturedUtc { get; set; }
 
+    public double CaptureRegionLeftCss { get; set; }
+    public double CaptureRegionTopCss { get; set; }
+    public double CaptureRegionWidthCss { get; set; }
+    public double CaptureRegionHeightCss { get; set; }
+
     public int StabilityWaitMs { get; set; }
     public bool StabilityTimedOut { get; set; }
     public int StabilityMutationCount { get; set; }
@@ -36,7 +41,15 @@ internal sealed class BrowserAgentFrameRecord
     public int RecoveryGeneration { get; set; }
     public string OverlapStatus { get; set; } = string.Empty;
 
-    // v0.1.2: progress / true-end evidence. The DOM counter is only a hint;
+    // v0.1.3: DOM geometry predicts the movement, but the accepted compositor delta
+    // is verified against the real PNG overlap and can correct small scroll-anchor drift.
+    public int ExpectedDeltaPixels { get; set; }
+    public int ResolvedDeltaPixels { get; set; }
+    public int VisualDeltaOffsetPixels { get; set; }
+    public double VisualAlignmentScore { get; set; }
+    public double VisualAlignmentConfidence { get; set; }
+
+    // v0.1.2+: progress / true-end evidence. The DOM counter is only a hint;
     // geometry + repeated stable-bottom confirmation remains authoritative.
     public int PageCounterCurrent { get; set; }
     public int PageCounterTotal { get; set; }
@@ -51,7 +64,7 @@ internal sealed class BrowserAgentFrameRecord
 
 internal sealed class BrowserAgentSessionManifest
 {
-    public string ProtocolVersion { get; set; } = "0.1.2";
+    public string ProtocolVersion { get; set; } = "0.1.3";
     public DateTime StartedUtc { get; set; }
     public DateTime? CompletedUtc { get; set; }
     public string Status { get; set; } = "capturing";
@@ -59,6 +72,24 @@ internal sealed class BrowserAgentSessionManifest
     public string? StopReason { get; set; }
     public string? Error { get; set; }
     public int SafetyFrameLimit { get; set; }
+
+    public int StartDelayMs { get; set; }
+    public int StableWindowMs { get; set; }
+    public double OverlapRatio { get; set; }
+    public bool RegionSelectionRequired { get; set; }
+    public double CaptureRegionLeftCss { get; set; }
+    public double CaptureRegionTopCss { get; set; }
+    public double CaptureRegionWidthCss { get; set; }
+    public double CaptureRegionHeightCss { get; set; }
+
+    public bool PreloadEnabled { get; set; }
+    public bool PreloadReachedEnd { get; set; }
+    public int PreloadSteps { get; set; }
+    public int PreloadDurationMs { get; set; }
+    public double PreloadGrowthCss { get; set; }
+    public int PreloadPageCounterCurrent { get; set; }
+    public int PreloadPageCounterTotal { get; set; }
+
     public List<BrowserAgentFrameRecord> Frames { get; set; } = new();
 }
 

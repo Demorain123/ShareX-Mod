@@ -10,6 +10,8 @@ internal sealed class BrowserAgentCaptureSession
     private const int StabilitySampleMs = 120;
     private const double DefaultOverlapRatio = 0.26;
     private const int RecoveryWindowFrames = 3;
+    private const int MaximumSafetyFrameLimit = 1200;
+    private const int PreviewDurationMs = 650;
 
     private readonly BrowserAgentBridgeServer bridge;
 
@@ -22,7 +24,7 @@ internal sealed class BrowserAgentCaptureSession
 
     public async Task<BrowserAgentStitchResult> CaptureAsync(
         string outputRoot,
-        int maxFrames,
+        int safetyFrameLimit,
         Action<string>? status,
         CancellationToken cancellationToken)
     {
@@ -31,7 +33,7 @@ internal sealed class BrowserAgentCaptureSession
             throw new InvalidOperationException("Browser Agent extension is not connected. Attach the active Chromium tab first.");
         }
 
-        maxFrames = Math.Clamp(maxFrames, 2, 240);
+        safetyFrameLimit = Math.Clamp(safetyFrameLimit, 2, MaximumSafetyFrameLimit);
         string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
         string sessionDirectory = Path.Combine(outputRoot, "BrowserAgentCaptures", $"BrowserAgent-{stamp}");
         string framesDirectory = Path.Combine(sessionDirectory, "frames");
@@ -40,12 +42,20 @@ internal sealed class BrowserAgentCaptureSession
 
         var manifest = new BrowserAgentSessionManifest
         {
-            StartedUtc = DateTime.UtcNow
+            StartedUtc = DateTime.UtcNow,
+            SafetyFrameLimit = safetyFrameLimit
         };
         string manifestPath = Path.Combine(sessionDirectory, "session.json");
         SaveManifest(manifestPath, manifest);
 
-        status?.Invoke("Preparing active Chromium tab and waiting for DOM/layout stability...");
+        status?.Invoke("Showing the Browser Assisted capture region...");
+        await bridge.SendRequestAsync(
+            "preview",
+            new { durationMs = PreviewDurationMs },
+            TimeSpan.FromSeconds(5),
+            cancellationToken).ConfigureAwait(false);
+
+        status?.Invoke("Preparing the active Chromium tab and waiting for DOM/layout stability...");
         JsonElement begin = await bridge.SendRequestAsync(
             "begin",
             StabilityPayload(),
@@ -67,10 +77,10 @@ internal sealed class BrowserAgentCaptureSession
 
         try
         {
-            for (int sequence = 1; sequence <= maxFrames; sequence++)
+            for (int sequence = 1; sequence <= safetyFrameLimit; sequence++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                status?.Invoke($"Capturing browser frame {sequence}/{maxFrames}...");
+                status?.Invoke($"Capturing browser frame {sequence} — Auto until page end (F8 stops early)...");
 
                 JsonElement response = await bridge.SendRequestAsync(
                     "captureAndScroll",
@@ -82,7 +92,7 @@ internal sealed class BrowserAgentCaptureSession
                         overlapRatio = DefaultOverlapRatio,
                         hideFixed = sequence > 1
                     },
-                    TimeSpan.FromSeconds(35),
+                    TimeSpan.FromSeconds(45),
                     cancellationToken).ConfigureAwait(false);
 
                 BrowserAgentFrameRecord record = await SaveNewFrameAsync(
@@ -134,21 +144,27 @@ internal sealed class BrowserAgentCaptureSession
                             SaveManifest(manifestPath, manifest);
                             throw new InvalidOperationException(
                                 $"Browser Agent detected unstable overlap near frame {sequence} ({check.Detail}). " +
-                                "The recent viewport window was re-captured but still did not agree, so the PoC stopped instead of silently producing a broken long image.");
+                                "The recent viewport window was re-captured but still did not agree, so capture stopped instead of silently producing a broken long image.");
                         }
                     }
                 }
 
                 SaveManifest(manifestPath, manifest);
                 BrowserAgentFrameRecord accepted = manifest.Frames[^1];
+                string pageHint = accepted.PageCounterTotal > 0
+                    ? $", page={accepted.PageCounterCurrent}/{accepted.PageCounterTotal}"
+                    : string.Empty;
+                string remainingHint = accepted.EstimatedFramesToLoadedEnd > 0
+                    ? $", loaded-end≈{accepted.EstimatedFramesToLoadedEnd}f"
+                    : string.Empty;
                 status?.Invoke(
                     $"Frame {sequence}: y={accepted.ScrollYCss:F0}, stable={accepted.StabilityWaitMs}ms, " +
-                    $"mut={accepted.StabilityMutationCount}, grow={accepted.StabilityHeightGrowthCss:F0}px, " +
-                    $"overlap={accepted.OverlapMeanAbsoluteError:F2}, recovery={accepted.RecoveryGeneration}");
+                    $"grow={accepted.LazyWarmupGrowthCss + accepted.EndConfirmationGrowthCss:F0}px, " +
+                    $"overlap={accepted.OverlapMeanAbsoluteError:F2}{pageHint}{remainingHint}");
 
-                if (accepted.AtBottom)
+                if (accepted.AtBottom && accepted.EndConfirmed)
                 {
-                    stopReason = "document-bottom";
+                    stopReason = "document-bottom-confirmed";
                     break;
                 }
 
@@ -158,9 +174,9 @@ internal sealed class BrowserAgentCaptureSession
                     break;
                 }
 
-                if (sequence == maxFrames)
+                if (sequence == safetyFrameLimit)
                 {
-                    stopReason = "max-frame-limit";
+                    stopReason = "safety-frame-limit";
                 }
             }
         }
@@ -176,7 +192,7 @@ internal sealed class BrowserAgentCaptureSession
             manifest.Error = ex.Message;
             manifest.CompletedUtc = DateTime.UtcNow;
             SaveManifest(manifestPath, manifest);
-            LongCaptureLog.Error("Browser Agent v0.1.1 capture aborted", ex);
+            LongCaptureLog.Error("Browser Agent v0.1.2 capture aborted", ex);
             throw;
         }
 
@@ -190,21 +206,46 @@ internal sealed class BrowserAgentCaptureSession
         }
 
         status?.Invoke("Stitching verified frames using browser scroll geometry...");
-        string outputPath = Path.Combine(sessionDirectory, $"LongCapture-BrowserAgent-v011-{stamp}.png");
-        BrowserAgentStitchResult stitch = await Task.Run(
+        string outputPath = Path.Combine(sessionDirectory, $"LongCapture-BrowserAgent-v012-{stamp}.png");
+        BrowserAgentStitchResult rawStitch = await Task.Run(
             () => BrowserAgentStreamingPngStitcher.Stitch(sessionDirectory, manifest.Frames, outputPath),
             CancellationToken.None).ConfigureAwait(false);
 
-        manifest.Status = cancelled ? "partial-manual-stop" : "completed";
+        bool complete = string.Equals(stopReason, "document-bottom-confirmed", StringComparison.Ordinal);
+        manifest.Status = complete
+            ? "completed"
+            : cancelled
+                ? "partial-manual-stop"
+                : "partial-" + stopReason;
         manifest.StopReason = stopReason;
         manifest.FinalImage = Path.GetFileName(outputPath);
         manifest.CompletedUtc = DateTime.UtcNow;
         SaveManifest(manifestPath, manifest);
 
+        BrowserAgentFrameRecord last = manifest.Frames[^1];
+        var stitch = new BrowserAgentStitchResult
+        {
+            OutputPath = rawStitch.OutputPath,
+            Width = rawStitch.Width,
+            Height = rawStitch.Height,
+            ScaleX = rawStitch.ScaleX,
+            ScaleY = rawStitch.ScaleY,
+            FrameCount = rawStitch.FrameCount,
+            IsComplete = complete,
+            StopReason = stopReason,
+            PageCounterCurrent = last.PageCounterCurrent,
+            PageCounterTotal = last.PageCounterTotal
+        };
+
         int recoveries = manifest.Frames.Count(frame => frame.RecoveryGeneration > 0);
         LongCaptureLog.Info(
-            $"Browser Agent v0.1.1 capture completed frames={stitch.FrameCount} recoveries={recoveries} output={stitch.Width}x{stitch.Height} stop={stopReason} path={LongCaptureLog.OneLine(outputPath)}");
-        status?.Invoke($"Done: {stitch.FrameCount} verified frames -> {stitch.Width}x{stitch.Height}");
+            $"Browser Agent v0.1.2 capture ended complete={complete} frames={stitch.FrameCount} recoveries={recoveries} " +
+            $"output={stitch.Width}x{stitch.Height} stop={stopReason} page={last.PageCounterCurrent}/{last.PageCounterTotal} " +
+            $"path={LongCaptureLog.OneLine(outputPath)}");
+        status?.Invoke(
+            complete
+                ? $"Complete: true page end confirmed after {stitch.FrameCount} verified frames -> {stitch.Width}x{stitch.Height}"
+                : $"Partial: {stopReason}, {stitch.FrameCount} verified frames -> {stitch.Width}x{stitch.Height}");
         return stitch;
     }
 
@@ -224,21 +265,27 @@ internal sealed class BrowserAgentCaptureSession
         string pngDataUrl = ReadRequiredString(response, "pngDataUrl");
         byte[] png = DecodePngDataUrl(pngDataUrl);
         (int pixelWidth, int pixelHeight) = ReadPngDimensions(png);
-        string relativePath = Path.Combine("frames", $"frame-{sequence:000}.png");
+        string relativePath = Path.Combine("frames", $"frame-{sequence:0000}.png");
         string framePath = Path.Combine(sessionDirectory, relativePath);
         await File.WriteAllBytesAsync(framePath, png, cancellationToken).ConfigureAwait(false);
 
         JsonElement before = response.GetProperty("before");
         JsonElement after = response.GetProperty("after");
+        double viewportHeight = ReadDouble(before, "viewportHeight");
+        double scrollHeight = Math.Max(ReadDouble(before, "scrollHeight"), ReadDouble(after, "scrollHeight"));
+        double scrollY = ReadDouble(before, "scrollY");
+        double delta = Math.Max(1, Math.Floor(viewportHeight * (1 - DefaultOverlapRatio)));
+        int estimatedRemaining = (int)Math.Ceiling(Math.Max(0, scrollHeight - (scrollY + viewportHeight)) / delta);
+
         var record = new BrowserAgentFrameRecord
         {
             Sequence = sequence,
             FileName = relativePath,
-            ScrollYCss = ReadDouble(before, "scrollY"),
+            ScrollYCss = scrollY,
             ScrollYAfterCss = ReadDouble(after, "scrollY"),
-            ScrollHeightCss = Math.Max(ReadDouble(before, "scrollHeight"), ReadDouble(after, "scrollHeight")),
+            ScrollHeightCss = scrollHeight,
             ViewportWidthCss = ReadDouble(before, "viewportWidth"),
-            ViewportHeightCss = ReadDouble(before, "viewportHeight"),
+            ViewportHeightCss = viewportHeight,
             DevicePixelRatio = ReadDouble(before, "devicePixelRatio"),
             PixelWidth = pixelWidth,
             PixelHeight = pixelHeight,
@@ -249,9 +296,14 @@ internal sealed class BrowserAgentCaptureSession
             LazyWarmupTriggered = ReadBool(response, "warmupTriggered"),
             LazyWarmupGrowthCss = ReadDoubleOrDefault(response, "warmupGrowthCss"),
             CaptureStateChanged = ReadBool(response, "captureStateChanged"),
-            CapturedUtc = DateTime.UtcNow
+            CapturedUtc = DateTime.UtcNow,
+            PageCounterCurrent = ReadInt(before, "pageCounterCurrent"),
+            PageCounterTotal = ReadInt(before, "pageCounterTotal"),
+            PageCounterText = ReadOptionalString(before, "pageCounterText"),
+            EstimatedFramesToLoadedEnd = estimatedRemaining
         };
         ApplyStability(record, response);
+        ApplyEndConfirmation(record, response);
         return record;
     }
 
@@ -360,7 +412,15 @@ internal sealed class BrowserAgentCaptureSession
         frame.AtBottom = ReadBool(response, "atBottom");
         frame.StateHash = ReadOptionalString(before, "stateHash");
         frame.CaptureStateChanged = ReadBool(response, "captureStateChanged");
+        frame.PageCounterCurrent = ReadInt(before, "pageCounterCurrent");
+        frame.PageCounterTotal = ReadInt(before, "pageCounterTotal");
+        frame.PageCounterText = ReadOptionalString(before, "pageCounterText");
         frame.CapturedUtc = DateTime.UtcNow;
+        frame.EndConfirmed = false;
+        frame.EndConfirmationRounds = 0;
+        frame.EndConfirmationGrowthCss = 0;
+        frame.EndCounterIncomplete = false;
+        frame.EndConfidence = string.Empty;
         ApplyStability(frame, response);
     }
 
@@ -396,6 +456,16 @@ internal sealed class BrowserAgentCaptureSession
             0,
             ReadDoubleOrDefault(stability, "finalScrollHeight") -
             ReadDoubleOrDefault(stability, "initialScrollHeight"));
+    }
+
+    private static void ApplyEndConfirmation(BrowserAgentFrameRecord record, JsonElement response)
+    {
+        if (!response.TryGetProperty("endConfirmation", out JsonElement end)) return;
+        record.EndConfirmed = ReadBool(end, "confirmed");
+        record.EndConfirmationRounds = ReadInt(end, "rounds");
+        record.EndConfirmationGrowthCss = ReadDoubleOrDefault(end, "growthCss");
+        record.EndCounterIncomplete = ReadBool(end, "counterIncomplete");
+        record.EndConfidence = ReadOptionalString(end, "confidence");
     }
 
     private static void ValidateProgress(IReadOnlyList<BrowserAgentFrameRecord> existing, BrowserAgentFrameRecord current)
@@ -457,7 +527,7 @@ internal sealed class BrowserAgentCaptureSession
         int height = BinaryPrimitives.ReadInt32BigEndian(png.Slice(20, 4));
         if (width <= 0 || height <= 0 || width > 32768 || height > 32768)
         {
-            throw new InvalidDataException($"Browser Agent PNG dimensions {width}x{height} are outside PoC bounds.");
+            throw new InvalidDataException($"Browser Agent PNG dimensions {width}x{height} are outside Browser Assisted bounds.");
         }
         return (width, height);
     }

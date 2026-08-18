@@ -21,7 +21,12 @@ internal sealed class BrowserAgentIntegratedController : IDisposable
         bridge.AgentAttached += OnAgentAttached;
     }
 
-    public async Task<BrowserAgentStitchResult> CaptureAsync(Action<string>? status)
+    public Task<BrowserAgentStitchResult> CaptureAsync(Action<string>? status) =>
+        CaptureAsync(BrowserAgentCaptureOptions.Default, status);
+
+    public async Task<BrowserAgentStitchResult> CaptureAsync(
+        BrowserAgentCaptureOptions options,
+        Action<string>? status)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         if (!bridge.IsConnected)
@@ -34,6 +39,7 @@ internal sealed class BrowserAgentIntegratedController : IDisposable
             throw new InvalidOperationException("Browser Assisted Capture is already running.");
         }
 
+        options = (options ?? BrowserAgentCaptureOptions.Default).Normalize();
         captureCancellation = new CancellationTokenSource();
         RaiseStateChanged();
         var session = new BrowserAgentCaptureSession(bridge);
@@ -43,7 +49,8 @@ internal sealed class BrowserAgentIntegratedController : IDisposable
                 AppContext.BaseDirectory,
                 SafetyFrameLimit,
                 status,
-                captureCancellation.Token).ConfigureAwait(false);
+                captureCancellation.Token,
+                options).ConfigureAwait(false);
             LastSessionDirectory = session.LastSessionDirectory;
             return result;
         }

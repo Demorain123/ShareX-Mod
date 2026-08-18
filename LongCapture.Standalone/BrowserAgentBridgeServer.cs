@@ -11,6 +11,7 @@ internal sealed class BrowserAgentBridgeServer : IDisposable
     private readonly CancellationTokenSource cancellation = new();
     private readonly SemaphoreSlim writerLock = new(1, 1);
     private readonly ConcurrentDictionary<long, TaskCompletionSource<JsonElement>> pending = new();
+    private readonly ConcurrentDictionary<long, byte> cancelledRequests = new();
     private readonly object pipeSync = new();
     private readonly Task listenerTask;
     private NamedPipeServerStream? activePipe;
@@ -95,6 +96,12 @@ internal sealed class BrowserAgentBridgeServer : IDisposable
             }
 
             return await completion.Task.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            pending.TryRemove(id, out _);
+            cancelledRequests.TryAdd(id, 0);
+            throw;
         }
         catch
         {
@@ -182,7 +189,7 @@ internal sealed class BrowserAgentBridgeServer : IDisposable
             }
             catch (EndOfStreamException)
             {
-                // Chrome/native host disconnected.
+                // Chromium/native host disconnected.
             }
             catch (IOException ex)
             {
@@ -202,6 +209,7 @@ internal sealed class BrowserAgentBridgeServer : IDisposable
                     }
                 }
                 FailPending(new IOException("Browser Agent extension disconnected."));
+                cancelledRequests.Clear();
                 SafeRaiseConnectionChanged(false);
                 LongCaptureLog.Info("Browser Agent desktop bridge returned to listening state");
             }
@@ -229,7 +237,7 @@ internal sealed class BrowserAgentBridgeServer : IDisposable
             {
                 string summary = root.TryGetProperty("result", out JsonElement attached)
                     ? BuildAttachedSummary(attached)
-                    : "Chrome tab attached";
+                    : "Chromium tab attached";
                 LongCaptureLog.Info($"Browser Agent attached {LongCaptureLog.OneLine(summary)}");
                 SafeRaiseAgentAttached(summary);
                 continue;
@@ -243,7 +251,14 @@ internal sealed class BrowserAgentBridgeServer : IDisposable
 
             if (!pending.TryRemove(id, out TaskCompletionSource<JsonElement>? completion))
             {
-                LongCaptureLog.Warn($"Browser Agent ignored late/unknown response id={id}");
+                if (cancelledRequests.TryRemove(id, out _))
+                {
+                    LongCaptureLog.Info($"Browser Agent discarded response for cancelled request id={id}");
+                }
+                else
+                {
+                    LongCaptureLog.Warn($"Browser Agent ignored late/unknown response id={id}");
+                }
                 continue;
             }
 

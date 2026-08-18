@@ -38,7 +38,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Apply RC6 overlay chain
+      - name: Apply RC6 overlay chain then Browser Agent shell
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -75,6 +75,10 @@ jobs:
             & pwsh -NoProfile -File $hook
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
+
+          Write-Host "=== scripts\apply-browser-agent-v01-poc.ps1 ==="
+          & pwsh -NoProfile -File "scripts\apply-browser-agent-v01-poc.ps1"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git diff --check
 
       - name: Verify RC6 invariants survived PoC
@@ -189,7 +193,7 @@ jobs:
             "- Tested commit: $tested",
             "- Result: $result",
             "- Runner: windows-2025",
-            "- Gate: RC6 overlay chain + RC6 invariants + publish + deterministic Browser Agent self-test + RC6 QUICK + package boundary + extracted-package self-test"
+            "- Gate: RC6 overlay chain + post-RC6 Browser Agent shell + RC6 invariants + publish + deterministic Browser Agent self-test + RC6 QUICK + package boundary + extracted-package self-test"
           ) | Set-Content -LiteralPath $statusPath -Encoding utf8
 
           git config user.name "github-actions[bot]"

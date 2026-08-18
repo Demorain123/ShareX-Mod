@@ -158,8 +158,13 @@ jobs:
           foreach ($required in @("LongCapture.exe","START-BROWSER-AGENT-POC.cmd","BrowserAgent\Extension\manifest.json","BrowserAgent\INSTALL-BROWSER-AGENT.cmd")) {
             if (-not (Test-Path -LiteralPath (Join-Path $temp $required))) { throw "Final ZIP missing $required" }
           }
-          & (Join-Path $temp "LongCapture.exe") --browser-agent-poc-self-test
-          if ($LASTEXITCODE -ne 0) { throw "Extracted Browser Agent PoC self-test failed with exit code $LASTEXITCODE" }
+          $process = Start-Process `
+            -FilePath (Join-Path $temp "LongCapture.exe") `
+            -ArgumentList "--browser-agent-poc-self-test" `
+            -WorkingDirectory $temp `
+            -Wait `
+            -PassThru
+          if ($process.ExitCode -ne 0) { throw "Extracted Browser Agent PoC self-test failed with exit code $($process.ExitCode)" }
 
       - name: Upload PoC package
         if: success()

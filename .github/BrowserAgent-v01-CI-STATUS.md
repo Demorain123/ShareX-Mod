@@ -1,6 +1,6 @@
-# Browser Agent v0.1.1 Dynamic Stability CI status
+# Browser Agent v0.1.2 Integrated Auto-End CI status
 
-- Tested commit: 5ef6f31bc17c88aa9128aff3c5d28e54f4f75d7f
-- Result: success
+- Tested commit: 83ad7766c3bb9bc7f8ad4b6507379365f0ab6989
+- Result: failure
 - Runner: windows-2025
-- Gate: RC6 overlay chain + v0.1.1 shell + RC6 invariants + publish + overlap/stitch self-test + RC6 QUICK + permission/package boundary + extracted-package self-test
+- Gate: RC6 overlay chain + main-window Browser Assisted integration + true-end worker markers + publish + overlap/stitch self-test + RC6 QUICK + permission/package boundary + extracted-package self-test

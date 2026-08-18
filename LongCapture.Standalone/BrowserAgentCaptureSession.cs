@@ -5,9 +5,15 @@ namespace LongCapture.Standalone;
 
 internal sealed class BrowserAgentCaptureSession
 {
-    private const int DefaultSettleMs = 550;
-    private const double DefaultOverlapRatio = 0.18;
+    private const int StableWindowMs = 900;
+    private const int MaxStabilityWaitMs = 7000;
+    private const int StabilitySampleMs = 120;
+    private const double DefaultOverlapRatio = 0.26;
+    private const int RecoveryWindowFrames = 3;
+
     private readonly BrowserAgentBridgeServer bridge;
+
+    public string? LastSessionDirectory { get; private set; }
 
     public BrowserAgentCaptureSession(BrowserAgentBridgeServer bridge)
     {
@@ -22,7 +28,7 @@ internal sealed class BrowserAgentCaptureSession
     {
         if (!bridge.IsConnected)
         {
-            throw new InvalidOperationException("Browser Agent extension is not connected. Click the extension icon on the Chrome tab first.");
+            throw new InvalidOperationException("Browser Agent extension is not connected. Attach the active Chromium tab first.");
         }
 
         maxFrames = Math.Clamp(maxFrames, 2, 240);
@@ -30,6 +36,7 @@ internal sealed class BrowserAgentCaptureSession
         string sessionDirectory = Path.Combine(outputRoot, "BrowserAgentCaptures", $"BrowserAgent-{stamp}");
         string framesDirectory = Path.Combine(sessionDirectory, "frames");
         Directory.CreateDirectory(framesDirectory);
+        LastSessionDirectory = sessionDirectory;
 
         var manifest = new BrowserAgentSessionManifest
         {
@@ -38,17 +45,21 @@ internal sealed class BrowserAgentCaptureSession
         string manifestPath = Path.Combine(sessionDirectory, "session.json");
         SaveManifest(manifestPath, manifest);
 
-        status?.Invoke("Preparing active Chrome tab...");
+        status?.Invoke("Preparing active Chromium tab and waiting for DOM/layout stability...");
         JsonElement begin = await bridge.SendRequestAsync(
             "begin",
-            new { settleMs = DefaultSettleMs },
-            TimeSpan.FromSeconds(15),
+            StabilityPayload(),
+            TimeSpan.FromSeconds(20),
             cancellationToken).ConfigureAwait(false);
 
         double beginScrollY = ReadDouble(begin, "scrollY");
         if (Math.Abs(beginScrollY) > 2.0)
         {
             throw new InvalidOperationException($"Browser Agent could not reset the page to the top (scrollY={beginScrollY:F2}).");
+        }
+        if (begin.TryGetProperty("stability", out JsonElement beginStability) && !ReadBool(beginStability, "stable"))
+        {
+            throw new InvalidOperationException("The page did not become stable at the document top within the Browser Agent stability timeout.");
         }
 
         bool cancelled = false;
@@ -65,57 +76,83 @@ internal sealed class BrowserAgentCaptureSession
                     "captureAndScroll",
                     new
                     {
-                        settleMs = DefaultSettleMs,
+                        stableWindowMs = StableWindowMs,
+                        maxWaitMs = MaxStabilityWaitMs,
+                        sampleMs = StabilitySampleMs,
                         overlapRatio = DefaultOverlapRatio,
                         hideFixed = sequence > 1
                     },
-                    TimeSpan.FromSeconds(30),
+                    TimeSpan.FromSeconds(35),
                     cancellationToken).ConfigureAwait(false);
 
-                string pngDataUrl = ReadRequiredString(response, "pngDataUrl");
-                JsonElement before = response.GetProperty("before");
-                JsonElement after = response.GetProperty("after");
-                int hiddenCount = ReadInt(response, "hiddenCount");
-                bool atBottom = ReadBool(response, "atBottom");
-
-                byte[] png = DecodePngDataUrl(pngDataUrl);
-                (int pixelWidth, int pixelHeight) = ReadPngDimensions(png);
-                string relativePath = Path.Combine("frames", $"frame-{sequence:000}.png");
-                string framePath = Path.Combine(sessionDirectory, relativePath);
-                await File.WriteAllBytesAsync(framePath, png, cancellationToken).ConfigureAwait(false);
-
-                var record = new BrowserAgentFrameRecord
-                {
-                    Sequence = sequence,
-                    FileName = relativePath,
-                    ScrollYCss = ReadDouble(before, "scrollY"),
-                    ScrollYAfterCss = ReadDouble(after, "scrollY"),
-                    ScrollHeightCss = Math.Max(ReadDouble(before, "scrollHeight"), ReadDouble(after, "scrollHeight")),
-                    ViewportWidthCss = ReadDouble(before, "viewportWidth"),
-                    ViewportHeightCss = ReadDouble(before, "viewportHeight"),
-                    DevicePixelRatio = ReadDouble(before, "devicePixelRatio"),
-                    PixelWidth = pixelWidth,
-                    PixelHeight = pixelHeight,
-                    FixedCandidateCount = ReadInt(before, "fixedCandidateCount"),
-                    HiddenCount = hiddenCount,
-                    AtBottom = atBottom,
-                    StateHash = ReadOptionalString(before, "stateHash"),
-                    CapturedUtc = DateTime.UtcNow
-                };
+                BrowserAgentFrameRecord record = await SaveNewFrameAsync(
+                    sessionDirectory,
+                    sequence,
+                    response,
+                    cancellationToken).ConfigureAwait(false);
 
                 ValidateProgress(manifest.Frames, record);
-                manifest.Frames.Add(record);
-                SaveManifest(manifestPath, manifest);
-                status?.Invoke(
-                    $"Frame {sequence}: y={record.ScrollYCss:F0}, {pixelWidth}x{pixelHeight}, fixed={record.FixedCandidateCount}, hidden={record.HiddenCount}");
 
-                if (atBottom)
+                if (record.StabilityTimedOut)
+                {
+                    throw new InvalidOperationException(
+                        $"Browser Agent frame {sequence} did not reach DOM/layout stability within {MaxStabilityWaitMs} ms.");
+                }
+
+                manifest.Frames.Add(record);
+
+                if (manifest.Frames.Count == 1)
+                {
+                    record.OverlapVerified = true;
+                    record.OverlapStatus = "first-frame";
+                }
+                else if (record.Sequence == 2)
+                {
+                    record.OverlapVerified = true;
+                    record.OverlapStatus = "first-fixed-transition-skipped";
+                }
+                else
+                {
+                    BrowserAgentOverlapCheck check = VerifyAndStoreOverlap(
+                        sessionDirectory,
+                        manifest.Frames[^2],
+                        record);
+
+                    if (!check.Acceptable || record.CaptureStateChanged)
+                    {
+                        status?.Invoke(
+                            $"Dynamic-page change near frame {sequence}; re-capturing the last {Math.Min(RecoveryWindowFrames, manifest.Frames.Count)} viewports...");
+
+                        bool recovered = await RecoverRecentWindowAsync(
+                            sessionDirectory,
+                            manifest,
+                            status,
+                            cancellationToken).ConfigureAwait(false);
+
+                        if (!recovered)
+                        {
+                            SaveManifest(manifestPath, manifest);
+                            throw new InvalidOperationException(
+                                $"Browser Agent detected unstable overlap near frame {sequence} ({check.Detail}). " +
+                                "The recent viewport window was re-captured but still did not agree, so the PoC stopped instead of silently producing a broken long image.");
+                        }
+                    }
+                }
+
+                SaveManifest(manifestPath, manifest);
+                BrowserAgentFrameRecord accepted = manifest.Frames[^1];
+                status?.Invoke(
+                    $"Frame {sequence}: y={accepted.ScrollYCss:F0}, stable={accepted.StabilityWaitMs}ms, " +
+                    $"mut={accepted.StabilityMutationCount}, grow={accepted.StabilityHeightGrowthCss:F0}px, " +
+                    $"overlap={accepted.OverlapMeanAbsoluteError:F2}, recovery={accepted.RecoveryGeneration}");
+
+                if (accepted.AtBottom)
                 {
                     stopReason = "document-bottom";
                     break;
                 }
 
-                if (Math.Abs(record.ScrollYAfterCss - record.ScrollYCss) < 0.5)
+                if (Math.Abs(accepted.ScrollYAfterCss - accepted.ScrollYCss) < 0.5)
                 {
                     stopReason = "document-did-not-scroll";
                     break;
@@ -132,6 +169,16 @@ internal sealed class BrowserAgentCaptureSession
             cancelled = true;
             stopReason = "manual-stop";
         }
+        catch (Exception ex)
+        {
+            manifest.Status = "failed";
+            manifest.StopReason = "capture-error";
+            manifest.Error = ex.Message;
+            manifest.CompletedUtc = DateTime.UtcNow;
+            SaveManifest(manifestPath, manifest);
+            LongCaptureLog.Error("Browser Agent v0.1.1 capture aborted", ex);
+            throw;
+        }
 
         if (manifest.Frames.Count == 0)
         {
@@ -142,8 +189,8 @@ internal sealed class BrowserAgentCaptureSession
             throw new InvalidOperationException("Browser Agent capture ended before a usable frame was saved.");
         }
 
-        status?.Invoke("Stitching saved frames using browser scroll geometry...");
-        string outputPath = Path.Combine(sessionDirectory, $"LongCapture-BrowserAgent-v01-{stamp}.png");
+        status?.Invoke("Stitching verified frames using browser scroll geometry...");
+        string outputPath = Path.Combine(sessionDirectory, $"LongCapture-BrowserAgent-v011-{stamp}.png");
         BrowserAgentStitchResult stitch = await Task.Run(
             () => BrowserAgentStreamingPngStitcher.Stitch(sessionDirectory, manifest.Frames, outputPath),
             CancellationToken.None).ConfigureAwait(false);
@@ -154,10 +201,201 @@ internal sealed class BrowserAgentCaptureSession
         manifest.CompletedUtc = DateTime.UtcNow;
         SaveManifest(manifestPath, manifest);
 
+        int recoveries = manifest.Frames.Count(frame => frame.RecoveryGeneration > 0);
         LongCaptureLog.Info(
-            $"Browser Agent PoC capture completed frames={stitch.FrameCount} output={stitch.Width}x{stitch.Height} stop={stopReason} path={LongCaptureLog.OneLine(outputPath)}");
-        status?.Invoke($"Done: {stitch.FrameCount} frames -> {stitch.Width}x{stitch.Height}");
+            $"Browser Agent v0.1.1 capture completed frames={stitch.FrameCount} recoveries={recoveries} output={stitch.Width}x{stitch.Height} stop={stopReason} path={LongCaptureLog.OneLine(outputPath)}");
+        status?.Invoke($"Done: {stitch.FrameCount} verified frames -> {stitch.Width}x{stitch.Height}");
         return stitch;
+    }
+
+    private static object StabilityPayload() => new
+    {
+        stableWindowMs = StableWindowMs,
+        maxWaitMs = MaxStabilityWaitMs,
+        sampleMs = StabilitySampleMs
+    };
+
+    private async Task<BrowserAgentFrameRecord> SaveNewFrameAsync(
+        string sessionDirectory,
+        int sequence,
+        JsonElement response,
+        CancellationToken cancellationToken)
+    {
+        string pngDataUrl = ReadRequiredString(response, "pngDataUrl");
+        byte[] png = DecodePngDataUrl(pngDataUrl);
+        (int pixelWidth, int pixelHeight) = ReadPngDimensions(png);
+        string relativePath = Path.Combine("frames", $"frame-{sequence:000}.png");
+        string framePath = Path.Combine(sessionDirectory, relativePath);
+        await File.WriteAllBytesAsync(framePath, png, cancellationToken).ConfigureAwait(false);
+
+        JsonElement before = response.GetProperty("before");
+        JsonElement after = response.GetProperty("after");
+        var record = new BrowserAgentFrameRecord
+        {
+            Sequence = sequence,
+            FileName = relativePath,
+            ScrollYCss = ReadDouble(before, "scrollY"),
+            ScrollYAfterCss = ReadDouble(after, "scrollY"),
+            ScrollHeightCss = Math.Max(ReadDouble(before, "scrollHeight"), ReadDouble(after, "scrollHeight")),
+            ViewportWidthCss = ReadDouble(before, "viewportWidth"),
+            ViewportHeightCss = ReadDouble(before, "viewportHeight"),
+            DevicePixelRatio = ReadDouble(before, "devicePixelRatio"),
+            PixelWidth = pixelWidth,
+            PixelHeight = pixelHeight,
+            FixedCandidateCount = ReadInt(before, "fixedCandidateCount"),
+            HiddenCount = ReadInt(response, "hiddenCount"),
+            AtBottom = ReadBool(response, "atBottom"),
+            StateHash = ReadOptionalString(before, "stateHash"),
+            LazyWarmupTriggered = ReadBool(response, "warmupTriggered"),
+            LazyWarmupGrowthCss = ReadDoubleOrDefault(response, "warmupGrowthCss"),
+            CaptureStateChanged = ReadBool(response, "captureStateChanged"),
+            CapturedUtc = DateTime.UtcNow
+        };
+        ApplyStability(record, response);
+        return record;
+    }
+
+    private async Task<bool> RecoverRecentWindowAsync(
+        string sessionDirectory,
+        BrowserAgentSessionManifest manifest,
+        Action<string>? status,
+        CancellationToken cancellationToken)
+    {
+        if (manifest.Frames.Count < 2) return true;
+
+        int lastIndex = manifest.Frames.Count - 1;
+        int firstIndex = Math.Max(0, manifest.Frames.Count - RecoveryWindowFrames);
+        double resumeY = manifest.Frames[lastIndex].ScrollYAfterCss;
+
+        for (int i = firstIndex; i <= lastIndex; i++)
+        {
+            BrowserAgentFrameRecord frame = manifest.Frames[i];
+            JsonElement response = await bridge.SendRequestAsync(
+                "captureAt",
+                new
+                {
+                    scrollY = frame.ScrollYCss,
+                    stableWindowMs = Math.Max(StableWindowMs, 1100),
+                    maxWaitMs = Math.Max(MaxStabilityWaitMs, 8500),
+                    sampleMs = StabilitySampleMs,
+                    hideFixed = frame.Sequence > 1
+                },
+                TimeSpan.FromSeconds(35),
+                cancellationToken).ConfigureAwait(false);
+
+            await ReplaceFrameFromRecaptureAsync(
+                sessionDirectory,
+                frame,
+                response,
+                cancellationToken).ConfigureAwait(false);
+            frame.RecoveryGeneration++;
+        }
+
+        bool accepted = true;
+        int verifyFrom = Math.Max(1, firstIndex);
+        for (int i = verifyFrom; i <= lastIndex; i++)
+        {
+            BrowserAgentFrameRecord current = manifest.Frames[i];
+            if (current.Sequence == 2)
+            {
+                current.OverlapVerified = true;
+                current.OverlapStatus = "first-fixed-transition-skipped";
+                continue;
+            }
+
+            BrowserAgentOverlapCheck check = VerifyAndStoreOverlap(
+                sessionDirectory,
+                manifest.Frames[i - 1],
+                current);
+            if (!check.Acceptable)
+            {
+                accepted = false;
+                status?.Invoke($"Recovery overlap still unstable at frame {current.Sequence}: {check.Detail}");
+                break;
+            }
+        }
+
+        JsonElement move = await bridge.SendRequestAsync(
+            "moveTo",
+            new
+            {
+                scrollY = resumeY,
+                stableWindowMs = StableWindowMs,
+                maxWaitMs = MaxStabilityWaitMs,
+                sampleMs = StabilitySampleMs
+            },
+            TimeSpan.FromSeconds(25),
+            cancellationToken).ConfigureAwait(false);
+
+        if (move.TryGetProperty("stability", out JsonElement resumeStability) && !ReadBool(resumeStability, "stable"))
+        {
+            accepted = false;
+        }
+
+        return accepted;
+    }
+
+    private static async Task ReplaceFrameFromRecaptureAsync(
+        string sessionDirectory,
+        BrowserAgentFrameRecord frame,
+        JsonElement response,
+        CancellationToken cancellationToken)
+    {
+        string pngDataUrl = ReadRequiredString(response, "pngDataUrl");
+        byte[] png = DecodePngDataUrl(pngDataUrl);
+        (int pixelWidth, int pixelHeight) = ReadPngDimensions(png);
+        string framePath = Path.Combine(sessionDirectory, frame.FileName);
+        await File.WriteAllBytesAsync(framePath, png, cancellationToken).ConfigureAwait(false);
+
+        JsonElement before = response.GetProperty("before");
+        frame.ScrollYCss = ReadDouble(before, "scrollY");
+        frame.ScrollHeightCss = Math.Max(frame.ScrollHeightCss, ReadDouble(before, "scrollHeight"));
+        frame.ViewportWidthCss = ReadDouble(before, "viewportWidth");
+        frame.ViewportHeightCss = ReadDouble(before, "viewportHeight");
+        frame.DevicePixelRatio = ReadDouble(before, "devicePixelRatio");
+        frame.PixelWidth = pixelWidth;
+        frame.PixelHeight = pixelHeight;
+        frame.FixedCandidateCount = ReadInt(before, "fixedCandidateCount");
+        frame.HiddenCount = ReadInt(response, "hiddenCount");
+        frame.AtBottom = ReadBool(response, "atBottom");
+        frame.StateHash = ReadOptionalString(before, "stateHash");
+        frame.CaptureStateChanged = ReadBool(response, "captureStateChanged");
+        frame.CapturedUtc = DateTime.UtcNow;
+        ApplyStability(frame, response);
+    }
+
+    private static BrowserAgentOverlapCheck VerifyAndStoreOverlap(
+        string sessionDirectory,
+        BrowserAgentFrameRecord previous,
+        BrowserAgentFrameRecord current)
+    {
+        BrowserAgentOverlapCheck check = BrowserAgentOverlapVerifier.Measure(sessionDirectory, previous, current);
+        current.OverlapVerified = check.Comparable && check.Acceptable;
+        current.OverlapMeanAbsoluteError = check.MeanAbsoluteError;
+        current.OverlapStrongDiffRatio = check.StrongDiffRatio;
+        current.OverlapPixels = check.OverlapPixels;
+        current.OverlapStatus = check.Detail;
+        return check;
+    }
+
+    private static void ApplyStability(BrowserAgentFrameRecord record, JsonElement response)
+    {
+        if (!response.TryGetProperty("stabilityBefore", out JsonElement stability))
+        {
+            record.StabilityTimedOut = true;
+            return;
+        }
+
+        record.StabilityWaitMs = ReadInt(stability, "waitedMs");
+        record.StabilityTimedOut = !ReadBool(stability, "stable") || ReadBool(stability, "timedOut");
+        record.StabilityMutationCount = ReadInt(stability, "mutationCount");
+        record.StabilityResizeCount = ReadInt(stability, "resizeCount");
+        record.StabilityHeightChangeCount = ReadInt(stability, "heightChangeCount");
+        record.StabilityPendingImages = ReadInt(stability, "pendingImages");
+        record.StabilityHeightGrowthCss = Math.Max(
+            0,
+            ReadDoubleOrDefault(stability, "finalScrollHeight") -
+            ReadDoubleOrDefault(stability, "initialScrollHeight"));
     }
 
     private static void ValidateProgress(IReadOnlyList<BrowserAgentFrameRecord> existing, BrowserAgentFrameRecord current)
@@ -183,8 +421,6 @@ internal sealed class BrowserAgentCaptureSession
                 $"Browser Agent scrollY moved backwards: {current.ScrollYCss:F2} after {previous.ScrollYCss:F2}.");
         }
 
-        // An exact duplicate viewport cannot add pixels. It normally means the page
-        // uses an unsupported inner scroller or a script prevented document scrolling.
         if (Math.Abs(current.ScrollYCss - previous.ScrollYCss) < 0.5)
         {
             throw new InvalidOperationException(
@@ -244,6 +480,11 @@ internal sealed class BrowserAgentCaptureSession
             throw new InvalidDataException($"Browser Agent response is missing numeric '{name}'.");
         }
         return result;
+    }
+
+    private static double ReadDoubleOrDefault(JsonElement element, string name)
+    {
+        return element.TryGetProperty(name, out JsonElement value) && value.TryGetDouble(out double result) ? result : 0;
     }
 
     private static int ReadInt(JsonElement element, string name)

@@ -1,6 +1,6 @@
 # Browser Agent v0.1 CI status
 
-- Tested commit: fb0e4c72b8af8a3074791028311e3caa0b77b9f1
+- Tested commit: 63d5981f98012efe29490894574d6c6b802f2770
 - Result: failure
 - Runner: windows-2025
-- Gate: RC6 overlay chain + RC6 invariants + publish + deterministic Browser Agent self-test + RC6 QUICK + package boundary + extracted-package self-test
+- Gate: RC6 overlay chain + post-RC6 Browser Agent shell + RC6 invariants + publish + deterministic Browser Agent self-test + RC6 QUICK + package boundary + extracted-package self-test

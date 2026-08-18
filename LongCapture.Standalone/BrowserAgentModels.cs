@@ -35,17 +35,30 @@ internal sealed class BrowserAgentFrameRecord
     public int OverlapPixels { get; set; }
     public int RecoveryGeneration { get; set; }
     public string OverlapStatus { get; set; } = string.Empty;
+
+    // v0.1.2: progress / true-end evidence. The DOM counter is only a hint;
+    // geometry + repeated stable-bottom confirmation remains authoritative.
+    public int PageCounterCurrent { get; set; }
+    public int PageCounterTotal { get; set; }
+    public string PageCounterText { get; set; } = string.Empty;
+    public int EstimatedFramesToLoadedEnd { get; set; }
+    public bool EndConfirmed { get; set; }
+    public int EndConfirmationRounds { get; set; }
+    public double EndConfirmationGrowthCss { get; set; }
+    public bool EndCounterIncomplete { get; set; }
+    public string EndConfidence { get; set; } = string.Empty;
 }
 
 internal sealed class BrowserAgentSessionManifest
 {
-    public string ProtocolVersion { get; set; } = "0.1.1";
+    public string ProtocolVersion { get; set; } = "0.1.2";
     public DateTime StartedUtc { get; set; }
     public DateTime? CompletedUtc { get; set; }
     public string Status { get; set; } = "capturing";
     public string? FinalImage { get; set; }
     public string? StopReason { get; set; }
     public string? Error { get; set; }
+    public int SafetyFrameLimit { get; set; }
     public List<BrowserAgentFrameRecord> Frames { get; set; } = new();
 }
 
@@ -57,4 +70,8 @@ internal sealed class BrowserAgentStitchResult
     public required double ScaleX { get; init; }
     public required double ScaleY { get; init; }
     public required int FrameCount { get; init; }
+    public bool IsComplete { get; init; }
+    public string StopReason { get; init; } = string.Empty;
+    public int PageCounterCurrent { get; init; }
+    public int PageCounterTotal { get; init; }
 }

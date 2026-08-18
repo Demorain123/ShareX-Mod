@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-and-test:
@@ -70,8 +70,40 @@ jobs:
           if ($permissions -contains "debugger" -or $manifest.host_permissions) { throw "PoC permission boundary expanded unexpectedly" }
 
       - name: Upload PoC package
+        if: success()
         uses: actions/upload-artifact@v6
         with:
           name: LongCapture-Browser-Agent-v0.1-PoC-x64
           path: artifacts\LongCapture\**
           if-no-files-found: error
+
+      - name: Record push gate result
+        if: always() && github.event_name == 'push'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tested = "${{ github.sha }}"
+          $result = "${{ job.status }}"
+          $branch = "${{ github.ref_name }}"
+          $remoteLine = git ls-remote origin "refs/heads/$branch"
+          $remote = if ($remoteLine) { ($remoteLine -split "`t")[0].Trim() } else { "" }
+          if ($remote -ne $tested) {
+            Write-Host "Branch moved from tested commit $tested to $remote; skip stale CI status write-back."
+            exit 0
+          }
+
+          $statusPath = ".github\BrowserAgent-v01-CI-STATUS.md"
+          @"
+          # Browser Agent v0.1 CI status
+
+          - Tested commit: `$tested`
+          - Result: `$result`
+          - Runner: `windows-2025`
+          - Gate: restore + publish + deterministic Browser Agent self-test + existing QUICK + package boundary
+          "@ | Set-Content -LiteralPath $statusPath -Encoding utf8
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- $statusPath
+          git commit -m "ci: record Browser Agent v0.1 gate $result for $tested"
+          git push origin "HEAD:$branch"

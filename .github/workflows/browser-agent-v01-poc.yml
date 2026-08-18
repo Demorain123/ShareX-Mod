@@ -1,0 +1,71 @@
+name: LongCapture Browser Agent v0.1 PoC
+
+on:
+  push:
+    branches:
+      - "standalone/browser-agent-v0.1-poc"
+    paths:
+      - "LongCapture.Standalone/**"
+      - ".github/workflows/browser-agent-v01-poc.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: browser-agent-v01-poc-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: windows-2025
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Restore
+        run: dotnet restore --runtime win-x64 LongCapture.Standalone\LongCapture.Standalone.csproj
+
+      - name: Publish portable
+        run: dotnet publish LongCapture.Standalone\LongCapture.Standalone.csproj --no-restore --configuration Release --runtime win-x64 --self-contained true --output artifacts\LongCapture /m:1
+
+      - name: Browser Agent deterministic self-test
+        shell: cmd
+        run: artifacts\LongCapture\LongCapture.exe --browser-agent-poc-self-test
+
+      - name: Existing QUICK acceptance
+        shell: cmd
+        run: artifacts\LongCapture\1-RUN-AUTOMATED-TESTS.cmd --ci
+
+      - name: Verify Browser Agent package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $required = @(
+            "artifacts\LongCapture\START-BROWSER-AGENT-POC.cmd",
+            "artifacts\LongCapture\BrowserAgent\README.md",
+            "artifacts\LongCapture\BrowserAgent\INSTALL-BROWSER-AGENT.cmd",
+            "artifacts\LongCapture\BrowserAgent\Install-Browser-Agent.ps1",
+            "artifacts\LongCapture\BrowserAgent\UNINSTALL-BROWSER-AGENT.cmd",
+            "artifacts\LongCapture\BrowserAgent\Extension\manifest.json",
+            "artifacts\LongCapture\BrowserAgent\Extension\service-worker.js"
+          )
+          foreach ($path in $required) {
+            if (-not (Test-Path -LiteralPath $path)) { throw "Missing Browser Agent package file: $path" }
+          }
+
+          $manifest = Get-Content "artifacts\LongCapture\BrowserAgent\Extension\manifest.json" -Raw | ConvertFrom-Json
+          if ($manifest.manifest_version -ne 3) { throw "Browser Agent extension is not Manifest V3" }
+          $permissions = @($manifest.permissions)
+          foreach ($permission in @("activeTab", "scripting", "nativeMessaging")) {
+            if ($permissions -notcontains $permission) { throw "Missing extension permission: $permission" }
+          }
+          if ($permissions -contains "debugger" -or $manifest.host_permissions) { throw "PoC permission boundary expanded unexpectedly" }
+
+      - name: Upload PoC package
+        uses: actions/upload-artifact@v6
+        with:
+          name: LongCapture-Browser-Agent-v0.1-PoC-x64
+          path: artifacts\LongCapture\**
+          if-no-files-found: error

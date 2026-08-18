@@ -7,6 +7,12 @@ on:
     paths:
       - "LongCapture.Standalone/**"
       - ".github/workflows/browser-agent-v01-poc.yml"
+  pull_request:
+    branches:
+      - "standalone/longcapture-v0.1.9-rc6-sparse-edge-evidence"
+    paths:
+      - "LongCapture.Standalone/**"
+      - ".github/workflows/browser-agent-v01-poc.yml"
   workflow_dispatch:
 
 concurrency:

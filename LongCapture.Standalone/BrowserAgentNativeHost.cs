@@ -49,29 +49,11 @@ internal static class BrowserAgentNativeHost
             Task.WhenAny(extensionToDesktop, desktopToExtension).GetAwaiter().GetResult();
             cancellation.Cancel();
 
-            try
-            {
-                pipe.Dispose();
-            }
-            catch
-            {
-                // The peer may already have closed the pipe.
-            }
-
-            try
-            {
-                Task.WhenAll(extensionToDesktop, desktopToExtension).GetAwaiter().GetResult();
-            }
-            catch (OperationCanceledException)
-            {
-                // Expected when either side closes the native messaging port.
-            }
-            catch (IOException)
-            {
-                // Expected when Chrome or the desktop bridge closes first.
-            }
-
-            LongCaptureLog.Info("Browser Agent native host stopped normally");
+            // Do not synchronously wait for the losing stdio read. Some Windows
+            // standard-input handles do not observe cancellation until the handle is
+            // closed. Returning disposes all three streams and lets the short-lived
+            // native-host process terminate immediately with Chrome's port.
+            LongCaptureLog.Info("Browser Agent native host peer closed; terminating proxy");
             return 0;
         }
         catch (TimeoutException)

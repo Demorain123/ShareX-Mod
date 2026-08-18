@@ -71,10 +71,10 @@ internal static class BrowserAgentDiagnosticsExporter
 
             ZipArchiveEntry readme = archive.CreateEntry("README.txt", CompressionLevel.Optimal);
             using var writer = new StreamWriter(readme.Open());
-            writer.WriteLine("LongCapture Browser Agent v0.1.1 diagnostics");
+            writer.WriteLine("LongCapture Browser Agent v0.1.2 diagnostics");
             writer.WriteLine($"Session: {sessionDirectory}");
             writer.WriteLine($"Exported UTC: {DateTime.UtcNow:O}");
-            writer.WriteLine("Contains the Browser Agent session evidence plus LongCapture logs overlapping the capture time.");
+            writer.WriteLine("Contains Browser Agent raw frames/session telemetry plus LongCapture logs overlapping the capture time.");
         }
 
         LongCaptureLog.Info($"Browser Agent diagnostics exported path={LongCaptureLog.OneLine(outputPath)}");

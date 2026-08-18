@@ -1,75 +1,135 @@
-# LongCapture Browser Agent v0.1 PoC
+# LongCapture Browser Agent v0.1.1 — Dynamic Page Stability
 
-This is deliberately a **small proof-of-concept**. It does not replace Normal Long Capture and does not modify the RC6 raster capture/matching path.
+Browser Agent v0.1.1 is still a deliberately small proof-of-concept. It **does not replace Normal Long Capture** and it does not modify the RC6 raster capture/matching path.
 
-## What v0.1 proves
+The first real v0.1 Linux.do run reached 155 frames / 2552×173612, proving the active-tab transport, fixed/sticky hiding and bounded-memory stitch path. It also exposed the next problem: the page's loaded `scrollHeight` grew from about 15.8k CSS px to 60.6k CSS px while capture was running, so a viewport could be captured before lazy/dynamic content had finished materializing.
 
-The Chrome extension is only a thin active-tab helper. For each viewport it reports document geometry and fixed/sticky candidates, optionally hides safe fixed/sticky candidates for that one screenshot, captures the active tab, restores the page, scrolls the document, and returns the PNG to LongCapture.
+v0.1.1 targets exactly that failure mode.
 
-LongCapture remains responsible for:
+## What changed in v0.1.1
 
-- saving every raw PNG frame;
-- validating viewport/scroll geometry;
-- stitching the final long PNG;
-- refusing geometry gaps instead of inventing pixels;
-- saving `session.json` evidence beside the frames.
+### 1. DOM/layout stability gate
 
-The stitcher uses browser-provided absolute `scrollY` rather than image-match guesses and writes the final PNG with bounded memory. It never allocates one giant long-image bitmap.
+Before a viewport becomes evidence, the extension now waits for a quiet window using:
 
-## Intentionally NOT in v0.1
+- `MutationObserver` for subtree/text and lazy-source mutations;
+- `ResizeObserver` for root/body size changes;
+- repeated `scrollHeight` / layout-height samples;
+- nearby incomplete image checks;
+- `document.fonts.status`;
+- two final animation frames before accepting the page as stable.
 
-- PDF capture/export
-- OCR
-- editor/annotations
+The default quiet window is 900 ms with a 7 s maximum wait.
+
+### 2. Lazy-boundary warm-up
+
+When capture approaches the currently loaded document bottom, Browser Agent temporarily looks ahead without capturing, waits for the lazy/infinite loader to materialize the next chunk, then returns to the intended viewport and waits again.
+
+This is generic; there is still no Linux.do-specific selector or recipe.
+
+### 3. Raster overlap verification
+
+LongCapture no longer trusts DOM geometry alone. From frame 3 onward it samples the real PNG overlap between adjacent viewports.
+
+A frame records:
+
+- overlap mean absolute error;
+- strong-difference ratio;
+- overlap pixel count;
+- whether the overlap passed;
+- recovery generation.
+
+If a dynamic page changes under capture, the last three viewports are re-captured at their absolute `scrollY` positions and checked again. If they still disagree, v0.1.1 **stops safely instead of silently writing a visually broken long image**.
+
+### 4. Better evidence
+
+`session.json` now records per-frame:
+
+- stability wait time;
+- mutation / resize / height-change counts;
+- pending images;
+- stability-time `scrollHeight` growth;
+- lazy warm-up activation/growth;
+- whether page state changed during `captureVisibleTab`;
+- overlap score;
+- recovery count.
+
+### 5. Shortcuts and diagnostics
+
+- **F8**: global Start / Stop Browser Assisted Capture.
+- **Ctrl+Shift+L**: browser-extension shortcut to attach the active tab. This can be remapped in the browser's extension-shortcuts page.
+- **Open logs** button.
+- **Export diagnostics ZIP** button.
+- Capture failures automatically attempt to export a diagnostics ZIP containing the session evidence and LongCapture logs overlapping the capture time.
+
+## Permission boundary
+
+The extension still declares only:
+
+- `activeTab`
+- `scripting`
+- `nativeMessaging`
+
+v0.1.1 does **not** add:
+
+- `<all_urls>`
+- `debugger`
+- CDP attachment
 - extension-side stitching
-- Chrome debugger/CDP attachment
-- `<all_urls>` host permission
-- inner-scroll-container discovery
-- iframe traversal
-- special lazy-load automation
-- site-specific recipes
 
-Those only become candidates after this PoC proves the basic path on the same Linux.do torture page used for RC6 testing.
+## Install / update
 
-## Install once
+If v0.1 was already loaded unpacked:
 
-1. Open `chrome://extensions`.
-2. Enable **Developer mode**.
-3. Choose **Load unpacked** and select this package's `BrowserAgent\Extension` folder.
-4. Copy the 32-character extension ID Chrome shows.
-5. Run `BrowserAgent\INSTALL-BROWSER-AGENT.cmd` and paste that extension ID.
+1. Replace the old package with the v0.1.1 package.
+2. Open the browser extensions page and press **Reload** on LongCapture Browser Agent.
+3. The extension ID should stay the same when the same unpacked path is reused. If it changes, run `BrowserAgent\INSTALL-BROWSER-AGENT.cmd` again with the new 32-character ID.
+4. Start `START-BROWSER-AGENT-POC.cmd`.
 
-The installer writes only the current user's Chrome Native Messaging registration (`HKCU`). It does not require administrator rights.
+Fresh install:
 
-## Run the PoC
+1. Open `chrome://extensions` (or your Chromium browser's extensions page).
+2. Enable Developer mode.
+3. Load unpacked: `BrowserAgent\Extension`.
+4. Copy the extension ID.
+5. Run `BrowserAgent\INSTALL-BROWSER-AGENT.cmd`.
+6. Start `START-BROWSER-AGENT-POC.cmd`.
 
-1. Run `START-BROWSER-AGENT-POC.cmd` next to `LongCapture.exe`.
-2. Open the target page in normal daily Chrome and make that tab active.
-3. Click the **LongCapture Browser Agent v0.1 PoC** extension icon. The PoC window should change to `native host connected` and show the attached tab.
-4. Press **Start Browser Assisted Capture**.
-5. Keep that tab active while capture runs. Switching to another tab is treated as an error rather than silently capturing the wrong page.
-6. Press **Stop** if you want a partial capture; already-saved frames are still stitched.
+## Run
 
-Output is stored under:
+1. Activate the target tab.
+2. Click the Browser Agent icon or press **Ctrl+Shift+L**.
+3. Confirm `Connection: native host connected`.
+4. Press **F8** (or Start).
+5. Keep the attached tab active.
+6. Press **F8** again to stop early.
+
+Output:
 
 `BrowserAgentCaptures\BrowserAgent-YYYYMMDD-HHMMSS\`
 
-with:
+contains raw frames, `session.json`, and the final long PNG.
 
-- `frames\frame-001.png`, `frame-002.png`, ...
-- `session.json`
-- `LongCapture-BrowserAgent-v01-*.png`
+Diagnostics ZIPs are written below:
 
-## PoC pass criteria
+`BrowserAgentCaptures\Diagnostics\`
 
-For the first real comparison, use the same Linux.do page and viewport used for RC6.
+## v0.1.1 real-test target
 
-The path is interesting only if all of these are true:
+Use the same Linux.do torture page again.
 
-- the long image remains geometrically continuous and clear;
-- the recurring `Back / xx / 312` fixed control does not repeat down the body (the first viewport may retain it intentionally);
-- a long run can exceed 100 viewports without memory growth caused by a giant destination bitmap;
-- raw frames and `session.json` are sufficient to reproduce/diagnose a failure;
-- Normal Long Capture remains unchanged and available as the all-app fallback.
+Pass is now stricter than v0.1:
 
-If the document itself does not scroll because the site uses a nested scroller, v0.1 stops with `document-did-not-scroll`. That is an explicit PoC boundary, not a reason to add inner-scroller complexity before the basic route is proven.
+- 100+ viewports can run without giant-bitmap memory growth;
+- fixed/sticky controls do not stamp repeatedly down the body;
+- the final image remains continuous across dynamic-load boundaries;
+- `session.json` shows stability/overlap/recovery telemetry;
+- an unstable overlap is recovered or causes a clear safe stop — never a silent corrupt success.
+
+Still intentionally out of scope:
+
+- inner scroll-container discovery;
+- iframe traversal;
+- PDF/OCR/editor;
+- site-specific recipes;
+- debugger/CDP.

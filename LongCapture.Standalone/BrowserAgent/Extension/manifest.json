@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "LongCapture Browser Agent v0.1 PoC",
+  "version": "0.1.0",
+  "description": "Thin active-tab capture helper for the LongCapture Browser Assisted proof-of-concept.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "nativeMessaging"
+  ],
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "action": {
+    "default_title": "Attach this tab to LongCapture Browser Agent"
+  }
+}

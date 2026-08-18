@@ -1,9 +1,13 @@
 const HOST_NAME = "com.longcapture.browser_agent";
 const MIN_CAPTURE_INTERVAL_MS = 520;
+const DEFAULT_STABLE_WINDOW_MS = 900;
+const DEFAULT_MAX_STABILITY_WAIT_MS = 7000;
 let nativePort = null;
 let target = null;
 
-chrome.action.onClicked.addListener(async (tab) => {
+chrome.action.onClicked.addListener((tab) => { void attachTab(tab); });
+
+async function attachTab(tab) {
   if (!tab || typeof tab.id !== "number" || typeof tab.windowId !== "number") {
     return;
   }
@@ -38,16 +42,16 @@ chrome.action.onClicked.addListener(async (tab) => {
         url: target.url,
         tabId: target.tabId,
         windowId: target.windowId,
-        protocolVersion: "0.1"
+        protocolVersion: "0.1.1"
       }
     });
-    await setBadge("ON", "LongCapture Browser Agent attached to this tab");
+    await setBadge("ON", "LongCapture Browser Agent v0.1.1 attached to this tab");
   } catch (error) {
     console.error("LongCapture Browser Agent could not connect:", error);
     nativePort = null;
     await setBadge("ERR", String(error?.message || error));
   }
-});
+}
 
 async function handleDesktopMessage(message) {
   if (!nativePort || !message || typeof message.id !== "number" || typeof message.type !== "string") {
@@ -69,6 +73,12 @@ async function handleDesktopMessage(message) {
       case "captureAndScroll":
         result = await captureAndScroll(payload);
         break;
+      case "captureAt":
+        result = await captureAt(payload);
+        break;
+      case "moveTo":
+        result = await moveTo(payload);
+        break;
       case "restore":
         result = await executeInTarget(restoreHiddenCandidates);
         break;
@@ -89,20 +99,83 @@ async function handleDesktopMessage(message) {
   }
 }
 
+function stabilityOptions(payload) {
+  return {
+    stableWindowMs: clampNumber(payload.stableWindowMs, 400, 3000, DEFAULT_STABLE_WINDOW_MS),
+    maxWaitMs: clampNumber(payload.maxWaitMs, 1500, 12000, DEFAULT_MAX_STABILITY_WAIT_MS),
+    sampleMs: clampNumber(payload.sampleMs, 80, 300, 120)
+  };
+}
+
 async function beginCapture(payload) {
-  const settleMs = clampNumber(payload.settleMs, MIN_CAPTURE_INTERVAL_MS, 5000, 550);
-  await executeInTarget(scrollDocumentToTop);
-  await sleep(settleMs);
-  return await collectState();
+  const options = stabilityOptions(payload);
+  await executeInTarget(scrollDocumentToAbsolute, [0]);
+  const stability = await waitForStabilityOnTarget(options);
+  const state = await collectState();
+  return { ...state, stability };
 }
 
 async function captureAndScroll(payload) {
-  const settleMs = clampNumber(payload.settleMs, MIN_CAPTURE_INTERVAL_MS, 5000, 550);
-  const overlapRatio = clampNumber(payload.overlapRatio, 0.05, 0.45, 0.18);
+  const options = stabilityOptions(payload);
+  const overlapRatio = clampNumber(payload.overlapRatio, 0.10, 0.45, 0.26);
   const hideFixed = payload.hideFixed === true;
 
+  const warmup = await warmLazyBoundary(options);
+  const stabilityBefore = await waitForStabilityOnTarget(options);
+  const captured = await captureCurrentViewport(payload, stabilityBefore, hideFixed);
+
+  const atBottom = captured.before.scrollY + captured.before.viewportHeight >= captured.before.scrollHeight - 2;
+  let stabilityAfter = null;
+  let after = captured.afterCapture;
+
+  if (!atBottom) {
+    const delta = Math.max(1, Math.floor(captured.before.viewportHeight * (1 - overlapRatio)));
+    await executeInTarget(scrollDocumentBy, [delta]);
+    stabilityAfter = await waitForStabilityOnTarget(options);
+    after = await collectState();
+  }
+
+  return {
+    ...captured,
+    after,
+    stabilityAfter,
+    warmupTriggered: warmup.triggered,
+    warmupGrowthCss: warmup.growthCss,
+    atBottom
+  };
+}
+
+async function captureAt(payload) {
+  const options = stabilityOptions(payload);
+  const targetScrollY = Math.max(0, Number(payload.scrollY) || 0);
+  const hideFixed = payload.hideFixed === true;
+
+  await executeInTarget(scrollDocumentToAbsolute, [targetScrollY]);
+  const stabilityBefore = await waitForStabilityOnTarget(options);
+  const captured = await captureCurrentViewport(payload, stabilityBefore, hideFixed);
+  const atBottom = captured.before.scrollY + captured.before.viewportHeight >= captured.before.scrollHeight - 2;
+
+  return {
+    ...captured,
+    after: captured.afterCapture,
+    stabilityAfter: stabilityBefore,
+    warmupTriggered: false,
+    warmupGrowthCss: 0,
+    atBottom
+  };
+}
+
+async function moveTo(payload) {
+  const options = stabilityOptions(payload);
+  const targetScrollY = Math.max(0, Number(payload.scrollY) || 0);
+  await executeInTarget(scrollDocumentToAbsolute, [targetScrollY]);
+  const stability = await waitForStabilityOnTarget(options);
+  const state = await collectState();
+  return { state, stability };
+}
+
+async function captureCurrentViewport(payload, stabilityBefore, hideFixed) {
   const before = await collectState();
-  const atBottom = before.scrollY + before.viewportHeight >= before.scrollHeight - 2;
   let hiddenCount = 0;
   let pngDataUrl;
 
@@ -110,7 +183,6 @@ async function captureAndScroll(payload) {
     if (hideFixed) {
       const hidden = await executeInTarget(hideSafeFixedCandidates);
       hiddenCount = Number(hidden?.hiddenCount || 0);
-      // Give the compositor one animation frame to apply visibility changes.
       await sleep(34);
     }
 
@@ -122,30 +194,80 @@ async function captureAndScroll(payload) {
     }
   }
 
-  if (!atBottom) {
-    const delta = Math.max(1, Math.floor(before.viewportHeight * (1 - overlapRatio)));
-    await executeInTarget(scrollDocumentBy, [delta]);
-    await sleep(settleMs);
-  }
+  const afterCapture = await collectState();
+  const captureStateChanged =
+    before.stateHash !== afterCapture.stateHash ||
+    Math.abs(before.scrollHeight - afterCapture.scrollHeight) > 1 ||
+    Math.abs(before.scrollY - afterCapture.scrollY) > 0.5;
 
-  const after = await collectState();
   return {
     before,
-    after,
+    afterCapture,
+    stabilityBefore,
     hiddenCount,
-    atBottom,
+    captureStateChanged,
     pngDataUrl
   };
 }
 
+async function warmLazyBoundary(options) {
+  const initial = await collectState();
+  const distanceToBottom = initial.scrollHeight - (initial.scrollY + initial.viewportHeight);
+  const triggerDistance = initial.viewportHeight * 2.2;
+
+  if (distanceToBottom > triggerDistance || distanceToBottom <= 2) {
+    return { triggered: false, growthCss: 0 };
+  }
+
+  const savedY = initial.scrollY;
+  let greatestHeight = initial.scrollHeight;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const state = await collectState();
+    const maxY = Math.max(0, state.scrollHeight - state.viewportHeight);
+    const probeY = Math.min(maxY, savedY + state.viewportHeight * 0.90);
+    if (probeY <= savedY + 2) break;
+
+    await executeInTarget(scrollDocumentToAbsolute, [probeY]);
+    await waitForStabilityOnTarget({
+      stableWindowMs: Math.max(options.stableWindowMs, 1050),
+      maxWaitMs: Math.max(options.maxWaitMs, 8000),
+      sampleMs: options.sampleMs
+    });
+
+    const grown = await collectState();
+    greatestHeight = Math.max(greatestHeight, grown.scrollHeight);
+    if (grown.scrollHeight <= state.scrollHeight + 2) break;
+  }
+
+  await executeInTarget(scrollDocumentToAbsolute, [savedY]);
+  await waitForStabilityOnTarget(options);
+  return {
+    triggered: true,
+    growthCss: Math.max(0, greatestHeight - initial.scrollHeight)
+  };
+}
+
+async function waitForStabilityOnTarget(options) {
+  const result = await executeInTarget(waitForPageStability, [
+    options.stableWindowMs,
+    options.maxWaitMs,
+    options.sampleMs
+  ]);
+  if (!result || typeof result.stable !== "boolean") {
+    throw new Error("Browser Agent page-stability probe returned no result.");
+  }
+  return result;
+}
+
 async function assertTargetIsActive() {
   if (!target || typeof target.tabId !== "number") {
-    throw new Error("No Chrome tab is attached. Click the LongCapture Browser Agent extension icon on the target tab.");
+    throw new Error("No Chromium tab is attached. Click the LongCapture Browser Agent extension icon on the target tab.");
   }
 
   const tab = await chrome.tabs.get(target.tabId);
   if (!tab.active || tab.windowId !== target.windowId) {
-    throw new Error("The attached Chrome tab is no longer the active tab in its window. Reactivate it before continuing.");
+    throw new Error("The attached Chromium tab is no longer the active tab in its window. Reactivate it before continuing.");
   }
 }
 
@@ -176,6 +298,10 @@ function collectDocumentState() {
     root?.scrollHeight || 0,
     document.documentElement?.scrollHeight || 0,
     document.body?.scrollHeight || 0
+  );
+  const layoutHeight = Math.max(
+    document.documentElement?.getBoundingClientRect?.().height || 0,
+    document.body?.getBoundingClientRect?.().height || 0
   );
 
   const fixedCandidates = [];
@@ -219,16 +345,158 @@ function collectDocumentState() {
   return {
     scrollY,
     scrollHeight,
+    layoutHeight,
     viewportWidth,
     viewportHeight,
     devicePixelRatio: window.devicePixelRatio || 1,
     fixedCandidateCount: fixedCandidates.length,
     fixedCandidates,
-    stateHash: `${Math.round(scrollY)}:${Math.round(scrollHeight)}:${elementCount}:${document.body?.childElementCount || 0}`
+    stateHash: `${Math.round(scrollY)}:${Math.round(scrollHeight)}:${Math.round(layoutHeight)}:${elementCount}:${document.body?.childElementCount || 0}`
   };
 }
 
-async function scrollDocumentToTop() {
+async function waitForPageStability(stableWindowMs, maxWaitMs, sampleMs) {
+  const start = performance.now();
+  let lastChange = start;
+  let mutationCount = 0;
+  let resizeCount = 0;
+  let heightChangeCount = 0;
+  let samples = 0;
+  let pendingImages = 0;
+
+  const readMetrics = () => {
+    const root = document.scrollingElement || document.documentElement;
+    const scrollHeight = Math.max(
+      root?.scrollHeight || 0,
+      document.documentElement?.scrollHeight || 0,
+      document.body?.scrollHeight || 0
+    );
+    const layoutHeight = Math.max(
+      document.documentElement?.getBoundingClientRect?.().height || 0,
+      document.body?.getBoundingClientRect?.().height || 0
+    );
+
+    let pending = 0;
+    const viewportHeight = window.innerHeight || 1;
+    for (const image of document.images || []) {
+      if (image.complete) continue;
+      const rect = image.getBoundingClientRect();
+      if (rect.bottom >= -viewportHeight && rect.top <= viewportHeight * 2) pending++;
+      if (pending >= 64) break;
+    }
+
+    return {
+      scrollHeight,
+      layoutHeight,
+      pendingImages: pending,
+      fontsLoading: document.fonts?.status === "loading"
+    };
+  };
+
+  let metrics = readMetrics();
+  const initialScrollHeight = metrics.scrollHeight;
+
+  const markChange = () => {
+    lastChange = performance.now();
+  };
+
+  const mutationObserver = new MutationObserver((records) => {
+    mutationCount += records.length;
+    markChange();
+  });
+
+  mutationObserver.observe(document.documentElement, {
+    subtree: true,
+    childList: true,
+    characterData: true,
+    attributes: true,
+    attributeFilter: ["src", "srcset", "sizes", "hidden", "open"]
+  });
+
+  let resizeObserver = null;
+  try {
+    resizeObserver = new ResizeObserver((entries) => {
+      resizeCount += entries.length;
+      markChange();
+    });
+    resizeObserver.observe(document.documentElement);
+    if (document.body) resizeObserver.observe(document.body);
+  } catch (_) {
+    resizeObserver = null;
+  }
+
+  try {
+    while (true) {
+      await new Promise(resolve => setTimeout(resolve, sampleMs));
+      samples++;
+
+      const current = readMetrics();
+      pendingImages = current.pendingImages;
+      if (
+        Math.abs(current.scrollHeight - metrics.scrollHeight) > 1 ||
+        Math.abs(current.layoutHeight - metrics.layoutHeight) > 1
+      ) {
+        heightChangeCount++;
+        markChange();
+      }
+      if (current.pendingImages !== metrics.pendingImages || current.fontsLoading !== metrics.fontsLoading) {
+        markChange();
+      }
+      metrics = current;
+
+      const now = performance.now();
+      const quietFor = now - lastChange;
+      const stable = quietFor >= stableWindowMs && current.pendingImages === 0 && !current.fontsLoading;
+      if (stable) {
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const finalMetrics = readMetrics();
+        if (
+          Math.abs(finalMetrics.scrollHeight - metrics.scrollHeight) <= 1 &&
+          Math.abs(finalMetrics.layoutHeight - metrics.layoutHeight) <= 1 &&
+          finalMetrics.pendingImages === 0 &&
+          !finalMetrics.fontsLoading
+        ) {
+          return {
+            stable: true,
+            timedOut: false,
+            waitedMs: Math.round(performance.now() - start),
+            quietMs: Math.round(performance.now() - lastChange),
+            mutationCount,
+            resizeCount,
+            heightChangeCount,
+            samples,
+            pendingImages: finalMetrics.pendingImages,
+            initialScrollHeight,
+            finalScrollHeight: finalMetrics.scrollHeight
+          };
+        }
+        metrics = finalMetrics;
+        markChange();
+      }
+
+      if (now - start >= maxWaitMs) {
+        return {
+          stable: false,
+          timedOut: true,
+          waitedMs: Math.round(now - start),
+          quietMs: Math.round(now - lastChange),
+          mutationCount,
+          resizeCount,
+          heightChangeCount,
+          samples,
+          pendingImages,
+          initialScrollHeight,
+          finalScrollHeight: current.scrollHeight
+        };
+      }
+    }
+  } finally {
+    mutationObserver.disconnect();
+    resizeObserver?.disconnect();
+  }
+}
+
+async function scrollDocumentToAbsolute(scrollY) {
   const restore = (element, name, value, priority) => {
     if (!element) return;
     if (value) element.style.setProperty(name, value, priority || "");
@@ -244,7 +512,7 @@ async function scrollDocumentToTop() {
   try {
     html?.style.setProperty("scroll-behavior", "auto", "important");
     body?.style.setProperty("scroll-behavior", "auto", "important");
-    window.scrollTo(0, 0);
+    window.scrollTo(0, Math.max(0, Number(scrollY) || 0));
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   } finally {
     restore(html, "scroll-behavior", oldHtmlValue, oldHtmlPriority);
@@ -287,8 +555,6 @@ function hideSafeFixedCandidates() {
   const viewportArea = Math.max(1, viewportWidth * viewportHeight);
   let hiddenCount = 0;
 
-  // Clean up any marker left by an interrupted previous command. This logic is
-  // intentionally inlined because executeScript serializes this function alone.
   for (const element of document.querySelectorAll(`[${marker}="1"]`)) {
     const value = element.getAttribute(valueAttr) || "";
     const priority = element.getAttribute(priorityAttr) || "";

@@ -1,4 +1,4 @@
-name: LongCapture Browser Agent v0.1 PoC
+name: LongCapture Browser Agent v0.1.1 Dynamic Stability
 
 on:
   push:
@@ -24,7 +24,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: browser-agent-v01-poc-${{ github.ref }}
+  group: browser-agent-v011-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -81,7 +81,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git diff --check
 
-      - name: Verify RC6 invariants survived PoC
+      - name: Verify RC6 invariants survived Browser Agent
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -105,7 +105,7 @@ jobs:
       - name: Publish portable
         run: dotnet publish LongCapture.Standalone\LongCapture.Standalone.csproj --no-restore --configuration Release --runtime win-x64 --self-contained true --output artifacts\LongCapture /m:1
 
-      - name: Browser Agent deterministic self-test
+      - name: Browser Agent v0.1.1 deterministic self-test
         shell: cmd
         run: artifacts\LongCapture\LongCapture.exe --browser-agent-poc-self-test
 
@@ -113,7 +113,7 @@ jobs:
         shell: cmd
         run: artifacts\LongCapture\1-RUN-AUTOMATED-TESTS.cmd --ci
 
-      - name: Verify Browser Agent package boundary
+      - name: Verify Browser Agent v0.1.1 package boundary
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -132,29 +132,37 @@ jobs:
 
           $manifest = Get-Content "artifacts\LongCapture\BrowserAgent\Extension\manifest.json" -Raw | ConvertFrom-Json
           if ($manifest.manifest_version -ne 3) { throw "Browser Agent extension is not Manifest V3" }
+          if ($manifest.version -ne "0.1.1") { throw "Browser Agent manifest version is not 0.1.1" }
           $permissions = @($manifest.permissions)
           foreach ($permission in @("activeTab", "scripting", "nativeMessaging")) {
             if ($permissions -notcontains $permission) { throw "Missing extension permission: $permission" }
           }
-          if ($permissions -contains "debugger" -or $manifest.host_permissions) { throw "PoC permission boundary expanded unexpectedly" }
+          if ($permissions -contains "debugger" -or $manifest.host_permissions) { throw "Browser Agent permission boundary expanded unexpectedly" }
+          if (-not $manifest.commands._execute_action) { throw "Browser Agent attach keyboard command is missing" }
+          if ($manifest.commands._execute_action.suggested_key.default -ne "Ctrl+Shift+L") { throw "Unexpected attach shortcut" }
 
-      - name: Package PoC
+          $worker = Get-Content "artifacts\LongCapture\BrowserAgent\Extension\service-worker.js" -Raw
+          foreach ($requiredMarker in @("waitForPageStability", "warmLazyBoundary", "captureAt", "MutationObserver", "ResizeObserver")) {
+            if ($worker -notmatch [regex]::Escape($requiredMarker)) { throw "Missing v0.1.1 worker marker: $requiredMarker" }
+          }
+
+      - name: Package v0.1.1
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force Output | Out-Null
-          $zip = "Output\LongCapture-Browser-Agent-v0.1-PoC-x64.zip"
+          $zip = "Output\LongCapture-Browser-Agent-v0.1.1-Dynamic-Stability-x64.zip"
           Compress-Archive -Path "artifacts\LongCapture\*" -DestinationPath $zip -CompressionLevel Optimal -Force
           $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
-          Set-Content "Output\LongCapture-Browser-Agent-v0.1-PoC-x64.sha256.txt" "$hash  LongCapture-Browser-Agent-v0.1-PoC-x64.zip"
+          Set-Content "Output\LongCapture-Browser-Agent-v0.1.1-Dynamic-Stability-x64.sha256.txt" "$hash  LongCapture-Browser-Agent-v0.1.1-Dynamic-Stability-x64.zip"
 
-      - name: Extract final PoC and rerun Browser Agent self-test
+      - name: Extract final v0.1.1 and rerun Browser Agent self-test
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $temp = Join-Path $env:RUNNER_TEMP "longcapture-browser-agent-v01-final"
+          $temp = Join-Path $env:RUNNER_TEMP "longcapture-browser-agent-v011-final"
           Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue
-          Expand-Archive "Output\LongCapture-Browser-Agent-v0.1-PoC-x64.zip" $temp -Force
+          Expand-Archive "Output\LongCapture-Browser-Agent-v0.1.1-Dynamic-Stability-x64.zip" $temp -Force
           foreach ($required in @("LongCapture.exe","START-BROWSER-AGENT-POC.cmd","BrowserAgent\Extension\manifest.json","BrowserAgent\INSTALL-BROWSER-AGENT.cmd")) {
             if (-not (Test-Path -LiteralPath (Join-Path $temp $required))) { throw "Final ZIP missing $required" }
           }
@@ -164,16 +172,16 @@ jobs:
             -WorkingDirectory $temp `
             -Wait `
             -PassThru
-          if ($process.ExitCode -ne 0) { throw "Extracted Browser Agent PoC self-test failed with exit code $($process.ExitCode)" }
+          if ($process.ExitCode -ne 0) { throw "Extracted Browser Agent v0.1.1 self-test failed with exit code $($process.ExitCode)" }
 
-      - name: Upload PoC package
+      - name: Upload v0.1.1 package
         if: success()
         uses: actions/upload-artifact@v7
         with:
-          name: LongCapture-Browser-Agent-v0.1-PoC-x64
+          name: LongCapture-Browser-Agent-v0.1.1-Dynamic-Stability-x64
           path: |
-            Output\LongCapture-Browser-Agent-v0.1-PoC-x64.zip
-            Output\LongCapture-Browser-Agent-v0.1-PoC-x64.sha256.txt
+            Output\LongCapture-Browser-Agent-v0.1.1-Dynamic-Stability-x64.zip
+            Output\LongCapture-Browser-Agent-v0.1.1-Dynamic-Stability-x64.sha256.txt
           if-no-files-found: error
 
       - name: Record push gate result
@@ -193,16 +201,16 @@ jobs:
 
           $statusPath = ".github\BrowserAgent-v01-CI-STATUS.md"
           @(
-            "# Browser Agent v0.1 CI status",
+            "# Browser Agent v0.1.1 Dynamic Stability CI status",
             "",
             "- Tested commit: $tested",
             "- Result: $result",
             "- Runner: windows-2025",
-            "- Gate: RC6 overlay chain + post-RC6 Browser Agent shell + RC6 invariants + publish + deterministic Browser Agent self-test + RC6 QUICK + package boundary + extracted-package self-test"
+            "- Gate: RC6 overlay chain + v0.1.1 shell + RC6 invariants + publish + overlap/stitch self-test + RC6 QUICK + permission/package boundary + extracted-package self-test"
           ) | Set-Content -LiteralPath $statusPath -Encoding utf8
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -- $statusPath
-          git commit -m "ci: record Browser Agent v0.1 gate $result for $tested"
+          git commit -m "ci: record Browser Agent v0.1.1 gate $result for $tested"
           git push origin "HEAD:$branch"

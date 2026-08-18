@@ -93,14 +93,14 @@ jobs:
           }
 
           $statusPath = ".github\BrowserAgent-v01-CI-STATUS.md"
-          @"
-          # Browser Agent v0.1 CI status
-
-          - Tested commit: `$tested`
-          - Result: `$result`
-          - Runner: `windows-2025`
-          - Gate: restore + publish + deterministic Browser Agent self-test + existing QUICK + package boundary
-          "@ | Set-Content -LiteralPath $statusPath -Encoding utf8
+          @(
+            "# Browser Agent v0.1 CI status",
+            "",
+            "- Tested commit: $tested",
+            "- Result: $result",
+            "- Runner: windows-2025",
+            "- Gate: restore + publish + deterministic Browser Agent self-test + existing QUICK + package boundary"
+          ) | Set-Content -LiteralPath $statusPath -Encoding utf8
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

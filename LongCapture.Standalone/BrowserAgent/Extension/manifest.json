@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "LongCapture Browser Agent v0.1.1",
-  "version": "0.1.1",
-  "description": "Active-tab helper with dynamic-page stability checks for LongCapture Browser Assisted Capture.",
+  "name": "LongCapture Browser Agent v0.1.2",
+  "version": "0.1.2",
+  "description": "Active-tab helper with dynamic-page stability and confirmed page-end detection for LongCapture Browser Assisted Capture.",
   "permissions": [
     "activeTab",
     "scripting",

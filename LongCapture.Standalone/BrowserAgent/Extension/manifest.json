@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "LongCapture Browser Agent v0.1 PoC",
-  "version": "0.1.0",
-  "description": "Thin active-tab capture helper for the LongCapture Browser Assisted proof-of-concept.",
+  "name": "LongCapture Browser Agent v0.1.1",
+  "version": "0.1.1",
+  "description": "Active-tab helper with dynamic-page stability checks for LongCapture Browser Assisted Capture.",
   "permissions": [
     "activeTab",
     "scripting",
@@ -13,5 +13,13 @@
   },
   "action": {
     "default_title": "Attach this tab to LongCapture Browser Agent"
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+L"
+      },
+      "description": "Attach the active tab to LongCapture Browser Agent"
+    }
   }
 }

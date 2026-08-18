@@ -2,6 +2,7 @@ const HOST_NAME = "com.longcapture.browser_agent";
 const MIN_CAPTURE_INTERVAL_MS = 520;
 const DEFAULT_STABLE_WINDOW_MS = 900;
 const DEFAULT_MAX_STABILITY_WAIT_MS = 7000;
+const DEFAULT_END_ROUNDS = 3;
 let nativePort = null;
 let target = null;
 
@@ -42,10 +43,10 @@ async function attachTab(tab) {
         url: target.url,
         tabId: target.tabId,
         windowId: target.windowId,
-        protocolVersion: "0.1.1"
+        protocolVersion: "0.1.2"
       }
     });
-    await setBadge("ON", "LongCapture Browser Agent v0.1.1 attached to this tab");
+    await setBadge("ON", "LongCapture Browser Agent v0.1.2 attached to this tab");
   } catch (error) {
     console.error("LongCapture Browser Agent could not connect:", error);
     nativePort = null;
@@ -64,6 +65,9 @@ async function handleDesktopMessage(message) {
     let result;
 
     switch (message.type) {
+      case "preview":
+        result = await previewCaptureRegion(payload);
+        break;
       case "begin":
         result = await beginCapture(payload);
         break;
@@ -107,6 +111,11 @@ function stabilityOptions(payload) {
   };
 }
 
+async function previewCaptureRegion(payload) {
+  const durationMs = clampNumber(payload.durationMs, 300, 1600, 650);
+  return await executeInTarget(showCapturePreview, [durationMs]);
+}
+
 async function beginCapture(payload) {
   const options = stabilityOptions(payload);
   await executeInTarget(scrollDocumentToAbsolute, [0]);
@@ -124,12 +133,34 @@ async function captureAndScroll(payload) {
   const stabilityBefore = await waitForStabilityOnTarget(options);
   const captured = await captureCurrentViewport(payload, stabilityBefore, hideFixed);
 
-  const atBottom = captured.before.scrollY + captured.before.viewportHeight >= captured.before.scrollHeight - 2;
+  let atBottom = captured.before.scrollY + captured.before.viewportHeight >= captured.before.scrollHeight - 2;
   let stabilityAfter = null;
   let after = captured.afterCapture;
+  let endConfirmation = {
+    confirmed: false,
+    rounds: 0,
+    growthCss: 0,
+    counterIncomplete: false,
+    confidence: "not-at-bottom"
+  };
 
-  if (!atBottom) {
-    const delta = Math.max(1, Math.floor(captured.before.viewportHeight * (1 - overlapRatio)));
+  const delta = Math.max(1, Math.floor(captured.before.viewportHeight * (1 - overlapRatio)));
+
+  if (atBottom) {
+    endConfirmation = await confirmDocumentEnd(options);
+    atBottom = endConfirmation.confirmed === true;
+
+    if (!atBottom && Number(endConfirmation.growthCss || 0) > 1) {
+      const grown = endConfirmation.state || await collectState();
+      const maxY = Math.max(0, grown.scrollHeight - grown.viewportHeight);
+      const nextY = Math.min(maxY, captured.before.scrollY + delta);
+      await executeInTarget(scrollDocumentToAbsolute, [nextY]);
+      stabilityAfter = await waitForStabilityOnTarget(options);
+      after = await collectState();
+    } else {
+      after = await collectState();
+    }
+  } else {
     await executeInTarget(scrollDocumentBy, [delta]);
     stabilityAfter = await waitForStabilityOnTarget(options);
     after = await collectState();
@@ -141,7 +172,8 @@ async function captureAndScroll(payload) {
     stabilityAfter,
     warmupTriggered: warmup.triggered,
     warmupGrowthCss: warmup.growthCss,
-    atBottom
+    atBottom,
+    endConfirmation
   };
 }
 
@@ -161,7 +193,14 @@ async function captureAt(payload) {
     stabilityAfter: stabilityBefore,
     warmupTriggered: false,
     warmupGrowthCss: 0,
-    atBottom
+    atBottom,
+    endConfirmation: {
+      confirmed: false,
+      rounds: 0,
+      growthCss: 0,
+      counterIncomplete: false,
+      confidence: "recapture-not-confirmed"
+    }
   };
 }
 
@@ -248,6 +287,98 @@ async function warmLazyBoundary(options) {
   };
 }
 
+async function confirmDocumentEnd(options) {
+  const initial = await collectState();
+  const initialHeight = initial.scrollHeight;
+  let greatestHeight = initialHeight;
+  let latest = initial;
+  let rounds = 0;
+  let sawCounterIncomplete =
+    initial.pageCounterTotal > 0 && initial.pageCounterCurrent > 0 && initial.pageCounterCurrent < initial.pageCounterTotal;
+
+  for (let round = 1; round <= DEFAULT_END_ROUNDS; round++) {
+    rounds = round;
+    latest = await collectState();
+    const maxY = Math.max(0, latest.scrollHeight - latest.viewportHeight);
+
+    // Re-enter the bottom trigger zone on later rounds. This helps sites whose
+    // IntersectionObserver / infinite-loader only fires on a fresh edge crossing.
+    if (round > 1 && maxY > latest.viewportHeight * 0.20) {
+      await executeInTarget(scrollDocumentToAbsolute, [Math.max(0, maxY - latest.viewportHeight * 0.18)]);
+      await sleep(140);
+    }
+    await executeInTarget(scrollDocumentToAbsolute, [maxY]);
+
+    const counterIncomplete =
+      latest.pageCounterTotal > 0 && latest.pageCounterCurrent > 0 && latest.pageCounterCurrent < latest.pageCounterTotal;
+    sawCounterIncomplete = sawCounterIncomplete || counterIncomplete;
+    const holdMs = counterIncomplete ? 1900 : 1150;
+    const holdStart = Date.now();
+
+    while (Date.now() - holdStart < holdMs) {
+      await sleep(180);
+      const probe = await collectState();
+      greatestHeight = Math.max(greatestHeight, probe.scrollHeight);
+      if (probe.scrollHeight > latest.scrollHeight + 2 || probe.scrollHeight > initialHeight + 2) {
+        await waitForStabilityOnTarget({
+          stableWindowMs: Math.max(options.stableWindowMs, 1050),
+          maxWaitMs: Math.max(options.maxWaitMs, 8000),
+          sampleMs: options.sampleMs
+        });
+        const grown = await collectState();
+        return {
+          confirmed: false,
+          rounds,
+          growthCss: Math.max(0, grown.scrollHeight - initialHeight),
+          counterIncomplete: sawCounterIncomplete,
+          confidence: "more-content-loaded",
+          state: grown
+        };
+      }
+      latest = probe;
+    }
+
+    const stable = await waitForStabilityOnTarget({
+      stableWindowMs: Math.max(options.stableWindowMs, 1050),
+      maxWaitMs: Math.max(options.maxWaitMs, 8000),
+      sampleMs: options.sampleMs
+    });
+    latest = await collectState();
+    greatestHeight = Math.max(greatestHeight, latest.scrollHeight);
+
+    if (!stable.stable || latest.scrollHeight > initialHeight + 2) {
+      if (latest.scrollHeight > initialHeight + 2) {
+        return {
+          confirmed: false,
+          rounds,
+          growthCss: Math.max(0, latest.scrollHeight - initialHeight),
+          counterIncomplete: sawCounterIncomplete,
+          confidence: "more-content-loaded",
+          state: latest
+        };
+      }
+    }
+  }
+
+  latest = await collectState();
+  const finalCounterIncomplete =
+    latest.pageCounterTotal > 0 && latest.pageCounterCurrent > 0 && latest.pageCounterCurrent < latest.pageCounterTotal;
+  sawCounterIncomplete = sawCounterIncomplete || finalCounterIncomplete;
+
+  return {
+    confirmed: true,
+    rounds,
+    growthCss: Math.max(0, greatestHeight - initialHeight),
+    counterIncomplete: sawCounterIncomplete,
+    confidence: sawCounterIncomplete
+      ? "stable-bottom-dom-counter-incomplete"
+      : latest.pageCounterTotal > 0
+        ? "stable-bottom-dom-counter-complete"
+        : "stable-bottom-geometry",
+    state: latest
+  };
+}
+
 async function waitForStabilityOnTarget(options) {
   const result = await executeInTarget(waitForPageStability, [
     options.stableWindowMs,
@@ -307,10 +438,11 @@ function collectDocumentState() {
   const fixedCandidates = [];
   const elements = document.body ? document.body.getElementsByTagName("*") : [];
   let elementCount = 0;
+  let bestCounter = null;
 
   for (const element of elements) {
     elementCount++;
-    if (fixedCandidates.length >= 64) continue;
+    if (fixedCandidates.length >= 64 && bestCounter) continue;
 
     const style = getComputedStyle(element);
     if (style.position !== "fixed" && style.position !== "sticky") continue;
@@ -327,19 +459,38 @@ function collectDocumentState() {
     if (style.position === "sticky" && !(touchesTop || touchesBottom || touchesLeft || touchesRight)) continue;
 
     const viewportArea = Math.max(1, viewportWidth * viewportHeight);
-    const areaRatio = Math.max(0, Math.min(viewportWidth, rect.width)) * Math.max(0, Math.min(viewportHeight, rect.height)) / viewportArea;
+    const visibleWidth = Math.max(0, Math.min(viewportWidth, rect.right) - Math.max(0, rect.left));
+    const visibleHeight = Math.max(0, Math.min(viewportHeight, rect.bottom) - Math.max(0, rect.top));
+    const areaRatio = (visibleWidth * visibleHeight) / viewportArea;
     if (areaRatio >= 0.65) continue;
 
-    fixedCandidates.push({
-      tag: String(element.tagName || "").toLowerCase(),
-      position: style.position,
-      left: round2Local(rect.left),
-      top: round2Local(rect.top),
-      width: round2Local(rect.width),
-      height: round2Local(rect.height),
-      zIndex: style.zIndex || "auto",
-      edge: [touchesTop ? "top" : "", touchesBottom ? "bottom" : "", touchesLeft ? "left" : "", touchesRight ? "right" : ""].filter(Boolean).join(",")
-    });
+    if (fixedCandidates.length < 64) {
+      fixedCandidates.push({
+        tag: String(element.tagName || "").toLowerCase(),
+        position: style.position,
+        left: round2Local(rect.left),
+        top: round2Local(rect.top),
+        width: round2Local(rect.width),
+        height: round2Local(rect.height),
+        zIndex: style.zIndex || "auto",
+        edge: [touchesTop ? "top" : "", touchesBottom ? "bottom" : "", touchesLeft ? "left" : "", touchesRight ? "right" : ""].filter(Boolean).join(",")
+      });
+    }
+
+    const rawText = String(element.innerText || element.textContent || "").replace(/\s+/g, " ").trim();
+    if (rawText.length > 0 && rawText.length <= 48) {
+      const match = rawText.match(/(?:^|\D)(\d{1,6})\s*\/\s*(\d{1,6})(?:\D|$)/);
+      if (match) {
+        const current = Number(match[1]);
+        const total = Number(match[2]);
+        if (Number.isFinite(current) && Number.isFinite(total) && current >= 0 && total > 0 && current <= total && total <= 100000) {
+          const score = (touchesBottom ? 4 : 0) + (touchesRight ? 4 : 0) + (touchesTop ? 1 : 0) + (areaRatio < 0.08 ? 2 : 0);
+          if (!bestCounter || score > bestCounter.score || (score === bestCounter.score && total > bestCounter.total)) {
+            bestCounter = { current, total, text: `${current} / ${total}`, score };
+          }
+        }
+      }
+    }
   }
 
   return {
@@ -351,6 +502,9 @@ function collectDocumentState() {
     devicePixelRatio: window.devicePixelRatio || 1,
     fixedCandidateCount: fixedCandidates.length,
     fixedCandidates,
+    pageCounterCurrent: bestCounter?.current || 0,
+    pageCounterTotal: bestCounter?.total || 0,
+    pageCounterText: bestCounter?.text || "",
     stateHash: `${Math.round(scrollY)}:${Math.round(scrollHeight)}:${Math.round(layoutHeight)}:${elementCount}:${document.body?.childElementCount || 0}`
   };
 }
@@ -544,6 +698,45 @@ async function scrollDocumentBy(delta) {
     restore(body, "scroll-behavior", oldBodyValue, oldBodyPriority);
   }
   return { scrollY: window.scrollY || 0 };
+}
+
+function showCapturePreview(durationMs) {
+  const marker = "data-longcapture-browser-agent-preview";
+  const existing = document.querySelector(`[${marker}="1"]`);
+  if (existing) existing.remove();
+
+  const overlay = document.createElement("div");
+  overlay.setAttribute(marker, "1");
+  overlay.style.setProperty("position", "fixed", "important");
+  overlay.style.setProperty("left", "0", "important");
+  overlay.style.setProperty("top", "0", "important");
+  overlay.style.setProperty("width", "100vw", "important");
+  overlay.style.setProperty("height", "100vh", "important");
+  overlay.style.setProperty("box-sizing", "border-box", "important");
+  overlay.style.setProperty("border", "3px solid #1687ff", "important");
+  overlay.style.setProperty("background", "rgba(22,135,255,0.035)", "important");
+  overlay.style.setProperty("z-index", "2147483647", "important");
+  overlay.style.setProperty("pointer-events", "none", "important");
+  overlay.style.setProperty("font", "600 14px system-ui, sans-serif", "important");
+  overlay.style.setProperty("color", "white", "important");
+
+  const label = document.createElement("div");
+  label.textContent = "LongCapture Browser Assisted Capture · F8 again to stop";
+  label.style.setProperty("position", "absolute", "important");
+  label.style.setProperty("top", "10px", "important");
+  label.style.setProperty("left", "10px", "important");
+  label.style.setProperty("padding", "7px 10px", "important");
+  label.style.setProperty("border-radius", "7px", "important");
+  label.style.setProperty("background", "rgba(0,0,0,0.78)", "important");
+  overlay.appendChild(label);
+  (document.documentElement || document.body).appendChild(overlay);
+
+  return new Promise(resolve => {
+    setTimeout(() => {
+      try { overlay.remove(); } catch (_) { }
+      resolve({ shown: true, viewportWidth: window.innerWidth, viewportHeight: window.innerHeight });
+    }, Math.max(250, Number(durationMs) || 650));
+  });
 }
 
 function hideSafeFixedCandidates() {

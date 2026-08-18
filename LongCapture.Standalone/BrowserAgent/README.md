@@ -1,50 +1,78 @@
-# LongCapture Browser Agent v0.1.2 — Integrated Auto-End
+# LongCapture Browser Agent v0.1.3 — Quality Region
 
-Browser Agent is now integrated into the normal `LongCapture.exe` main window. `START-BROWSER-AGENT-POC.cmd` remains only as a diagnostic/development entry point.
+Browser Agent remains integrated into the normal `LongCapture.exe` main window. `START-BROWSER-AGENT-POC.cmd` is diagnostic/development only. Normal Long Capture / RC6 remains available and its raster path is unchanged.
 
-Normal Long Capture / RC6 remains available and its raster path is unchanged.
+## What v0.1.3 changes
 
-## Normal daily workflow
+v0.1.3 is based on the real v0.1.2 Linux.do evidence: the run could reach 144 verified frames and save a Partial result, but the later part could still look visually wrong even while the old sparse overlap gate passed. The next gate therefore stops treating DOM `scrollY` as sufficient proof of compositor placement.
+
+### Real F8 region selection
+
+The normal workflow is now:
 
 1. Start `LongCapture.exe`.
-2. Choose **Browser Assisted Capture** in Capture mode.
-3. Activate the target Chromium/Helium tab.
-4. Click the LongCapture Browser Agent extension icon, or press **Ctrl+Shift+L**, to attach that tab.
-5. Press **F8**.
-6. The browser viewport is outlined briefly, then capture starts from the document top.
-7. Do nothing and Browser Agent continues until the document end is confirmed.
-8. Press **F8** again at any time to stop early and save a **Partial** capture.
+2. Choose **Browser Assisted Capture**.
+3. Attach the active Chromium/Helium tab by clicking the extension icon or pressing **Ctrl+Shift+L**.
+4. Press **F8**.
+5. LongCapture hides and the page shows a real drag-to-select overlay. Drag the exact capture region. **Esc** cancels; **Enter** selects the full browser viewport.
+6. If dynamic-content preload is enabled, Browser Agent materializes as much lazy/infinite content as practical, returns to the document top, then begins the real capture.
+7. Do nothing and capture continues until the page end is confirmed. Press **F8** again to stop early and save a **Partial** result.
 
-There is no normal user-facing 200-frame completion limit anymore. v0.1.2 uses an internal high safety limit only to prevent a broken/infinite page from consuming unbounded disk/time. Hitting that safety limit is reported as **Partial**, never Complete.
+The selected rectangle is applied to every `captureVisibleTab()` PNG on the LongCapture side, so the final long image has the selected width/viewport band rather than always using the full tab viewport.
 
-## True page-end detection
+### Browser-mode quality controls
 
-A single `scrollY + viewportHeight >= scrollHeight` sample is not enough for dynamic pages.
+The integrated main UI no longer shows all Normal-capture settings as disabled. In **Browser Assisted Capture** the relevant controls are repurposed as:
 
-At an apparent bottom, v0.1.2:
+- **Start delay (ms)** — delay before the real pass begins;
+- **Page settle (ms)** — DOM/layout quiet window before accepting a frame;
+- **Overlap (%)** — real overlap retained between Browser Agent frames;
+- **Dynamic content** — preload lazy/infinite content before the real pass;
+- **Full browser viewport** — skip drag selection when explicitly enabled.
 
-- re-enters the bottom trigger zone;
-- waits through repeated DOM/layout quiet windows;
-- watches `MutationObserver`, `ResizeObserver`, `scrollHeight`, nearby image readiness and fonts;
-- gives lazy/infinite loaders time to append more content;
-- repeats bottom confirmation three times;
-- continues capture if `scrollHeight` grows;
-- declares Complete only after the bottom remains stable.
+The scroll engine itself remains DOM + visual verification and is intentionally not switchable to MouseWheel/WheelMessage in Browser mode.
 
-For pages that expose a fixed/sticky progress control such as `218 / 322`, Browser Agent also records that text directly from the DOM as a **hint**. It is not the sole stop condition because many sites have no reliable page counter.
+### Responsive integrated UI
 
-`session.json` records the counter hint, estimated frames to the currently loaded end, end-confirmation rounds/growth/confidence, plus the v0.1.1 stability and overlap evidence.
+The top target/action strip is reflowed into a responsive two-row layout instead of five fixed-width columns. The main form uses DPI-aware `TableLayoutPanel` layout and scrolling so long labels/buttons do not overlap as easily on scaled displays.
 
-## Dynamic-page protection retained from v0.1.1
+### Dynamic-content preload
 
-Before accepting each viewport, the extension waits for DOM/layout stability. Near lazy boundaries it warms the upcoming region before capture. LongCapture then validates real PNG overlap between adjacent viewports and can re-capture the recent viewport window if the page changed underneath it.
+Before the real capture, the default quality path repeatedly enters the currently loaded bottom trigger zone, waits for DOM/layout stability, lets lazy/infinite loaders append content, and returns to the top. This does not replace the per-frame lazy-boundary and true-end checks; it reduces how much of the page is changing underneath already accepted frames.
 
-The final long PNG is still stitched by LongCapture with bounded memory. The extension does not stitch the page itself.
+### DOM prediction + visual geometry
 
-## Shortcuts
+The browser still reports exact DOM scroll positions, but LongCapture now treats that as the **predicted** movement. For each adjacent PNG pair it searches a bounded window around the DOM prediction and uses multi-band visual overlap evidence to resolve small scroll-anchor/layout drift.
 
-- **F8**: start Browser Assisted Capture; press again for Partial manual stop.
-- **Ctrl+Shift+L**: attach the active Chromium/Helium tab to LongCapture.
+`session.json` records:
+
+- expected DOM delta in physical pixels;
+- resolved PNG delta;
+- visual correction offset;
+- alignment score/confidence;
+- capture-region geometry;
+- preload duration/growth/progress;
+- the existing stability, lazy-load, overlap, recovery and page-counter evidence.
+
+The streaming compositor uses cumulative **resolved** movement (falling back to DOM prediction where a visual result is intentionally unavailable, such as the first fixed-control transition) instead of placing every frame solely at absolute `scrollY × scaleY`.
+
+## Automatic completion
+
+There is no normal 200-frame completion limit. Browser Agent continues until repeated stable-bottom confirmation succeeds. A high internal safety limit remains only as a runaway guard and is reported as **Partial**, never Complete.
+
+A visible DOM counter such as `142 / 322` remains supporting evidence, not the sole completion rule.
+
+## Fixed/sticky and dynamic-page protection
+
+The v0.1.1/v0.1.2 protections remain:
+
+- MutationObserver / ResizeObserver stability windows;
+- font/image readiness checks;
+- lazy-boundary warm-up;
+- fixed/sticky suppression during frames after the first;
+- real PNG overlap verification;
+- recent-window recapture when page state changes;
+- repeated stable-bottom confirmation.
 
 ## Permission boundary
 
@@ -58,39 +86,43 @@ It does not request `<all_urls>` or `debugger` and does not attach CDP.
 
 ## Install / update
 
-If the extension is already loaded unpacked, replace/update the package and press **Reload** on the browser's extensions page. If the extension ID remains the same, Native Messaging registration does not need to be repeated. If the ID changes, run `BrowserAgent\INSTALL-BROWSER-AGENT.cmd` again with the new ID.
+If the extension is already loaded unpacked:
+
+1. Replace/update the portable package.
+2. Open the browser extensions page and press **Reload** on LongCapture Browser Agent.
+3. If the extension ID stays the same, Native Messaging registration normally remains valid.
+4. If the ID changes, run `BrowserAgent\INSTALL-BROWSER-AGENT.cmd` again with the new ID.
+5. Start `LongCapture.exe` normally.
 
 Fresh install:
 
-1. Open the Chromium browser's extensions page.
+1. Open the Chromium browser extensions page.
 2. Enable Developer mode.
-3. Load unpacked: `BrowserAgent\Extension`.
-4. Copy the extension ID.
+3. Load unpacked `BrowserAgent\Extension`.
+4. Copy its extension ID.
 5. Run `BrowserAgent\INSTALL-BROWSER-AGENT.cmd` and paste the ID.
-6. Start `LongCapture.exe` normally.
+6. Start `LongCapture.exe`.
 
-## Output / diagnostics
+## Output and diagnostics
 
-Browser Assisted sessions are stored beside the portable app under:
+Browser Assisted sessions stay beside the portable app under:
 
 `BrowserAgentCaptures\BrowserAgent-YYYYMMDD-HHMMSS\`
 
-This intentionally avoids moving large raw-frame sessions into a system-drive Pictures folder.
-
-Each session contains raw PNG frames, `session.json`, and the final stitched PNG. Diagnostics ZIPs are stored under `BrowserAgentCaptures\Diagnostics\`.
+Each session contains raw cropped PNG frames, `session.json`, and the stitched PNG. Diagnostics ZIPs are written under `BrowserAgentCaptures\Diagnostics\`.
 
 ## Completion semantics
 
 - `Complete / document-bottom-confirmed`: repeated stable-bottom confirmation passed.
-- `Partial / manual-stop`: the user pressed F8 again.
-- `Partial / safety-frame-limit`: the internal runaway guard was reached.
-- other Partial/Failed states: capture stopped because scrolling, stability or overlap evidence was not safe enough to claim a full page.
+- `Partial / manual-stop`: F8 was pressed again.
+- `Partial / safety-frame-limit`: internal runaway guard reached.
+- Failed/other Partial states: stability/scroll/visual-overlap evidence was not strong enough to claim a safe complete page.
 
-## Intentionally still out of scope
+## Still intentionally out of scope
 
-- OCR as a default dependency (DOM progress hints are used first);
+- OCR as a default dependency;
 - inner scroll-container discovery;
 - iframe traversal;
-- PDF/OCR/editor integration;
+- PDF/editor integration;
 - site-specific recipes;
 - debugger/CDP.

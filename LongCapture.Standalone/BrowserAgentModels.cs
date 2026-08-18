@@ -17,16 +17,35 @@ internal sealed class BrowserAgentFrameRecord
     public bool AtBottom { get; set; }
     public string StateHash { get; set; } = string.Empty;
     public DateTime CapturedUtc { get; set; }
+
+    public int StabilityWaitMs { get; set; }
+    public bool StabilityTimedOut { get; set; }
+    public int StabilityMutationCount { get; set; }
+    public int StabilityResizeCount { get; set; }
+    public int StabilityHeightChangeCount { get; set; }
+    public int StabilityPendingImages { get; set; }
+    public double StabilityHeightGrowthCss { get; set; }
+    public bool LazyWarmupTriggered { get; set; }
+    public double LazyWarmupGrowthCss { get; set; }
+    public bool CaptureStateChanged { get; set; }
+
+    public bool OverlapVerified { get; set; }
+    public double OverlapMeanAbsoluteError { get; set; }
+    public double OverlapStrongDiffRatio { get; set; }
+    public int OverlapPixels { get; set; }
+    public int RecoveryGeneration { get; set; }
+    public string OverlapStatus { get; set; } = string.Empty;
 }
 
 internal sealed class BrowserAgentSessionManifest
 {
-    public string ProtocolVersion { get; set; } = "0.1";
+    public string ProtocolVersion { get; set; } = "0.1.1";
     public DateTime StartedUtc { get; set; }
     public DateTime? CompletedUtc { get; set; }
     public string Status { get; set; } = "capturing";
     public string? FinalImage { get; set; }
     public string? StopReason { get; set; }
+    public string? Error { get; set; }
     public List<BrowserAgentFrameRecord> Frames { get; set; } = new();
 }
 

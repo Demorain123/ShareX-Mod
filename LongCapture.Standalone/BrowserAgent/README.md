@@ -1,128 +1,123 @@
-# LongCapture Browser Agent v0.1.6 — Calibrated Adaptive
+# LongCapture Browser Agent v0.1.8 — Reliability / Background Window / Requested End
 
-Browser Agent remains integrated into the normal `LongCapture.exe` main window. Normal Long Capture / RC6 remains available; Browser Agent is an optional browser-aware backend, not a replacement for LongCapture.
+Browser Assisted remains an optional backend inside the normal `LongCapture.exe` product. Normal Long Capture / RC6 stays independent. The browser component supplies capture/data/quality evidence; it does not replace LongCapture's Start/Stop, stitch, quality guard or output pipeline.
 
-## What v0.1.6 changes
+## Why v0.1.8 exists
 
-v0.1.5 introduced fixed speed presets, Browser adaptive speed, precision-based local repair, layout-shift evidence and inset-aware sticky suppression. v0.1.6 addresses the next problem: one preset table cannot be assumed optimal for every PC, browser build, page, network condition or GPU/compositor timing.
+A real 203-frame Linux.do / Discourse diagnostic capture exposed a failure that the previous adaptive score did not see: center/body text could align perfectly while a sticky avatar in the far-left rail changed screen-space position. The old overlap verifier trimmed the outer 7% of the image and reduced three bands to a median, so a one-rail defect could disappear behind two clean bands.
 
-The new design therefore treats the five fixed gears as **safe bounded reference points**, adds a **real local Browser benchmark**, learns a small persistent timing profile from successful real frames, and exposes the **effective parameters live** while Browser Assisted Capture is running.
+v0.1.8 therefore treats page rails as first-class quality evidence, adds a semantic Discourse sticky-avatar guard, and keeps the previous adaptive/calibration logic.
 
-It deliberately does **not** put an LLM, OCR model or neural network into the per-frame screenshot hot path. The first learning layer is deterministic, measurable, bounded and auditable. The stored evidence can later support offline contextual-bandit/cost-model experiments without risking uncontrolled exploration during a real capture.
+It also adds two workflow capabilities requested for longer unattended jobs:
 
-## Capture speed
+- Browser Assisted may continue while its browser window is behind another desktop application;
+- the user may define an explicit capture end instead of relying only on full-page end or manual F8.
 
-The main GUI still exposes **Capture speed** in every mode.
+## Rail-aware seam / sticky verification
 
-For Normal / Smart Web / Teach / Run Recipe the fixed presets map to the existing visible controls:
+The PNG overlap verifier now samples roughly the 2%–98% horizontal range and retains separate left / center / right metrics:
 
-| Fixed preset | Start delay | Scroll settle | Scroll amount |
-|---|---:|---:|---:|
-| Very Low | 500 ms | 1200 ms | 1 |
-| Low | 400 ms | 850 ms | 2 |
-| Medium | 300 ms | 550 ms | 3 |
-| High | 150 ms | 350 ms | 4 |
-| Very High | 0 ms | 220 ms | 5 |
+- band MAE;
+- strong-difference ratio;
+- edge-contamination flags;
+- expected/resolved visual delta.
 
-Browser Assisted uses browser-specific safe reference gears:
+A rail that is materially worse than the center is no longer invisible in a median score. Edge evidence is persisted in `session.json` and logged with `[BA_EDGE]`.
 
-| Browser gear | Start delay | Page settle | Overlap |
-|---|---:|---:|---:|
-| Very Low | 500 ms | 1800 ms | 45% |
-| Low | 350 ms | 1350 ms | 40% |
-| Medium | 200 ms | 950 ms | 34% |
-| High | 100 ms | 700 ms | 27% |
-| Very High | 0 ms | 520 ms | 20% |
+For Discourse-family pages (including Linux.do), the browser helper also recognizes the semantic sticky state `.topic-post.sticky-avatar .topic-avatar` and hides that pinned avatar only for the screenshot transaction. Normal document avatars are not globally removed.
 
-Chrome documents `captureVisibleTab()` as expensive and limits it to two calls per second. v0.1.6 therefore enforces a 520 ms minimum capture-start interval even if calibration or a future preset tries to go faster.
+The packaged Browser self-test contains a side-only mutation regression: the center and right bands remain deterministic while the left rail is changed. v0.1.8 must reject/detect that case.
 
-## Browser benchmark / local calibration
+## Background-window Browser Assisted capture
 
-In **Browser Assisted Capture**, attach the target Chromium/Helium tab first and press **Browser benchmark**.
+Enable:
 
-The benchmark measures the actual attached-tab pipeline instead of benchmarking synthetic CPU/GPU arithmetic:
+`Allow target browser window behind other apps (tab stays active; not minimized)`
 
-- Native Messaging / DOM probe round-trip time;
-- real `captureVisibleTab()` duration;
-- page-stability wait/activity time;
-- the longest observed false-quiet interval before later DOM/layout activity resumes.
+After F8 and region selection, you may put another desktop application in front of the browser. The attached tab must remain the active tab **inside that browser window**.
 
-The profile uses exponentially smoothed observations plus observed variation. Its output is always clamped back into the existing safe gear envelope. Current hard bounds include Page settle 450–3000 ms, Overlap 20–50%, and Max wait 3000–12000 ms.
+Current `captureVisibleTab()` backend limitations are explicit:
 
-The profile is stored locally at:
+- the browser window may be behind another desktop app;
+- do not switch to another tab in the same browser window;
+- do not minimize the browser window;
+- minimized capture fails closed with a clear error instead of pretending to work.
 
-`BrowserAgentCaptures\Calibration\browser-agent-calibration-v016.json`
+`session.json` records `TargetWindowFocused`, `TargetWindowState`, `BackgroundWindowCapture`, and total background-window frames.
 
-Writes are atomic. A malformed/corrupt profile is quarantined and ignored rather than trusted.
+True minimized/background-tab capture belongs to the future CDP / Existing Chrome provider, not a hidden promise in this build.
 
-**Use local calibration** is user-selectable. Turning it off returns Browser Assisted to the reference gear values.
+## Capture end
 
-## Continuous local learning
+Browser Assisted now exposes a **Capture end** row:
 
-A benchmark is only the starting point. When local calibration is enabled, accepted real Browser Assisted frames update the same small profile using measured capture/stability/seam evidence.
+- `Auto · page end / F8` — current behavior; confirmed real page end or manual F8;
+- `DOM progress ≥ N` — stop after the page's DOM-visible progress counter reaches N (for example `230 / 320`);
+- `Frames ≥ N` — deterministic frame budget;
+- `Elapsed minutes ≥ N` — time-bounded capture.
 
-The controller still obeys the fixed safe ladder. Risk can reduce the current gear immediately; clean frames recover gradually toward the selected target and never above it. Learning changes the bounded timing/overlap values inside a gear; it does not gain permission to invent arbitrary settings.
+F8 always remains available as an immediate manual stop.
 
-The calibration confidence increases as benchmark and accepted-frame evidence accumulates. `session.json` records the confidence at start/end and the effective values actually used for each frame.
+A requested endpoint is reported as **Requested range complete**, not as a false full-page completion. It still receives adaptive post-review before final stitch because it was an automatic endpoint; manual F8 does not start a browser-moving post-review after the user asked it to stop.
 
-## Live adaptive parameters
+The DOM counter is deliberately preferred over OCR when available. OCR / heavier visual recognition remains a possible experimental fallback for pages whose progress exists only as pixels, but it is not added to the per-frame hot path in v0.1.8.
 
-Enable **Live params** in Browser Assisted Capture. During the capture a small no-activate, capture-excluded monitor shows:
+## Adaptive quality / calibration retained
 
-- frame number;
-- selected target gear and current gear;
-- effective Start delay / Page settle / Max wait / Overlap;
-- actual settle/activity/capture duration measured for the latest frame;
-- adaptive risk score and reasons;
-- local calibration confidence and sample count.
+v0.1.6 behavior remains:
 
-The monitor does not take keyboard focus and is excluded from capture, so it is intended to make adaptive decisions observable without contaminating the screenshot.
-
-## Adaptive targets and repair precision
-
-Browser Assisted retains:
-
-- **Adaptive · Robust** — target Medium;
-- **Adaptive · Balanced** — target High;
-- **Adaptive · High speed** — target Very High.
-
-Risk evidence includes stability timeout/long settle, mutation/resize activity, pending images, height growth/lazy loading, post-load layout shifts, capture-state changes, PNG overlap differences, visual correction and false-quiet behavior. Strong evidence can downshift two gears; moderate evidence downshifts one. Clean frames recover one gear at a time.
-
-Repair precision remains **Low / Medium / High**. It controls risk sensitivity, post-review candidate budget and repair attempts. A natural full-page completion can selectively revisit marked logical Y positions and re-verify both neighboring overlaps. Unresolved marked sections force **Partial / quality-review-unresolved** rather than a false Complete.
-
-## Sticky / fixed controls and hard stop
-
-Inset-aware sticky suppression from v0.1.5 remains. A `position: sticky` element can be recognized as pinned when its screen-space position matches its computed CSS `top`, `bottom`, `left` or `right` inset; it does not have to touch viewport coordinate zero.
-
-F8 hard cancellation also remains. LongCapture cancels both its desktop wait and the active browser operation over Native Messaging.
+- five bounded fixed Browser gears;
+- Adaptive Robust / Balanced / High speed;
+- Browser benchmark and persistent local calibration;
+- Live params monitor;
+- Low / Medium / High repair precision;
+- lazy/layout/capture/overlap evidence;
+- hard `captureVisibleTab()` rate guard;
+- hard F8 cancellation;
+- selective repair before a natural/requested automatic completion.
 
 ## Diagnostics
 
-Important Browser markers now include:
+Important Browser markers include:
 
-- `[USER_ACTION]` — UI actions/settings;
-- `[BA_TIMELINE]` — capture milestones and F8 stop;
-- `[BA_REQ]` — Native Messaging request lifecycle;
-- `[BA_AGENT]` — browser-side region/scroll/cancel events;
-- `[BA_ADAPT]` — frame risk and gear changes;
-- `[BA_REPAIR]` — local review/re-capture attempts;
-- `[BA_CALIB]` — benchmark/profile learning;
-- `[BA_LIVE]` — live-monitor lifecycle.
-
-The diagnostics exporter includes the active main-process log plus recent logs so the calibration/adaptive timeline can be reconstructed.
+- `[USER_ACTION]` — settings / buttons;
+- `[BA_TIMELINE]` — lifecycle milestones;
+- `[BA_REQ]` — Native Messaging request timing;
+- `[BA_AGENT]` — browser-side scroll/cancel behavior;
+- `[BA_ADAPT]` — adaptive risk / gear;
+- `[BA_REPAIR]` — local repair;
+- `[BA_CALIB]` — calibration / learning;
+- `[BA_LIVE]` — live monitor;
+- `[BA_EDGE]` — left/right-rail contamination;
+- `[BA_END]` — requested endpoint match.
 
 ## Permission boundary
 
-The extension still declares exactly `activeTab`, `scripting`, and `nativeMessaging`. It does not request `<all_urls>` or `debugger`, does not attach CDP, and adds no ML/OCR hot-path dependency.
+The extension still declares exactly:
 
-## Quality gate
+- `activeTab`
+- `scripting`
+- `nativeMessaging`
 
-v0.1.6 encodes the release loop in CI. A deterministic 100-point **PRE-BUILD QUALITY SCORE** runs before restore/publish. A build is forbidden below 95/100 or with any critical failure. Only after that gate may Windows publish run; then Browser deterministic tests and RC6 QUICK must pass, including packaged Start/Stop and 100/125/150/200% layout-pressure tests. Packaging happens only after those tests pass, and the final ZIP is extracted into a fresh directory and self-tested again.
+No `<all_urls>` and no `debugger` permission are added by v0.1.8.
 
-This score is a release-process gate, not proof of final pixels on every real website. Real signed-in pages, GPU composition, animations, lazy/infinite feeds and machine-specific timing still require controlled user testing.
+## Release gate
+
+The final v0.1.8 pipeline is not allowed to publish until all of the following pass:
+
+1. v0.1.6 adaptive-core score >=95;
+2. v0.1.7 responsive-UI score >=95;
+3. v0.1.8 reliability/background/end score >=95 with zero critical failures;
+4. self-contained x64 publish;
+5. responsive UI bitmap audit;
+6. Browser deterministic self-test, including rail-only mutation and endpoint policy;
+7. RC6 QUICK regression;
+8. final ZIP clean extraction and repeated Browser/UI self-tests.
+
+Those gates make the build eligible for a controlled real-machine test; they are not a claim that every live web page is already solved.
 
 ## Install / update
 
-Replace the portable package, reload the unpacked LongCapture Browser Agent extension, and start `LongCapture.exe`. If the extension ID changes, run `BrowserAgent\INSTALL-BROWSER-AGENT.cmd` again.
+Replace the portable package, reload the unpacked Browser Agent extension, and start `LongCapture.exe`. If the extension ID changes, run `BrowserAgent\INSTALL-BROWSER-AGENT.cmd` again.
 
-Browser Assisted sessions remain under `BrowserAgentCaptures\BrowserAgent-YYYYMMDD-HHMMSS\`; diagnostics are under `BrowserAgentCaptures\Diagnostics\`; local calibration is under `BrowserAgentCaptures\Calibration\`.
+Browser sessions remain under `BrowserAgentCaptures\BrowserAgent-YYYYMMDD-HHMMSS\`; Diagnostics under `BrowserAgentCaptures\Diagnostics\`; local calibration under `BrowserAgentCaptures\Calibration\`.

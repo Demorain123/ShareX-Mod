@@ -68,6 +68,7 @@ if (-not $CheckOnly) {
 foreach ($hook in @(
   "scripts\apply-browser-agent-v018-reliability-background-stop.ps1",
   "scripts\apply-browser-agent-v018-result-semantics-r2.ps1",
+  "scripts\apply-browser-agent-v018-repair-selftest-seed.ps1",
   "scripts\apply-browser-agent-v018-repair-ledger-r3.ps1",
   "scripts\apply-browser-agent-v018-integrity-policy-r4.ps1"
 )) {

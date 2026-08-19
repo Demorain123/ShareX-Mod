@@ -156,7 +156,26 @@ internal static class BrowserAgentAdaptiveProfiles
                 VisualDeltaOffsetPixels = 0
             });
         }
-        return controller.Current.Gear > slowedGear && controller.Current.Gear <= 4;
+        if (controller.Current.Gear <= slowedGear || controller.Current.Gear > 4) return false;
+
+        BrowserAgentCalibrationProfile synthetic = BrowserAgentCalibrationProfile.CreateSyntheticForSelfTest();
+        BrowserAgentFrameTuning previous = synthetic.Tune(ForGear(0));
+        if (previous.StableWindowMs < 450 || previous.OverlapRatio is < 0.20 or > 0.50) return false;
+        for (int gear = 1; gear <= 4; gear++)
+        {
+            BrowserAgentFrameTuning current = synthetic.Tune(ForGear(gear));
+            if (current.StableWindowMs > previous.StableWindowMs) return false;
+            if (current.OverlapRatio > previous.OverlapRatio + 0.0001) return false;
+            if (current.MaxWaitMs < current.StableWindowMs) return false;
+            previous = current;
+        }
+
+        var calibratedController = new BrowserAgentAdaptiveController(
+            BrowserAgentSpeedStrategy.AdaptiveBalanced,
+            BrowserAgentRepairPrecision.Medium,
+            synthetic);
+        BrowserAgentFrameTuning calibrated = calibratedController.Current;
+        return calibrated.Gear == 3 && calibrated.StableWindowMs is >= 450 and <= 3000;
     }
 }
 
@@ -164,20 +183,33 @@ internal sealed class BrowserAgentAdaptiveController
 {
     private readonly BrowserAgentSpeedStrategy strategy;
     private readonly BrowserAgentRepairPrecision precision;
+    private readonly BrowserAgentCalibrationProfile? calibration;
     private readonly int targetGear;
     private int currentGear;
     private int cleanStreak;
 
-    public BrowserAgentAdaptiveController(BrowserAgentSpeedStrategy strategy, BrowserAgentRepairPrecision precision)
+    public BrowserAgentAdaptiveController(
+        BrowserAgentSpeedStrategy strategy,
+        BrowserAgentRepairPrecision precision,
+        BrowserAgentCalibrationProfile? calibration = null)
     {
         this.strategy = strategy;
         this.precision = precision;
+        this.calibration = calibration;
         targetGear = BrowserAgentAdaptiveProfiles.TargetGear(strategy);
         currentGear = targetGear;
     }
 
     public bool IsAdaptive => BrowserAgentAdaptiveProfiles.IsAdaptive(strategy);
-    public BrowserAgentFrameTuning Current => BrowserAgentAdaptiveProfiles.ForGear(currentGear);
+    public int TargetGear => targetGear;
+    public BrowserAgentFrameTuning Current
+    {
+        get
+        {
+            BrowserAgentFrameTuning baseline = BrowserAgentAdaptiveProfiles.ForGear(currentGear);
+            return calibration?.Tune(baseline) ?? baseline;
+        }
+    }
 
     public BrowserAgentAdaptiveDecision Observe(BrowserAgentFrameRecord frame)
     {
@@ -203,6 +235,7 @@ internal sealed class BrowserAgentAdaptiveController
         else if (frame.StabilityMutationCount >= 8) Add(1, $"mutations:{frame.StabilityMutationCount}");
         if (frame.StabilityResizeCount >= 5) Add(1, $"resizes:{frame.StabilityResizeCount}");
         if (frame.StabilityWaitMs > Math.Max(1200, before.StableWindowMs * 2)) Add(2, $"slow-settle:{frame.StabilityWaitMs}ms");
+        if (frame.StabilityMaxFalseQuietMs > Math.Max(350, before.StableWindowMs * 0.75)) Add(1, $"false-quiet:{frame.StabilityMaxFalseQuietMs}ms");
         if (frame.OverlapVerified && frame.Sequence > 2)
         {
             if (frame.OverlapMeanAbsoluteError >= 2.0) Add(4, $"overlap-mae:{frame.OverlapMeanAbsoluteError:F2}");
@@ -213,6 +246,8 @@ internal sealed class BrowserAgentAdaptiveController
         if (Math.Abs(frame.VisualDeltaOffsetPixels) >= 18) Add(3, $"visual-correction:{frame.VisualDeltaOffsetPixels}px");
         else if (Math.Abs(frame.VisualDeltaOffsetPixels) >= 8) Add(1, $"visual-correction:{frame.VisualDeltaOffsetPixels}px");
 
+        // AIMD-like behavior: evidence can reduce speed immediately, while clean
+        // frames recover one gear at a time and never above the selected target.
         if (IsAdaptive)
         {
             if (risk >= 6)
@@ -228,7 +263,8 @@ internal sealed class BrowserAgentAdaptiveController
             else if (risk == 0)
             {
                 cleanStreak++;
-                if (cleanStreak >= 3 && currentGear < targetGear)
+                int recoveryFrames = calibration is { Confidence: >= 0.70 } ? 2 : 3;
+                if (cleanStreak >= recoveryFrames && currentGear < targetGear)
                 {
                     currentGear++;
                     cleanStreak = 0;

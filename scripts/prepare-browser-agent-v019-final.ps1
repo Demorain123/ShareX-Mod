@@ -10,6 +10,8 @@ if ($CheckOnly) {
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     & pwsh -NoProfile -File scripts\apply-browser-agent-v019-integrity-anchor-compat.ps1 -CheckOnly
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & pwsh -NoProfile -File scripts\apply-browser-agent-v019-project-compile-compat.ps1 -CheckOnly
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     & pwsh -NoProfile -File scripts\apply-browser-agent-v019-integrity-proof.ps1 -CheckOnly
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     & pwsh -NoProfile -File scripts\apply-browser-agent-v019-integrity-docs.ps1 -CheckOnly
@@ -24,10 +26,15 @@ if ($CheckOnly) {
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 # v0.1.8's calibrated/adaptive layers have changed the exact capture-loop layout over
-# time. Seed the SHA-256 fast-path at a semantic integrity-evaluation point first; the
-# full overlay then sees the marker and does not depend on a brittle whitespace block.
+# time. Seed the SHA-256 fast-path at a semantic integrity-evaluation point first.
 & pwsh -NoProfile -File scripts\apply-browser-agent-v019-integrity-anchor-compat.ps1
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+# The SDK implicitly compiles project-directory .cs files. Remove the staging exclusion
+# without adding an explicit Compile item, otherwise NETSDK1022 reports a duplicate item.
+& pwsh -NoProfile -File scripts\apply-browser-agent-v019-project-compile-compat.ps1
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 & pwsh -NoProfile -File scripts\apply-browser-agent-v019-integrity-proof.ps1
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & pwsh -NoProfile -File scripts\apply-browser-agent-v019-integrity-docs.ps1

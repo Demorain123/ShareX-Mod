@@ -22,10 +22,33 @@ internal sealed class BrowserAgentCaptureOptions
     public bool UseLocalCalibration { get; init; } = true;
     public bool ShowLiveAdaptiveMonitor { get; init; } = true;
 
+    // v0.1.8: Start/Stop remains authoritative, but Browser Assisted can also end
+    // at a user-requested semantic progress value, frame budget, or elapsed time.
+    // DOM counter is preferred to OCR when the page exposes the value as text.
+    public BrowserAgentStopModeV018 StopMode { get; init; } = BrowserAgentStopModeV018.AutoPageEnd;
+    public int StopValue { get; init; } = 0;
+
+    // Background-window means the attached tab may remain behind another desktop
+    // application. The tab must still be active inside its browser window and the
+    // browser window must not be minimized on the captureVisibleTab backend.
+    public bool AllowBackgroundWindow { get; init; } = true;
+
     public static BrowserAgentCaptureOptions Default => new();
 
     public BrowserAgentCaptureOptions Normalize()
     {
+        BrowserAgentStopModeV018 stopMode = Enum.IsDefined(StopMode)
+            ? StopMode
+            : BrowserAgentStopModeV018.AutoPageEnd;
+        int stopValue = stopMode switch
+        {
+            BrowserAgentStopModeV018.AutoPageEnd => 0,
+            BrowserAgentStopModeV018.DomCounter => Math.Clamp(StopValue, 1, 100000),
+            BrowserAgentStopModeV018.FrameCount => Math.Clamp(StopValue, 2, 1200),
+            BrowserAgentStopModeV018.ElapsedMinutes => Math.Clamp(StopValue, 1, 1440),
+            _ => 0
+        };
+
         return new BrowserAgentCaptureOptions
         {
             StartDelayMs = Math.Clamp(StartDelayMs, 0, 10000),
@@ -37,7 +60,10 @@ internal sealed class BrowserAgentCaptureOptions
             SpeedStrategy = Enum.IsDefined(SpeedStrategy) ? SpeedStrategy : BrowserAgentSpeedStrategy.AdaptiveBalanced,
             RepairPrecision = Enum.IsDefined(RepairPrecision) ? RepairPrecision : BrowserAgentRepairPrecision.Medium,
             UseLocalCalibration = UseLocalCalibration,
-            ShowLiveAdaptiveMonitor = ShowLiveAdaptiveMonitor
+            ShowLiveAdaptiveMonitor = ShowLiveAdaptiveMonitor,
+            StopMode = stopMode,
+            StopValue = stopValue,
+            AllowBackgroundWindow = AllowBackgroundWindow
         };
     }
 }

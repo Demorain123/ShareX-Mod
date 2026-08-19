@@ -150,8 +150,8 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $audit = Join-Path $PWD "artifacts\UiAudit-v017"
-          & "artifacts\LongCapture\LongCapture.exe" "--modern-ui-v017-audit=$audit"
-          if ($LASTEXITCODE -ne 0) { throw "v0.1.7 packaged UI audit failed exit=$LASTEXITCODE" }
+          $auditProcess = Start-Process -FilePath (Join-Path $PWD "artifacts\LongCapture\LongCapture.exe") -ArgumentList "--modern-ui-v017-audit=$audit" -WorkingDirectory (Join-Path $PWD "artifacts\LongCapture") -Wait -PassThru
+          if ($auditProcess.ExitCode -ne 0) { throw "v0.1.7 packaged UI audit failed exit=$($auditProcess.ExitCode)" }
           $manifest = Join-Path $audit "ui-audit.json"
           if (-not (Test-Path $manifest)) { throw "UI audit manifest missing" }
           $shots = @(Get-ChildItem $audit -Filter "LongCapture-v017-ui-*.png")
@@ -159,8 +159,8 @@ jobs:
           foreach ($shot in $shots) {
             if ($shot.Length -lt 10000) { throw "UI snapshot appears empty: $($shot.Name) bytes=$($shot.Length)" }
           }
-          & "artifacts\LongCapture\LongCapture.exe" --browser-agent-poc-self-test
-          if ($LASTEXITCODE -ne 0) { throw "Browser Agent self-test failed exit=$LASTEXITCODE" }
+          $browserTest = Start-Process -FilePath (Join-Path $PWD "artifacts\LongCapture\LongCapture.exe") -ArgumentList "--browser-agent-poc-self-test" -WorkingDirectory (Join-Path $PWD "artifacts\LongCapture") -Wait -PassThru
+          if ($browserTest.ExitCode -ne 0) { throw "Browser Agent self-test failed exit=$($browserTest.ExitCode)" }
           & "artifacts\LongCapture\1-RUN-AUTOMATED-TESTS.cmd" --ci
           if ($LASTEXITCODE -ne 0) { throw "RC6 QUICK failed exit=$LASTEXITCODE" }
 

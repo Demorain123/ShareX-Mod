@@ -94,16 +94,26 @@ Patch-Literal -Path $ui `
             actions.Controls.SetChildIndex(capture, 0);
         }
 
+        // v0.1.3/v0.1.5 mounted these panels with wider column spans. TableLayoutPanel
+        // stores those spans on the controls, so reusing them in a compact two-column grid
+        // without resetting the spans makes FixedSize request phantom columns/rows at layout.
+        // Normalize the metadata while the controls still belong to the old table, then use
+        // AddRows only during reconstruction and lock the completed grid back to FixedSize.
+        targetStrip.SetColumnSpan(actions, 1);
+        targetStrip.SetRowSpan(actions, 1);
+        targetStrip.SetColumnSpan(speedBar, 1);
+        targetStrip.SetRowSpan(speedBar, 1);
+
         speedBar.Controls.Remove(speedLabel);
         targetStrip.SuspendLayout();
         try
         {
+            targetStrip.GrowStyle = TableLayoutPanelGrowStyle.AddRows;
             targetStrip.Controls.Clear();
             targetStrip.ColumnStyles.Clear();
             targetStrip.RowStyles.Clear();
             targetStrip.ColumnCount = 2;
             targetStrip.RowCount = 3;
-            targetStrip.GrowStyle = TableLayoutPanelGrowStyle.FixedSize;
             targetStrip.AutoSize = true;
             targetStrip.AutoSizeMode = AutoSizeMode.GrowAndShrink;
             targetStrip.MinimumSize = Size.Empty;
@@ -163,6 +173,11 @@ Patch-Literal -Path $ui `
             targetStrip.Controls.Add(actions, 1, 1);
             targetStrip.Controls.Add(speedLabel, 0, 2);
             targetStrip.Controls.Add(speedBar, 1, 2);
+            targetStrip.SetColumnSpan(actions, 1);
+            targetStrip.SetRowSpan(actions, 1);
+            targetStrip.SetColumnSpan(speedBar, 1);
+            targetStrip.SetRowSpan(speedBar, 1);
+            targetStrip.GrowStyle = TableLayoutPanelGrowStyle.FixedSize;
         }
         finally
         {
@@ -231,5 +246,5 @@ Patch-Literal -Path $adaptive `
 if ($CheckOnly) {
     Write-Host "Browser Agent v0.1.7 visual polish r2 compatibility passed." -ForegroundColor Green
 } else {
-    Write-Host "Browser Agent v0.1.7 visual polish r2 applied: compact command surface, persistent primary CTA, calmer settings widths and user-facing copy." -ForegroundColor Green
+    Write-Host "Browser Agent v0.1.7 visual polish r2 applied: compact command surface, persistent primary CTA, span-safe responsive grid, calmer settings widths and user-facing copy." -ForegroundColor Green
 }

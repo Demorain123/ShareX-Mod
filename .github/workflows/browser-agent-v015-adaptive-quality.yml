@@ -119,7 +119,7 @@ jobs:
           foreach ($marker in @("[BA_ADAPT]", "[BA_REPAIR]", "RunAdaptivePostReviewAsync", "EffectiveStableWindowMs", "StabilityLayoutShiftScore")) {
             if (-not $session.Contains($marker)) { throw "Missing adaptive session marker: $marker" }
           }
-          foreach ($marker in @('PerformanceObserver.supportedEntryTypes?.includes("layout-shift")', "layoutShiftScore", "const topInset = inset(\"top\")", 'protocolVersion: "0.1.5"')) {
+          foreach ($marker in @('PerformanceObserver.supportedEntryTypes?.includes("layout-shift")', "layoutShiftScore", 'const topInset = inset("top")', 'protocolVersion: "0.1.5"')) {
             if (-not $worker.Contains($marker)) { throw "Missing Browser evidence marker: $marker" }
           }
           $pinnedCount = ([regex]::Matches($worker, 'const pinned =')).Count

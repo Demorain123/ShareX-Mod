@@ -12,21 +12,9 @@ if ($text.Contains($marker)) {
 }
 
 $old = @'
-            if (!BrowserAgentAdaptiveProfiles.SelfTest())
-            {
-                LongCaptureLog.Warn("Browser Agent v0.1.5 self-test failed adaptive speed/recovery policy");
-                return 36;
-            }
-
             if (!RunFrameCodecRoundTrip())
 '@
 $new = @'
-            if (!BrowserAgentAdaptiveProfiles.SelfTest())
-            {
-                LongCaptureLog.Warn("Browser Agent v0.1.5 self-test failed adaptive speed/recovery policy");
-                return 36;
-            }
-
             if (!BrowserAgentIntegrityPolicyV018.SelfTest() ||
                 !BrowserAgentAdaptiveProfiles.UnlimitedRepairAttempts(BrowserAgentRepairPrecision.Perfect) ||
                 BrowserAgentAdaptiveProfiles.DefaultRepairTimeLimitSeconds(BrowserAgentRepairPrecision.Perfect) < 600)

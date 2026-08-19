@@ -42,8 +42,8 @@ Add-Check "proof-specific anomalies feed existing repair candidate ledger" 7 ((H
 # C. Fail-closed and post-capture verification — 20.
 Add-Check "critical frame-file mismatch blocks stitching" 5 ((Has $session 'failed-integrity-proof') -and (Has $session 'frame-file-integrity-failure') -and (Has $session 'stitching was blocked')) $true
 Add-Check "coverage/duplicate uncertainty cannot become silent full verification" 5 ((Has $session 'integrity-proof-unresolved') -and (Has $proof 'quality-evidence-unresolved')) $true
-Add-Check "offline verifier rechecks proof, all frames and final PNG" 5 ((Has $program '--verify-browser-agent-integrity=') -and (Has $proof 'VerifyExistingSession') -and (Has $proof 'integrity.json SHA-256 does not match its sidecar')) $false
-Add-Check "deterministic self-test covers clean, duplicate/gap, tamper and ordered root" 5 ((Has $proof 'public static bool SelfTest()') -and (Has $proof 'tampered.FrameHashMismatchCount') -and (Has $proof 'ExactDuplicateDifferentPositionCount') -and (Has $selftest 'self-test failed v0.1.9 SHA-256/Merkle/coverage integrity proof')) $true
+Add-Check "offline verifier is quality-aware and cross-checks manifest/proof/final bytes" 5 ((Has $program '--verify-browser-agent-integrity=') -and (Has $proof 'the recorded capture proof is not fully verified') -and (Has $proof 'session.json quality/root state does not match integrity.json') -and (Has $proof 'session.json final-image evidence does not match integrity.json')) $true
+Add-Check "deterministic self-test covers persisted verifier, tamper, unresolved quality and ordered root" 5 ((Has $proof 'VerifyExistingSession(root) != 0') -and (Has $proof 'VerifyExistingSession(root) == 0') -and (Has $proof 'offline verifier must reject unresolved-quality proof') -and (Has $proof 'tampered.FrameHashMismatchCount') -and (Has $selftest 'self-test failed v0.1.9 SHA-256/Merkle/coverage integrity proof')) $true
 
 # D. Architecture, docs and security — 15.
 $permissions = @($manifest.permissions)

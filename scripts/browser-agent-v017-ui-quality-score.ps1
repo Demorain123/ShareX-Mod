@@ -29,6 +29,7 @@ function Contrast([double]$a, [double]$b) {
 }
 
 $ui = Text "LongCapture.Standalone\StandaloneUiPolish.cs"
+$adaptiveUi = Text "LongCapture.Standalone\BrowserAgentAdaptiveUiV015.cs"
 $project = Text "LongCapture.Standalone\LongCapture.Standalone.csproj"
 $overlay = Text "scripts\apply-browser-agent-v017-modern-ui.ps1"
 
@@ -37,7 +38,7 @@ Add-Check "responsive target/speed command surface" 5 ((Has $ui 'targetStrip.Aut
 Add-Check "scroll-safe settings surface" 5 ((Has $ui 'body.AutoScroll = true') -and (Has $ui 'body.RowStyles[i].SizeType = SizeType.AutoSize')) $true
 Add-Check "readiness can wrap instead of clipping" 5 ((Has $ui 'panel.WrapContents = true') -and (Has $ui 'readiness.MaximumSize')) $true
 Add-Check "important labels explicitly avoid ellipsis" 5 ((Has $ui 'subtitle.AutoEllipsis = false') -and (Has $ui 'status.AutoEllipsis = false') -and (Has $ui 'output.AutoEllipsis = false')) $true
-Add-Check "user screenshot width is a regression size" 5 ((Has $ui 'new Size(925, 760)') -and (Has $ui 'new Size(840, 720)') -and (Has $ui 'new Size(1280, 900)')) $true
+Add-Check "reported 927px-class width is a real regression viewport" 5 ((Has $ui 'new Size(925, 720)') -and (Has $ui 'new Size(840, 680)') -and (Has $ui 'new Size(1000, 740)')) $true "hosted-desktop-safe 840/900/925/1000 matrix"
 Add-Check "target strip child clipping is measured" 5 ((Has $ui 'ValidateTargetStrip') -and (Has $ui 'Capture speed child clipped')) $true
 
 # 2) Modern visual hierarchy — 25 points.
@@ -45,7 +46,13 @@ Add-Check "Fluent-like canvas/surface/text palette" 5 ((Has $ui 'Palette.Canvas'
 Add-Check "primary capture CTA has accent hierarchy" 5 ((Has $ui 'button.BackColor = Palette.Accent') -and (Has $ui 'AccentHover') -and (Has $ui 'AccentPressed')) $true
 Add-Check "rounded settings surface" 5 ((Has $ui 'RoundedSurfacePanelV017') -and (Has $ui 'CornerRadius = 12')) $false
 Add-Check "Windows typography hierarchy" 5 ((Has $ui 'Segoe UI Semibold') -and (Has $ui '24F') -and (Has $ui 'Reliable long screenshots')) $false
-Add-Check "progressive disclosure removes inactive clutter" 5 ((Has $ui 'ApplyModeVisibility') -and (Has $ui 'SetRowVisible(body, 1, !normal)') -and (Has $ui 'SetRowVisible(body, 3, runRecipe)')) $true
+$progressiveDisclosure = (Has $ui 'ApplyModeVisibility') -and
+    (Has $ui 'SetRowVisible(body, 1, !normal)') -and
+    (Has $ui 'SetRowVisible(body, 3, runRecipe)') -and
+    (Has $adaptiveUi 'benchmarkButton.Visible = browserMode;') -and
+    (Has $adaptiveUi 'calibrationToggle.Visible = browserMode;') -and
+    (Has $adaptiveUi 'liveMonitorToggle.Visible = browserMode;')
+Add-Check "progressive disclosure removes inactive clutter" 5 $progressiveDisclosure $true "Browser-only benchmark/calibration/live controls must disappear outside Browser Assisted"
 
 # 3) Accessibility and scaling — 20 points.
 $textLum = RelativeLuminance 31 41 55
@@ -60,9 +67,14 @@ Add-Check "PerMonitorV2 + DPI reflow retained" 5 ((Has $project '<ApplicationHig
 
 # 4) Deterministic product-design testability — 25 points.
 Add-Check "button text-fit regression" 5 ((Has $ui 'ValidateButtons') -and (Has $ui 'button text clipped')) $true
-Add-Check "multi-width visual snapshots" 5 ((Has $ui 'CaptureVisualAudit') -and (Has $ui 'LongCapture-v017-ui-') -and (Has $ui 'ui-audit.json')) $true
+$realMultiWidthAudit = (Has $ui 'CaptureVisualAudit') -and
+    (Has $ui 'var observedClientWidths = new HashSet<int>();') -and
+    (Has $ui 'visual-audit did not exercise four distinct responsive widths') -and
+    (Has $ui 'actualClient = $"{width}x{height}"')
+Add-Check "multi-width visual snapshots prove distinct real viewports" 5 $realMultiWidthAudit $true
 Add-Check "packaged CLI can run the UI audit" 5 ((Has $overlay '--modern-ui-v017-audit') -and (Has $overlay 'CaptureVisualAudit')) $true
-Add-Check "responsive validation exposes v0.1.7" 5 ((Has $ui 'ExperienceVersion = "0.1.7"') -and (Has $ui 'ValidateModernHierarchy')) $true
+$screenAware = (Has $ui 'int preferredWidth = Math.Min(1120') -and (Has $ui 'workArea.Width - 64') -and (Has $ui 'workArea.Height - 64')
+Add-Check "responsive validation + monitor-aware default sizing" 5 ((Has $ui 'ExperienceVersion = "0.1.7"') -and (Has $ui 'ValidateModernHierarchy') -and $screenAware) $true
 Add-Check "no new third-party UI framework dependency" 5 ((Has $project '<UseWindowsForms>true</UseWindowsForms>') -and -not ($project -match '<PackageReference[^>]+(MaterialSkin|ReaLTaiizor|Krypton|Guna|AntdUI|SunnyUI)')) $false
 
 $maximum = ($checks | Measure-Object -Property points -Sum).Sum

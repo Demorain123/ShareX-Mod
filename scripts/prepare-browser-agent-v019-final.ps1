@@ -14,6 +14,8 @@ if ($CheckOnly) {
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     & pwsh -NoProfile -File scripts\apply-browser-agent-v019-integrity-proof.ps1 -CheckOnly
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & pwsh -NoProfile -File scripts\apply-browser-agent-v019-verifier-hardening.ps1 -CheckOnly
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     & pwsh -NoProfile -File scripts\apply-browser-agent-v019-integrity-docs.ps1 -CheckOnly
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     Write-Host "Browser Agent v0.1.9 overlay compatibility passed." -ForegroundColor Green
@@ -37,6 +39,13 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 & pwsh -NoProfile -File scripts\apply-browser-agent-v019-integrity-proof.ps1
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+# Round-3 manual package review found that a byte-clean but quality-unresolved proof
+# could still return success through the offline verifier. Harden that semantic path
+# before scoring/building and exercise persisted proof + tamper cases in self-test.
+& pwsh -NoProfile -File scripts\apply-browser-agent-v019-verifier-hardening.ps1
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 & pwsh -NoProfile -File scripts\apply-browser-agent-v019-integrity-docs.ps1
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

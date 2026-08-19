@@ -10,6 +10,15 @@ on:
       - "mod-overlay/**"
       - "scripts/**"
       - ".github/workflows/browser-agent-v018-final-r2.yml"
+  pull_request:
+    branches: ["standalone/longcapture-v0.1.9-rc6-sparse-edge-evidence"]
+    paths:
+      - "LongCapture.Standalone/**"
+      - "ShareX.ScreenCaptureLib/**"
+      - "ShareX.Avalonia/**"
+      - "mod-overlay/**"
+      - "scripts/**"
+      - ".github/workflows/browser-agent-v018-final-r2.yml"
   workflow_dispatch:
 
 concurrency:

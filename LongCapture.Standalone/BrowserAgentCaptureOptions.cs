@@ -12,11 +12,15 @@ internal sealed class BrowserAgentCaptureOptions
     public int PreloadMaxSeconds { get; init; } = 90;
     public bool RequireRegionSelection { get; init; } = true;
 
-    // v0.1.5: a fixed strategy maps the GUI preset to constant parameters;
-    // adaptive strategies start near their target speed and downshift on real
-    // loading/layout/seam evidence before gradually recovering.
+    // v0.1.5+: fixed strategies map GUI presets to constant parameters while
+    // adaptive strategies can change gear using measured loading/layout/seam risk.
     public BrowserAgentSpeedStrategy SpeedStrategy { get; init; } = BrowserAgentSpeedStrategy.AdaptiveBalanced;
     public BrowserAgentRepairPrecision RepairPrecision { get; init; } = BrowserAgentRepairPrecision.Medium;
+
+    // v0.1.6: local calibration is optional and bounded. It only reshapes the
+    // existing safe gear ladder; it cannot bypass the Browser Agent safety guards.
+    public bool UseLocalCalibration { get; init; } = true;
+    public bool ShowLiveAdaptiveMonitor { get; init; } = true;
 
     public static BrowserAgentCaptureOptions Default => new();
 
@@ -31,7 +35,9 @@ internal sealed class BrowserAgentCaptureOptions
             PreloadMaxSeconds = Math.Clamp(PreloadMaxSeconds, 10, 180),
             RequireRegionSelection = RequireRegionSelection,
             SpeedStrategy = Enum.IsDefined(SpeedStrategy) ? SpeedStrategy : BrowserAgentSpeedStrategy.AdaptiveBalanced,
-            RepairPrecision = Enum.IsDefined(RepairPrecision) ? RepairPrecision : BrowserAgentRepairPrecision.Medium
+            RepairPrecision = Enum.IsDefined(RepairPrecision) ? RepairPrecision : BrowserAgentRepairPrecision.Medium,
+            UseLocalCalibration = UseLocalCalibration,
+            ShowLiveAdaptiveMonitor = ShowLiveAdaptiveMonitor
         };
     }
 }

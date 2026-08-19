@@ -152,6 +152,8 @@ jobs:
           $audit = Join-Path $PWD "artifacts\UiAudit-v017"
           $auditProcess = Start-Process -FilePath (Join-Path $PWD "artifacts\LongCapture\LongCapture.exe") -ArgumentList "--modern-ui-v017-audit=$audit" -WorkingDirectory (Join-Path $PWD "artifacts\LongCapture") -Wait -PassThru
           if ($auditProcess.ExitCode -ne 0) {
+            $result = Join-Path $audit "ui-audit-result.txt"
+            if (Test-Path $result) { Write-Host "=== ui-audit-result.txt ==="; Get-Content $result }
             $exception = Join-Path $audit "ui-audit-exception.txt"
             if (Test-Path $exception) { Write-Host "=== ui-audit-exception.txt ==="; Get-Content $exception }
             throw "v0.1.7 packaged UI audit failed exit=$($auditProcess.ExitCode)"
@@ -216,6 +218,8 @@ jobs:
           Remove-Item $reAudit -Recurse -Force -ErrorAction SilentlyContinue
           $process = Start-Process -FilePath (Join-Path $temp "LongCapture.exe") -ArgumentList "--modern-ui-v017-audit=$reAudit" -WorkingDirectory $temp -Wait -PassThru
           if ($process.ExitCode -ne 0) {
+            $result = Join-Path $reAudit "ui-audit-result.txt"
+            if (Test-Path $result) { Write-Host "=== extracted ui-audit-result.txt ==="; Get-Content $result }
             $exception = Join-Path $reAudit "ui-audit-exception.txt"
             if (Test-Path $exception) { Write-Host "=== extracted ui-audit-exception.txt ==="; Get-Content $exception }
             throw "Extracted v0.1.7 UI audit failed with exit code $($process.ExitCode)"

@@ -34,7 +34,7 @@ $project = Text "LongCapture.Standalone\LongCapture.Standalone.csproj"
 $overlay = Text "scripts\apply-browser-agent-v017-modern-ui.ps1"
 
 # 1) Responsive layout and text integrity — 30 points.
-Add-Check "responsive target/speed command surface" 5 ((Has $ui 'targetStrip.AutoSize = true') -and (Has $ui 'speedBar.WrapContents = true') -and (Has $ui 'SizeType.AutoSize')) $true
+Add-Check "compact responsive target/speed command surface" 5 ((Has $ui 'RebuildModernTargetSurface') -and (Has $ui 'targetStrip.RowCount = 3') -and (Has $ui 'speedBar.WrapContents = true')) $true
 Add-Check "scroll-safe settings surface" 5 ((Has $ui 'body.AutoScroll = true') -and (Has $ui 'body.RowStyles[i].SizeType = SizeType.AutoSize')) $true
 Add-Check "readiness can wrap instead of clipping" 5 ((Has $ui 'panel.WrapContents = true') -and (Has $ui 'readiness.MaximumSize')) $true
 Add-Check "important labels explicitly avoid ellipsis" 5 ((Has $ui 'subtitle.AutoEllipsis = false') -and (Has $ui 'status.AutoEllipsis = false') -and (Has $ui 'output.AutoEllipsis = false')) $true
@@ -43,9 +43,9 @@ Add-Check "target strip child clipping is measured" 5 ((Has $ui 'ValidateTargetS
 
 # 2) Modern visual hierarchy — 25 points.
 Add-Check "Fluent-like canvas/surface/text palette" 5 ((Has $ui 'Palette.Canvas') -and (Has $ui 'Palette.Surface') -and (Has $ui 'Palette.TextMuted')) $false
-Add-Check "primary capture CTA has accent hierarchy" 5 ((Has $ui 'button.BackColor = Palette.Accent') -and (Has $ui 'AccentHover') -and (Has $ui 'AccentPressed')) $true
+Add-Check "persistent primary capture CTA has accent hierarchy" 5 ((Has $ui 'actions.Controls.SetChildIndex(capture, 0)') -and (Has $ui 'button.BackColor = Palette.Accent') -and (Has $ui 'AccentHover') -and (Has $ui 'AccentPressed')) $true
 Add-Check "rounded settings surface" 5 ((Has $ui 'RoundedSurfacePanelV017') -and (Has $ui 'CornerRadius = 12')) $false
-Add-Check "Windows typography hierarchy" 5 ((Has $ui 'Segoe UI Semibold') -and (Has $ui '24F') -and (Has $ui 'Reliable long screenshots')) $false
+Add-Check "Windows typography + concise product copy" 5 ((Has $ui 'Segoe UI Semibold') -and (Has $ui '24F') -and (Has $ui 'Browser-assisted capture · Quality guard · Recipes')) $false
 $progressiveDisclosure = (Has $ui 'ApplyModeVisibility') -and
     (Has $ui 'SetRowVisible(body, 1, !normal)') -and
     (Has $ui 'SetRowVisible(body, 3, runRecipe)') -and
@@ -66,13 +66,14 @@ Add-Check "checkbox text-fit regression" 5 ((Has $ui 'ValidateCheckBoxes') -and 
 Add-Check "PerMonitorV2 + DPI reflow retained" 5 ((Has $project '<ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>') -and (Has $ui 'form.DpiChanged')) $true
 
 # 4) Deterministic product-design testability — 25 points.
-Add-Check "button text-fit regression" 5 ((Has $ui 'ValidateButtons') -and (Has $ui 'button text clipped')) $true
+Add-Check "button text-fit regression + compact numeric fields" 5 ((Has $ui 'ValidateButtons') -and (Has $ui 'button text clipped') -and (Has $ui 'numeric.Width = 220')) $true
 $realMultiWidthAudit = (Has $ui 'CaptureVisualAudit') -and
     (Has $ui 'var observedClientWidths = new HashSet<int>();') -and
     (Has $ui 'visual-audit did not exercise four distinct responsive widths') -and
-    (Has $ui 'actualClient = $"{width}x{height}"')
-Add-Check "multi-width visual snapshots prove distinct real viewports" 5 $realMultiWidthAudit $true
-Add-Check "packaged CLI can run the UI audit" 5 ((Has $overlay '--modern-ui-v017-audit') -and (Has $overlay 'CaptureVisualAudit')) $true
+    (Has $ui 'TryMeasureVisualAuditContent') -and
+    (Has $ui 'visual-audit frame is visually blank or missing the real control hierarchy')
+Add-Check "multi-width visual snapshots prove real nonblank viewports" 5 $realMultiWidthAudit $true
+Add-Check "packaged CLI can run the UI audit" 5 ((Has $overlay '--modern-ui-v017-audit') -and (Has $overlay 'apply-browser-agent-v017-visual-polish-r2.ps1')) $true
 $screenAware = (Has $ui 'int preferredWidth = Math.Min(1120') -and (Has $ui 'workArea.Width - 64') -and (Has $ui 'workArea.Height - 64')
 Add-Check "responsive validation + monitor-aware default sizing" 5 ((Has $ui 'ExperienceVersion = "0.1.7"') -and (Has $ui 'ValidateModernHierarchy') -and $screenAware) $true
 Add-Check "no new third-party UI framework dependency" 5 ((Has $project '<UseWindowsForms>true</UseWindowsForms>') -and -not ($project -match '<PackageReference[^>]+(MaterialSkin|ReaLTaiizor|Krypton|Guna|AntdUI|SunnyUI)')) $false
@@ -84,7 +85,7 @@ $passed = $score -ge $MinimumScore -and $criticalFailures.Count -eq 0
 
 $result = [pscustomobject]@{
     version = "0.1.7"
-    gate = "pre-build-modern-responsive-ui"
+    gate = "pre-build-modern-responsive-ui-r2"
     score = $score
     maximum = $maximum
     minimum = $MinimumScore

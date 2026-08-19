@@ -7,6 +7,9 @@ internal sealed class BrowserAgentAdaptiveUiV015
     private readonly Label speedHint = new();
     private readonly Label precisionHint = new();
     private readonly TableLayoutPanel precisionPanel = new();
+    private readonly Button benchmarkButton = new();
+    private readonly CheckBox calibrationToggle = new();
+    private readonly CheckBox liveMonitorToggle = new();
 
     private Control? normalRow4Control;
     private string normalRow4Label = "Recipe actions";
@@ -16,6 +19,8 @@ internal sealed class BrowserAgentAdaptiveUiV015
     private bool globalSpeedMounted;
     private BrowserAgentSpeedStrategy browserStrategy = BrowserAgentSpeedStrategy.AdaptiveBalanced;
     private BrowserAgentSpeedStrategy nativeStrategy = BrowserAgentSpeedStrategy.FixedMedium;
+    private Func<Task<BrowserAgentCalibrationResult>>? calibrationRunner;
+    private BrowserAgentAdaptiveMonitorV016? liveMonitor;
 
     public BrowserAgentAdaptiveUiV015()
     {
@@ -41,11 +46,39 @@ internal sealed class BrowserAgentAdaptiveUiV015
         precisionHint.ForeColor = Color.DimGray;
         precisionHint.Padding = new Padding(8, 6, 0, 0);
 
+        benchmarkButton.Text = "Browser benchmark";
+        benchmarkButton.AutoSize = true;
+        benchmarkButton.Height = 30;
+        benchmarkButton.Enabled = false;
+
+        calibrationToggle.Text = "Use local calibration";
+        calibrationToggle.AutoSize = true;
+        calibrationToggle.Checked = true;
+        calibrationToggle.Enabled = false;
+        calibrationToggle.Padding = new Padding(4, 5, 0, 0);
+
+        liveMonitorToggle.Text = "Live params";
+        liveMonitorToggle.AutoSize = true;
+        liveMonitorToggle.Checked = true;
+        liveMonitorToggle.Enabled = false;
+        liveMonitorToggle.Padding = new Padding(4, 5, 0, 0);
+
+        benchmarkButton.Click += async (_, _) => await RunCalibrationAsync();
+        calibrationToggle.CheckedChanged += (_, _) =>
+        {
+            if (browserMode && !applyingPreset)
+            {
+                LongCaptureLog.Info($"[USER_ACTION] browser-setting localCalibration={calibrationToggle.Checked}");
+            }
+        };
+
         BuildPanel(precisionPanel, precisionSelector, precisionHint);
     }
 
     public BrowserAgentSpeedStrategy Strategy => browserMode ? browserStrategy : nativeStrategy;
     public BrowserAgentRepairPrecision Precision => (BrowserAgentRepairPrecision)Math.Clamp(precisionSelector.SelectedIndex, 0, 2);
+    public bool UseLocalCalibration => browserMode && calibrationToggle.Checked;
+    public bool ShowLiveMonitor => browserMode && liveMonitorToggle.Checked;
 
     public void MountGlobalSpeedStrip(TableLayoutPanel targetStrip)
     {
@@ -56,10 +89,7 @@ internal sealed class BrowserAgentAdaptiveUiV015
         try
         {
             targetStrip.RowCount = Math.Max(3, targetStrip.RowCount);
-            while (targetStrip.RowStyles.Count < 3)
-            {
-                targetStrip.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
-            }
+            while (targetStrip.RowStyles.Count < 3) targetStrip.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
             targetStrip.RowStyles[2].SizeType = SizeType.Absolute;
             targetStrip.RowStyles[2].Height = 38;
             targetStrip.Height = Math.Max(targetStrip.Height, 140);
@@ -82,16 +112,27 @@ internal sealed class BrowserAgentAdaptiveUiV015
                 Margin = new Padding(0, 4, 8, 0)
             };
             speedSelector.Margin = new Padding(0, 2, 6, 0);
+            benchmarkButton.Margin = new Padding(6, 2, 4, 0);
+            calibrationToggle.Margin = new Padding(4, 2, 2, 0);
+            liveMonitorToggle.Margin = new Padding(2, 2, 4, 0);
             bar.Controls.Add(label);
             bar.Controls.Add(speedSelector);
+            bar.Controls.Add(benchmarkButton);
+            bar.Controls.Add(calibrationToggle);
+            bar.Controls.Add(liveMonitorToggle);
             bar.Controls.Add(speedHint);
             targetStrip.Controls.Add(bar, 0, 2);
-            targetStrip.SetColumnSpan(bar, 2);
+            targetStrip.SetColumnSpan(bar, 4);
         }
         finally
         {
             targetStrip.ResumeLayout(true);
         }
+    }
+
+    public void AttachCalibrationHandler(Func<Task<BrowserAgentCalibrationResult>> runner)
+    {
+        calibrationRunner = runner;
     }
 
     public void AttachHandlers(
@@ -117,6 +158,11 @@ internal sealed class BrowserAgentAdaptiveUiV015
         {
             LongCaptureLog.Info($"[USER_ACTION] browser-setting repairPrecision={Precision}");
         };
+        calibrationToggle.CheckedChanged += (_, _) =>
+        {
+            if (!browserMode || applyingPreset) return;
+            ApplyPreset(startDelay, pageSettle, scrollAmountOrOverlap, browserPreScanOrNativeScrollTop);
+        };
     }
 
     public void SetMode(
@@ -131,10 +177,11 @@ internal sealed class BrowserAgentAdaptiveUiV015
         bool changed = browserMode != this.browserMode;
         this.browserMode = browserMode;
 
-        if (changed)
-        {
-            RebuildSpeedItems(browserMode);
-        }
+        if (changed) RebuildSpeedItems(browserMode);
+
+        benchmarkButton.Enabled = browserMode;
+        calibrationToggle.Enabled = browserMode;
+        liveMonitorToggle.Enabled = browserMode;
 
         body.SuspendLayout();
         try
@@ -156,15 +203,14 @@ internal sealed class BrowserAgentAdaptiveUiV015
             body.ResumeLayout(true);
         }
 
-        if (changed)
-        {
-            ApplyPreset(startDelay, pageSettle, scrollAmountOrOverlap, browserPreScanOrNativeScrollTop);
-        }
+        if (changed) ApplyPreset(startDelay, pageSettle, scrollAmountOrOverlap, browserPreScanOrNativeScrollTop);
+        else UpdateHint();
     }
 
     public BrowserAgentCaptureOptions EnrichOptions(BrowserAgentCaptureOptions source)
     {
         BrowserAgentFrameTuning tuning = BrowserAgentAdaptiveProfiles.BaseTuning(browserStrategy);
+        if (UseLocalCalibration) tuning = BrowserAgentCalibrationStore.Current.Tune(tuning);
         bool adaptive = BrowserAgentAdaptiveProfiles.IsAdaptive(browserStrategy);
         return new BrowserAgentCaptureOptions
         {
@@ -175,8 +221,57 @@ internal sealed class BrowserAgentAdaptiveUiV015
             PreloadMaxSeconds = source.PreloadMaxSeconds,
             RequireRegionSelection = source.RequireRegionSelection,
             SpeedStrategy = browserStrategy,
-            RepairPrecision = Precision
+            RepairPrecision = Precision,
+            UseLocalCalibration = UseLocalCalibration,
+            ShowLiveAdaptiveMonitor = ShowLiveMonitor
         }.Normalize();
+    }
+
+    public void BeginCaptureMonitor()
+    {
+        EndCaptureMonitor();
+        BrowserAgentAdaptiveTelemetryHub.Reset();
+        if (!ShowLiveMonitor) return;
+        liveMonitor = new BrowserAgentAdaptiveMonitorV016();
+        liveMonitor.Show();
+        LongCaptureLog.Info("[BA_LIVE] adaptive live monitor shown without activation");
+    }
+
+    public void EndCaptureMonitor()
+    {
+        BrowserAgentAdaptiveMonitorV016? monitor = liveMonitor;
+        liveMonitor = null;
+        if (monitor is null) return;
+        try { monitor.Close(); } catch { monitor.Dispose(); }
+        LongCaptureLog.Info("[BA_LIVE] adaptive live monitor closed");
+    }
+
+    private async Task RunCalibrationAsync()
+    {
+        if (!browserMode || calibrationRunner is null) return;
+        benchmarkButton.Enabled = false;
+        string old = benchmarkButton.Text;
+        benchmarkButton.Text = "Benchmarking...";
+        try
+        {
+            BrowserAgentCalibrationResult result = await calibrationRunner();
+            UpdateHint();
+            MessageBox.Show(
+                result.Summary,
+                "Browser calibration complete",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            LongCaptureLog.Warn($"[BA_CALIB] benchmark failed: {LongCaptureLog.OneLine(ex.Message)}");
+            MessageBox.Show(ex.Message, "Browser calibration failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        finally
+        {
+            benchmarkButton.Text = old;
+            benchmarkButton.Enabled = browserMode;
+        }
     }
 
     private void ApplyPreset(
@@ -192,14 +287,12 @@ internal sealed class BrowserAgentAdaptiveUiV015
             if (browserMode)
             {
                 BrowserAgentFrameTuning tuning = BrowserAgentAdaptiveProfiles.BaseTuning(browserStrategy);
+                if (UseLocalCalibration) tuning = BrowserAgentCalibrationStore.Current.Tune(tuning);
                 startDelay.Value = Clamp(tuning.StartDelayMs, startDelay.Minimum, startDelay.Maximum);
                 pageSettle.Value = Clamp(tuning.StableWindowMs, pageSettle.Minimum, pageSettle.Maximum);
                 scrollAmountOrOverlap.Value = Clamp((decimal)(tuning.OverlapRatio * 100.0), scrollAmountOrOverlap.Minimum, scrollAmountOrOverlap.Maximum);
                 browserPreScanOrNativeScrollTop.Checked = false;
                 precisionSelector.Enabled = BrowserAgentAdaptiveProfiles.IsAdaptive(browserStrategy);
-                speedHint.Text = BrowserAgentAdaptiveProfiles.IsAdaptive(browserStrategy)
-                    ? $"Target {tuning.Name}; slows on loading/layout risk, then recovers after clean frames."
-                    : $"Fixed {tuning.Name}: {tuning.StableWindowMs} ms settle, {tuning.OverlapRatio:P0} overlap.";
             }
             else
             {
@@ -215,13 +308,34 @@ internal sealed class BrowserAgentAdaptiveUiV015
                 startDelay.Value = Clamp(delay, startDelay.Minimum, startDelay.Maximum);
                 pageSettle.Value = Clamp(settle, pageSettle.Minimum, pageSettle.Maximum);
                 scrollAmountOrOverlap.Value = Clamp(scroll, scrollAmountOrOverlap.Minimum, scrollAmountOrOverlap.Maximum);
-                string name = BrowserAgentAdaptiveProfiles.ForGear(gear).Name;
-                speedHint.Text = $"Fixed {name}: {settle} ms settle, scroll amount {scroll}.";
             }
+            UpdateHint();
         }
         finally
         {
             applyingPreset = false;
+        }
+    }
+
+    private void UpdateHint()
+    {
+        if (browserMode)
+        {
+            BrowserAgentFrameTuning tuning = BrowserAgentAdaptiveProfiles.BaseTuning(browserStrategy);
+            BrowserAgentCalibrationProfile profile = BrowserAgentCalibrationStore.Current;
+            if (UseLocalCalibration) tuning = profile.Tune(tuning);
+            string learned = UseLocalCalibration
+                ? $" · local confidence {profile.Confidence:P0} ({profile.BenchmarkSamples + profile.FrameSamples} samples)"
+                : " · local calibration off";
+            speedHint.Text = BrowserAgentAdaptiveProfiles.IsAdaptive(browserStrategy)
+                ? $"Target {tuning.Name}: {tuning.StableWindowMs}ms / {tuning.OverlapRatio:P0}{learned}"
+                : $"Fixed {tuning.Name}: {tuning.StartDelayMs}ms / {tuning.StableWindowMs}ms / {tuning.OverlapRatio:P0}{learned}";
+        }
+        else
+        {
+            int gear = Math.Clamp((int)nativeStrategy, 0, 4);
+            string name = BrowserAgentAdaptiveProfiles.ForGear(gear).Name;
+            speedHint.Text = $"Fixed {name} · app-specific runtime learning is not applied to native modes yet.";
         }
     }
 

@@ -1,0 +1,195 @@
+name: LongCapture Browser Agent v0.1.9 SHA-256 Integrity Proof
+
+on:
+  push:
+    branches: ["standalone/browser-agent-v0.1-poc"]
+    paths:
+      - "LongCapture.Standalone/**"
+      - "ShareX.ScreenCaptureLib/**"
+      - "ShareX.Avalonia/**"
+      - "mod-overlay/**"
+      - "scripts/**"
+      - ".github/workflows/browser-agent-v019-integrity-proof.yml"
+  pull_request:
+    branches: ["standalone/longcapture-v0.1.9-rc6-sparse-edge-evidence"]
+    paths:
+      - "LongCapture.Standalone/**"
+      - "ShareX.ScreenCaptureLib/**"
+      - "ShareX.Avalonia/**"
+      - "mod-overlay/**"
+      - "scripts/**"
+      - ".github/workflows/browser-agent-v019-integrity-proof.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: browser-agent-v019-integrity-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  prebuild-95-integrity-build-package:
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Apply v0.1.8 lower layer and v0.1.9 pre-build 95+ gate
+        shell: pwsh
+        run: |
+          & pwsh -NoProfile -File scripts\prepare-browser-agent-v019-final.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify SHA-256 Merkle coverage fail-closed semantics and release coherence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $proof = Get-Content "LongCapture.Standalone\BrowserAgentIntegrityProofV019.cs" -Raw
+          $session = Get-Content "LongCapture.Standalone\BrowserAgentCaptureSession.cs" -Raw
+          $models = Get-Content "LongCapture.Standalone\BrowserAgentModels.cs" -Raw
+          $program = Get-Content "LongCapture.Standalone\Program.cs" -Raw
+          $project = Get-Content "LongCapture.Standalone\LongCapture.Standalone.csproj" -Raw
+          foreach ($marker in @(
+            'SHA256.HashData',
+            'ProofHashFileName = "integrity.json.sha256"',
+            'RFC6962-style domain-separated Merkle root',
+            'prefixed[0] = 0x00',
+            'payload[0] = 0x01',
+            'ExactDuplicateDifferentPositionCount',
+            'CoverageGapCount',
+            'VerifyExistingSession'
+          )) {
+            if (-not $proof.Contains($marker)) { throw "Missing v0.1.9 proof marker: $marker" }
+          }
+          foreach ($marker in @(
+            'BrowserAgentIntegrityProofV019.StampNewCapture',
+            'BrowserAgentIntegrityProofV019.StampRecapture',
+            'BrowserAgentIntegrityProofV019.ObserveFastPath',
+            'FinalizePreStitch(sessionDirectory, manifest)',
+            'FinalizeOutput(sessionDirectory, manifest, outputPath)',
+            'frame-file-integrity-failure',
+            'integrity-proof-unresolved',
+            '[BA_HASH]'
+          )) {
+            if (-not $session.Contains($marker)) { throw "Missing v0.1.9 session marker: $marker" }
+          }
+          foreach ($marker in @(
+            'InitialFrameSha256',
+            'AcceptedFrameSha256',
+            'IntegrityFrameLedgerRootSha256',
+            'FinalImageSha256'
+          )) {
+            if (-not $models.Contains($marker)) { throw "Missing v0.1.9 model marker: $marker" }
+          }
+          if (-not $program.Contains('--verify-browser-agent-integrity=')) { throw "Offline integrity verifier CLI missing" }
+          if (-not $project.Contains('<Compile Include="BrowserAgentIntegrityProofV019.cs" />')) { throw "v0.1.9 proof helper is not compiled" }
+          if ($proof -match '\bSHA1\b|\bSHA-1\b') { throw "Deprecated SHA-1 appeared in v0.1.9 proof code" }
+
+          $manifestPath = "LongCapture.Standalone\BrowserAgent\Extension\manifest.json"
+          $workerPath = "LongCapture.Standalone\BrowserAgent\Extension\service-worker.js"
+          $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+          $worker = Get-Content $workerPath -Raw
+          $permissions = @($manifest.permissions)
+          if ($permissions.Count -ne 3 -or
+              $permissions -notcontains "activeTab" -or
+              $permissions -notcontains "scripting" -or
+              $permissions -notcontains "nativeMessaging" -or
+              $permissions -contains "debugger" -or
+              $manifest.host_permissions) {
+            throw "Browser Agent permission boundary expanded unexpectedly"
+          }
+          if ([string]$manifest.name -ne "LongCapture Browser Agent v0.1.9" -or [string]$manifest.version -ne "0.1.9") {
+            throw "Browser Agent release identity drifted: manifest name/version must be v0.1.9"
+          }
+          if (-not $worker.Contains('protocolVersion: "0.1.9"') -or -not $worker.Contains('LongCapture Browser Agent v0.1.9 attached to this tab')) {
+            throw "Browser Agent release identity drifted: service-worker protocol/badge must be v0.1.9"
+          }
+
+      - name: Restore and publish v0.1.9 x64 portable
+        shell: pwsh
+        run: |
+          dotnet restore --runtime win-x64 LongCapture.Standalone\LongCapture.Standalone.csproj
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet publish LongCapture.Standalone\LongCapture.Standalone.csproj --no-restore --configuration Release --runtime win-x64 --self-contained true --output artifacts\LongCapture /m:1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Packaged release coherence UI audit Browser self-test and RC6 QUICK
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $packagedManifest = Get-Content "artifacts\LongCapture\BrowserAgent\Extension\manifest.json" -Raw | ConvertFrom-Json
+          $packagedWorker = Get-Content "artifacts\LongCapture\BrowserAgent\Extension\service-worker.js" -Raw
+          if ([string]$packagedManifest.name -ne "LongCapture Browser Agent v0.1.9" -or [string]$packagedManifest.version -ne "0.1.9") {
+            throw "Published Browser Agent manifest is not coherent v0.1.9"
+          }
+          if (-not $packagedWorker.Contains('protocolVersion: "0.1.9"') -or -not $packagedWorker.Contains('LongCapture Browser Agent v0.1.9 attached to this tab')) {
+            throw "Published Browser Agent service-worker is not coherent v0.1.9"
+          }
+
+          $audit = Join-Path $PWD "artifacts\UiAudit-v019"
+          $p = Start-Process -FilePath (Join-Path $PWD "artifacts\LongCapture\LongCapture.exe") -ArgumentList "--modern-ui-v017-audit=$audit" -WorkingDirectory (Join-Path $PWD "artifacts\LongCapture") -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "v0.1.9 UI audit failed exit=$($p.ExitCode)" }
+          if (@(Get-ChildItem $audit -Filter "LongCapture-v017-ui-*.png").Count -ne 4) { throw "Expected four responsive UI snapshots" }
+
+          $p = Start-Process -FilePath (Join-Path $PWD "artifacts\LongCapture\LongCapture.exe") -ArgumentList "--browser-agent-poc-self-test" -WorkingDirectory (Join-Path $PWD "artifacts\LongCapture") -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Browser Agent v0.1.9 self-test failed exit=$($p.ExitCode)" }
+
+          & "artifacts\LongCapture\1-RUN-AUTOMATED-TESTS.cmd" --ci
+          if ($LASTEXITCODE -ne 0) { throw "RC6 QUICK failed exit=$LASTEXITCODE" }
+
+      - name: Package clean-extract and re-run v0.1.9 gates
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force Output | Out-Null
+          foreach ($score in @(
+            "browser-agent-v016-quality-score.json",
+            "browser-agent-v017-ui-quality-score.json",
+            "browser-agent-v018-quality-score.json",
+            "browser-agent-v019-integrity-proof-score.json"
+          )) {
+            Copy-Item (Join-Path "artifacts" $score) (Join-Path "Output" $score) -Force
+          }
+          Copy-Item "artifacts\UiAudit-v019" "Output\UiAudit-v019" -Recurse -Force
+
+          $zip = "Output\LongCapture-Browser-Agent-v0.1.9-SHA256-Merkle-Integrity-Proof-x64.zip"
+          Compress-Archive -Path "artifacts\LongCapture\*" -DestinationPath $zip -CompressionLevel Optimal -Force
+          $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
+          Set-Content "Output\LongCapture-Browser-Agent-v0.1.9-SHA256-Merkle-Integrity-Proof-x64.sha256.txt" "$hash  LongCapture-Browser-Agent-v0.1.9-SHA256-Merkle-Integrity-Proof-x64.zip"
+
+          $temp = Join-Path $env:RUNNER_TEMP "longcapture-browser-agent-v019-final"
+          Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue
+          Expand-Archive $zip $temp -Force
+
+          $extractedManifest = Get-Content (Join-Path $temp "BrowserAgent\Extension\manifest.json") -Raw | ConvertFrom-Json
+          $extractedWorker = Get-Content (Join-Path $temp "BrowserAgent\Extension\service-worker.js") -Raw
+          if ([string]$extractedManifest.name -ne "LongCapture Browser Agent v0.1.9" -or [string]$extractedManifest.version -ne "0.1.9") {
+            throw "Extracted Browser Agent manifest is not coherent v0.1.9"
+          }
+          if (-not $extractedWorker.Contains('protocolVersion: "0.1.9"') -or -not $extractedWorker.Contains('LongCapture Browser Agent v0.1.9 attached to this tab')) {
+            throw "Extracted Browser Agent service-worker is not coherent v0.1.9"
+          }
+
+          $p = Start-Process -FilePath (Join-Path $temp "LongCapture.exe") -ArgumentList "--browser-agent-poc-self-test" -WorkingDirectory $temp -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Extracted v0.1.9 Browser self-test failed exit=$($p.ExitCode)" }
+
+          $reAudit = Join-Path $env:RUNNER_TEMP "longcapture-browser-agent-v019-ui"
+          $p = Start-Process -FilePath (Join-Path $temp "LongCapture.exe") -ArgumentList "--modern-ui-v017-audit=$reAudit" -WorkingDirectory $temp -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Extracted v0.1.9 UI audit failed exit=$($p.ExitCode)" }
+          if (@(Get-ChildItem $reAudit -Filter "LongCapture-v017-ui-*.png").Count -ne 4) { throw "Extracted package did not produce four UI snapshots" }
+
+      - name: Upload v0.1.9 integrity proof candidate
+        uses: actions/upload-artifact@v7
+        with:
+          name: LongCapture-Browser-Agent-v0.1.9-SHA256-Merkle-Integrity-Proof-x64
+          path: |
+            Output\LongCapture-Browser-Agent-v0.1.9-SHA256-Merkle-Integrity-Proof-x64.zip
+            Output\LongCapture-Browser-Agent-v0.1.9-SHA256-Merkle-Integrity-Proof-x64.sha256.txt
+            Output\browser-agent-v016-quality-score.json
+            Output\browser-agent-v017-ui-quality-score.json
+            Output\browser-agent-v018-quality-score.json
+            Output\browser-agent-v019-integrity-proof-score.json
+            Output\UiAudit-v019\ui-audit.json
+            Output\UiAudit-v019\LongCapture-v017-ui-*.png
+          if-no-files-found: error

@@ -17,6 +17,11 @@
     <ProjectReference Include="..\ShareX.ScreenCaptureLib\ShareX.ScreenCaptureLib.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <!-- v0.1.9 source is staged in git but is compiled only after its compatibility overlay
+         has added the matching model/session fields. This keeps older v0.1.8 CI honest. -->
+    <Compile Remove="BrowserAgentIntegrityProofV019.cs" />
+  </ItemGroup>
+  <ItemGroup>
     <Content Include="..\mod-overlay\config\ShareX.Mod.v04.json" Link="ShareX.Mod.v04.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\mod-overlay\config\ShareX.Mod.VERSION.json" Link="ShareX.Mod.VERSION.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="TESTING.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />

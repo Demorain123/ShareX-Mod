@@ -1,0 +1,67 @@
+[CmdletBinding()]
+param([switch]$CheckOnly)
+
+$ErrorActionPreference = "Stop"
+$repoRoot = (& git rev-parse --show-toplevel).Trim()
+Set-Location $repoRoot
+
+if ($CheckOnly) {
+    & pwsh -NoProfile -File scripts\prepare-browser-agent-v018-final.ps1 -CheckOnly
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & pwsh -NoProfile -File scripts\apply-browser-agent-v019-integrity-anchor-compat.ps1 -CheckOnly
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & pwsh -NoProfile -File scripts\apply-browser-agent-v019-project-compile-compat.ps1 -CheckOnly
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & pwsh -NoProfile -File scripts\apply-browser-agent-v019-integrity-proof.ps1 -CheckOnly
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & pwsh -NoProfile -File scripts\apply-browser-agent-v019-verifier-hardening.ps1 -CheckOnly
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & pwsh -NoProfile -File scripts\apply-browser-agent-v019-integrity-docs.ps1 -CheckOnly
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & pwsh -NoProfile -File scripts\apply-browser-agent-v019-release-coherence.ps1 -CheckOnly
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Write-Host "Browser Agent v0.1.9 overlay compatibility passed." -ForegroundColor Green
+    exit 0
+}
+
+# v0.1.8 remains a mandatory lower-layer gate. It must be fully eligible before the
+# new v0.1.9 proof layer is allowed to change or build anything.
+& pwsh -NoProfile -File scripts\prepare-browser-agent-v018-final.ps1
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+# v0.1.8's calibrated/adaptive layers have changed the exact capture-loop layout over
+# time. Seed the SHA-256 fast-path at a semantic integrity-evaluation point first.
+& pwsh -NoProfile -File scripts\apply-browser-agent-v019-integrity-anchor-compat.ps1
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+# The SDK implicitly compiles project-directory .cs files. Remove the staging exclusion
+# without adding an explicit Compile item, otherwise NETSDK1022 reports a duplicate item.
+& pwsh -NoProfile -File scripts\apply-browser-agent-v019-project-compile-compat.ps1
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+& pwsh -NoProfile -File scripts\apply-browser-agent-v019-integrity-proof.ps1
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+# Round-3 manual package review found that a byte-clean but quality-unresolved proof
+# could still return success through the offline verifier. Harden that semantic path
+# before scoring/building and exercise persisted proof + tamper cases in self-test.
+& pwsh -NoProfile -File scripts\apply-browser-agent-v019-verifier-hardening.ps1
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+& pwsh -NoProfile -File scripts\apply-browser-agent-v019-integrity-docs.ps1
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+# Round-5 independent archive review found that the packaged extension still identified
+# itself and its service-worker protocol as v0.1.8. Normalize all release-facing extension
+# metadata to v0.1.9 and fail closed if the expected source anchors are no longer compatible.
+& pwsh -NoProfile -File scripts\apply-browser-agent-v019-release-coherence.ps1
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+# Hard pre-build gate: publishing is forbidden below 95/100 or with any critical failure.
+& pwsh -NoProfile -File scripts\browser-agent-v019-integrity-proof-score.ps1 -MinimumScore 95
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+git diff --check
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+Write-Host "Browser Agent v0.1.9 final overlay preparation completed; source is eligible to build." -ForegroundColor Green

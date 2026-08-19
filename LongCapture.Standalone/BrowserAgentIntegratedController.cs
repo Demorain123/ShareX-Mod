@@ -6,6 +6,7 @@ internal sealed class BrowserAgentIntegratedController : IDisposable
 
     private readonly BrowserAgentBridgeServer bridge = new();
     private CancellationTokenSource? captureCancellation;
+    private int remoteStopDispatching;
     private bool disposed;
 
     public event Action? StateChanged;
@@ -41,6 +42,8 @@ internal sealed class BrowserAgentIntegratedController : IDisposable
 
         options = (options ?? BrowserAgentCaptureOptions.Default).Normalize();
         captureCancellation = new CancellationTokenSource();
+        Interlocked.Exchange(ref remoteStopDispatching, 0);
+        LongCaptureLog.Info("[BA_TIMELINE] controller capture-start");
         RaiseStateChanged();
         var session = new BrowserAgentCaptureSession(bridge);
         try
@@ -61,6 +64,7 @@ internal sealed class BrowserAgentIntegratedController : IDisposable
         }
         finally
         {
+            LongCaptureLog.Info("[BA_TIMELINE] controller capture-finished");
             captureCancellation.Dispose();
             captureCancellation = null;
             RaiseStateChanged();
@@ -69,9 +73,42 @@ internal sealed class BrowserAgentIntegratedController : IDisposable
 
     public void Stop()
     {
+        CancellationTokenSource? local = captureCancellation;
+        if (local is null) return;
+
+        LongCaptureLog.Info("[BA_TIMELINE] user-stop requested; forwarding explicit cancel to extension and cancelling desktop wait");
+
+        // v0.1.4: cancelling the desktop Task alone is not sufficient. A long-running
+        // chrome.scripting.executeScript() Promise keeps running in the extension even
+        // after the desktop abandons its request, so send an out-of-band cancel command
+        // over the same native-messaging Port as well.
+        if (Interlocked.Exchange(ref remoteStopDispatching, 1) == 0)
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    JsonElement result = await bridge.SendRequestAsync(
+                        "cancel",
+                        new { reason = "desktop-f8-stop", utc = DateTime.UtcNow.ToString("O") },
+                        TimeSpan.FromSeconds(4),
+                        CancellationToken.None).ConfigureAwait(false);
+                    LongCaptureLog.Info("[BA_TIMELINE] extension cancel acknowledged");
+                }
+                catch (Exception ex)
+                {
+                    LongCaptureLog.Warn($"[BA_TIMELINE] extension cancel dispatch failed: {LongCaptureLog.OneLine(ex.Message)}");
+                }
+                finally
+                {
+                    Interlocked.Exchange(ref remoteStopDispatching, 0);
+                }
+            });
+        }
+
         try
         {
-            captureCancellation?.Cancel();
+            local.Cancel();
         }
         catch (ObjectDisposedException)
         {
@@ -106,12 +143,14 @@ internal sealed class BrowserAgentIntegratedController : IDisposable
         {
             AttachedSummary = "No Chromium tab attached";
         }
+        LongCaptureLog.Info($"[BA_TIMELINE] connection changed connected={connected}");
         RaiseStateChanged();
     }
 
     private void OnAgentAttached(string summary)
     {
         AttachedSummary = string.IsNullOrWhiteSpace(summary) ? "Chromium tab attached" : summary;
+        LongCaptureLog.Info($"[BA_TIMELINE] tab attached target={LongCaptureLog.OneLine(AttachedSummary)}");
         RaiseStateChanged();
     }
 

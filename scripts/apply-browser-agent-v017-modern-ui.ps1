@@ -61,7 +61,8 @@ $followups = @(
     (Join-Path $PSScriptRoot "apply-browser-agent-v017-responsive-followup.ps1"),
     (Join-Path $PSScriptRoot "apply-browser-agent-v017-visual-audit-hardening.ps1"),
     (Join-Path $PSScriptRoot "apply-browser-agent-v017-visual-polish-r2.ps1"),
-    (Join-Path $PSScriptRoot "apply-browser-agent-v017-visual-polish-r3.ps1")
+    (Join-Path $PSScriptRoot "apply-browser-agent-v017-visual-polish-r3.ps1"),
+    (Join-Path $PSScriptRoot "apply-browser-agent-v017-visual-polish-r4.ps1")
 )
 foreach ($followup in $followups) {
     if (-not (Test-Path -LiteralPath $followup)) {

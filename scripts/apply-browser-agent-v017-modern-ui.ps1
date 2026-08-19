@@ -27,6 +27,12 @@ if ($text.Contains($marker)) {
                 using var auditForm = new MainForm();
                 StandaloneUiPolish.Apply(auditForm);
                 int code = StandaloneUiPolish.CaptureVisualAudit(auditForm, output, out string detail);
+                try
+                {
+                    Directory.CreateDirectory(output);
+                    File.WriteAllText(Path.Combine(output, "ui-audit-result.txt"), $"exitCode={code}{Environment.NewLine}{detail}");
+                }
+                catch { }
                 Console.WriteLine($"LongCapture v0.1.7 UI audit: {detail}");
                 LongCaptureLog.Info($"--modern-ui-v017-audit completed exitCode={code} detail={LongCaptureLog.OneLine(detail)} output={LongCaptureLog.OneLine(output)}");
                 return code;

@@ -24,6 +24,9 @@ internal sealed class BrowserAgentFrameRecord
     public double CaptureRegionHeightCss { get; set; }
 
     public int StabilityWaitMs { get; set; }
+    public int StabilityQuietMs { get; set; }
+    public int StabilityActivityMs { get; set; }
+    public int StabilityMaxFalseQuietMs { get; set; }
     public bool StabilityTimedOut { get; set; }
     public int StabilityMutationCount { get; set; }
     public int StabilityResizeCount { get; set; }
@@ -35,6 +38,8 @@ internal sealed class BrowserAgentFrameRecord
     public bool LazyWarmupTriggered { get; set; }
     public double LazyWarmupGrowthCss { get; set; }
     public bool CaptureStateChanged { get; set; }
+    public int CaptureVisibleTabMs { get; set; }
+    public int CaptureThrottleWaitMs { get; set; }
 
     public bool OverlapVerified { get; set; }
     public double OverlapMeanAbsoluteError { get; set; }
@@ -51,9 +56,10 @@ internal sealed class BrowserAgentFrameRecord
     public double VisualAlignmentScore { get; set; }
     public double VisualAlignmentConfidence { get; set; }
 
-    // v0.1.5 adaptive evidence. These fields make the speed decision and local
-    // repair policy auditable from session.json instead of hiding it in heuristics.
+    // v0.1.5+: adaptive evidence is auditable in session.json.
+    public int EffectiveStartDelayMs { get; set; }
     public int EffectiveStableWindowMs { get; set; }
+    public int EffectiveMaxWaitMs { get; set; }
     public double EffectiveOverlapRatio { get; set; }
     public int AdaptiveRiskScore { get; set; }
     public string AdaptiveRiskReasons { get; set; } = string.Empty;
@@ -62,6 +68,7 @@ internal sealed class BrowserAgentFrameRecord
     public bool RepairCandidate { get; set; }
     public int RepairAttempts { get; set; }
     public string RepairStatus { get; set; } = string.Empty;
+    public double CalibrationConfidence { get; set; }
 
     // v0.1.2+: progress / true-end evidence. The DOM counter is only a hint;
     // geometry + repeated stable-bottom confirmation remains authoritative.
@@ -92,6 +99,12 @@ internal sealed class BrowserAgentSessionManifest
     public double OverlapRatio { get; set; }
     public string SpeedStrategy { get; set; } = BrowserAgentSpeedStrategy.AdaptiveBalanced.ToString();
     public string RepairPrecision { get; set; } = BrowserAgentRepairPrecision.Medium.ToString();
+    public bool CalibrationEnabled { get; set; }
+    public double CalibrationConfidenceStart { get; set; }
+    public double CalibrationConfidenceEnd { get; set; }
+    public int CalibrationBenchmarkSamples { get; set; }
+    public int CalibrationFrameSamplesStart { get; set; }
+    public int CalibrationFrameSamplesEnd { get; set; }
     public int AdaptiveRepairCandidates { get; set; }
     public int AdaptiveRepairAttempts { get; set; }
     public int AdaptiveRepairSuccesses { get; set; }

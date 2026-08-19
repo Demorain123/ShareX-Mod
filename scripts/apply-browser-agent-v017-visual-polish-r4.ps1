@@ -21,31 +21,6 @@ function Patch-Literal {
     }
 }
 
-function Patch-Regex {
-    param([string]$Pattern, [string]$Replacement, [string]$Marker)
-    $text = [IO.File]::ReadAllText($ui)
-    if ($text.Contains($Marker)) {
-        Write-Host "[v0.1.7-polish-r4] already present: $Marker" -ForegroundColor DarkYellow
-        return
-    }
-    $match = [regex]::Match($text, $Pattern, [Text.RegularExpressions.RegexOptions]::Singleline)
-    if (-not $match.Success) {
-        $hintIndex = $text.IndexOf('capture.Bounds.Height', [StringComparison]::Ordinal)
-        $hint = if ($hintIndex -ge 0) {
-            $start = [Math]::Max(0, $hintIndex - 100)
-            $length = [Math]::Min(360, $text.Length - $start)
-            $text.Substring($start, $length).Replace("`r", ' ').Replace("`n", ' ')
-        } else { 'capture.Bounds.Height not found' }
-        throw "v0.1.7 polish-r4 regex anchor missing: $Marker; nearby=$hint"
-    }
-    Write-Host "[v0.1.7-polish-r4] compatible regex: $Marker" -ForegroundColor Green
-    if (-not $CheckOnly) {
-        $updated = [regex]::Replace($text, $Pattern, $Replacement, [Text.RegularExpressions.RegexOptions]::Singleline)
-        [IO.File]::WriteAllText($ui, $updated, [Text.UTF8Encoding]::new($true))
-        Write-Host "[v0.1.7-polish-r4] applied regex: $Marker" -ForegroundColor Cyan
-    }
-}
-
 Patch-Literal `
     -Old @'
             capture.Text = capture.Text.StartsWith("Start long capture", StringComparison.OrdinalIgnoreCase)
@@ -94,21 +69,21 @@ Patch-Literal `
 '@ `
     -Marker 'int minimumHeight = primaryCommand ? 42 : 38;'
 
-# The old validator belongs to the former bottom 54px CTA. Earlier overlay chains have used
-# slightly different thresholds/formatting, so match the semantic validation block rather than a
-# single historical literal. The new compact top CTA still has a strict >=40px runtime hierarchy.
-$validationPattern = 'if\s*\(capture\.Bounds\.Height\s*<\s*\d+\s*\|\|\s*open\.Bounds\.Height\s*<\s*34\)\s*\{\s*detail\s*=\s*"primary action button height is too small";\s*return false;\s*\}'
-$validationReplacement = @'
-if (capture.Bounds.Height < 40 || open.Bounds.Height < 34)
-        {
-            detail = $"primary action button height is too small: capture={capture.Bounds.Height}px open={open.Bounds.Height}px";
-            return false;
-        }
-'@
-Patch-Regex -Pattern $validationPattern -Replacement $validationReplacement -Marker 'capture={capture.Bounds.Height}px open={open.Bounds.Height}px'
+# Older RC hardening variants may include an additional diagnostics button in this same runtime
+# validator. Patch only the primary threshold and diagnostic message so either two-button or
+# three-button forms remain structurally intact.
+Patch-Literal `
+    -Old 'capture.Bounds.Height < 52' `
+    -New 'capture.Bounds.Height < 40' `
+    -Marker 'capture.Bounds.Height < 40'
+
+Patch-Literal `
+    -Old 'detail = "primary action button height is too small";' `
+    -New 'detail = $"primary action button height is too small: capture={capture.Bounds.Height}px open={open.Bounds.Height}px";' `
+    -Marker 'primary action button height is too small: capture={capture.Bounds.Height}px'
 
 if ($CheckOnly) {
     Write-Host "Browser Agent v0.1.7 visual polish r4 compatibility passed." -ForegroundColor Green
 } else {
-    Write-Host "Browser Agent v0.1.7 visual polish r4 applied: compact secondary widths, 42px primary hierarchy, concise CTA and geometry-aware validation." -ForegroundColor Green
+    Write-Host "Browser Agent v0.1.7 visual polish r4 applied: compact secondary widths, 42px primary hierarchy, concise CTA and diagnostics-tolerant validation." -ForegroundColor Green
 }

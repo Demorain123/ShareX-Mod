@@ -62,11 +62,12 @@ v0.1.4 upgrades the normal LongCapture log with Browser Agent phase telemetry. D
 
 Important markers include:
 
-- `[BA_TIMELINE]` — user-visible capture milestones, connection/attach state, selected region, user F8 stop;
+- `[USER_ACTION]` — capture-button clicks and Browser-mode setting changes;
+- `[BA_TIMELINE]` — capture/connection milestones, status text and F8 stop;
 - `[BA_REQ]` — native request id, command type, create/send/complete/cancel/error phase, elapsed milliseconds;
-- `[BA_AGENT]` — extension-side timestamped events such as region selection, pre-scan steps and cancel acknowledgement.
+- `[BA_AGENT]` — extension-side timestamped events such as region selection, optional pre-scan steps, real capture scroll steps and cancel acknowledgement.
 
-This makes it possible to reconstruct a run chronologically: attach → F8 → region selected → optional pre-scan → frame requests → recovery/end checks → F8 stop/automatic completion.
+This makes it possible to reconstruct a run chronologically: attach → settings → F8 → region selected → optional pre-scan → frame/scroll requests → recovery/end checks → F8 stop/automatic completion.
 
 ## Browser quality controls
 

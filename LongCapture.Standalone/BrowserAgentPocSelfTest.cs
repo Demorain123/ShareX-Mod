@@ -6,14 +6,14 @@ internal static class BrowserAgentPocSelfTest
 {
     public static int Run()
     {
-        string root = Path.Combine(Path.GetTempPath(), "LongCapture-BrowserAgent-v011-selftest-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Combine(Path.GetTempPath(), "LongCapture-BrowserAgent-v018-selftest-" + Guid.NewGuid().ToString("N"));
         try
         {
             Directory.CreateDirectory(Path.Combine(root, "frames"));
 
             if (!RunFrameCodecRoundTrip())
             {
-                LongCaptureLog.Warn("Browser Agent v0.1.1 self-test failed native-message frame codec round-trip");
+                LongCaptureLog.Warn("Browser Agent self-test failed native-message frame codec round-trip");
                 return 31;
             }
 
@@ -24,7 +24,7 @@ internal static class BrowserAgentPocSelfTest
                 int start = starts[i];
                 string relative = Path.Combine("frames", $"frame-{i + 1:000}.png");
                 string path = Path.Combine(root, relative);
-                WriteDeterministicFrame(path, 64, 80, start);
+                WriteDeterministicFrame(path, 96, 80, start);
                 frames.Add(new BrowserAgentFrameRecord
                 {
                     Sequence = i + 1,
@@ -32,10 +32,10 @@ internal static class BrowserAgentPocSelfTest
                     ScrollYCss = start,
                     ScrollYAfterCss = i == starts.Length - 1 ? start : starts[i + 1],
                     ScrollHeightCss = 140,
-                    ViewportWidthCss = 64,
+                    ViewportWidthCss = 96,
                     ViewportHeightCss = 80,
                     DevicePixelRatio = 1,
-                    PixelWidth = 64,
+                    PixelWidth = 96,
                     PixelHeight = 80,
                     AtBottom = i == starts.Length - 1,
                     CapturedUtc = DateTime.UtcNow
@@ -43,15 +43,15 @@ internal static class BrowserAgentPocSelfTest
             }
 
             BrowserAgentOverlapCheck cleanOverlap = BrowserAgentOverlapVerifier.Measure(root, frames[0], frames[1]);
-            if (!cleanOverlap.Comparable || !cleanOverlap.Acceptable)
+            if (!cleanOverlap.Comparable || !cleanOverlap.Acceptable || cleanOverlap.EdgeContamination)
             {
-                LongCaptureLog.Warn($"Browser Agent v0.1.1 self-test rejected deterministic clean overlap: {cleanOverlap.Detail}");
+                LongCaptureLog.Warn($"Browser Agent self-test rejected deterministic clean overlap: {cleanOverlap.Detail}");
                 return 34;
             }
 
             string badRelative = Path.Combine("frames", "frame-bad.png");
             string badPath = Path.Combine(root, badRelative);
-            WriteMutatedFrame(badPath, 64, 80, 30, 24);
+            WriteMutatedFrame(badPath, 96, 80, 30, 24);
 
             var badFrame = new BrowserAgentFrameRecord
             {
@@ -60,24 +60,49 @@ internal static class BrowserAgentPocSelfTest
                 ScrollYCss = 30,
                 ScrollYAfterCss = 60,
                 ScrollHeightCss = 140,
-                ViewportWidthCss = 64,
+                ViewportWidthCss = 96,
                 ViewportHeightCss = 80,
                 DevicePixelRatio = 1,
-                PixelWidth = 64,
+                PixelWidth = 96,
                 PixelHeight = 80
             };
             BrowserAgentOverlapCheck badOverlap = BrowserAgentOverlapVerifier.Measure(root, frames[0], badFrame);
             if (!badOverlap.Comparable || badOverlap.Acceptable)
             {
-                LongCaptureLog.Warn($"Browser Agent v0.1.1 self-test failed to reject mutated overlap: {badOverlap.Detail}");
+                LongCaptureLog.Warn($"Browser Agent self-test failed to reject full-width mutated overlap: {badOverlap.Detail}");
                 return 35;
+            }
+
+            // v0.1.8 regression: mutate ONLY the left rail. The old 7%-93% + median
+            // verifier could report a perfect overlap while a sticky avatar visibly jumped.
+            string railRelative = Path.Combine("frames", "frame-left-rail-bad.png");
+            string railPath = Path.Combine(root, railRelative);
+            WriteLeftRailMutatedFrame(railPath, 96, 80, 30, 24, 50);
+            var railFrame = new BrowserAgentFrameRecord
+            {
+                Sequence = 2,
+                FileName = railRelative,
+                ScrollYCss = 30,
+                ScrollYAfterCss = 60,
+                ScrollHeightCss = 140,
+                ViewportWidthCss = 96,
+                ViewportHeightCss = 80,
+                DevicePixelRatio = 1,
+                PixelWidth = 96,
+                PixelHeight = 80
+            };
+            BrowserAgentOverlapCheck railOverlap = BrowserAgentOverlapVerifier.Measure(root, frames[0], railFrame);
+            if (!railOverlap.Comparable || railOverlap.Acceptable || !railOverlap.LeftEdgeContamination)
+            {
+                LongCaptureLog.Warn($"Browser Agent v0.1.8 self-test failed to detect left-rail contamination: {railOverlap.Detail}");
+                return 38;
             }
 
             string output = Path.Combine(root, "stitched.png");
             BrowserAgentStitchResult result = BrowserAgentStreamingPngStitcher.Stitch(root, frames, output);
-            if (result.Width != 64 || result.Height != 140 || result.FrameCount != 3 || !File.Exists(output))
+            if (result.Width != 96 || result.Height != 140 || result.FrameCount != 3 || !File.Exists(output))
             {
-                LongCaptureLog.Warn($"Browser Agent v0.1.1 self-test wrong stitch dimensions {result.Width}x{result.Height} frames={result.FrameCount}");
+                LongCaptureLog.Warn($"Browser Agent self-test wrong stitch dimensions {result.Width}x{result.Height} frames={result.FrameCount}");
                 return 32;
             }
 
@@ -85,21 +110,21 @@ internal static class BrowserAgentPocSelfTest
             foreach (int y in new[] { 0, 29, 30, 59, 60, 79, 109, 139 })
             {
                 Color expected = ColorForAbsoluteRow(y);
-                Color actual = bitmap.GetPixel(17, y);
+                Color actual = bitmap.GetPixel(37, y);
                 if (actual.ToArgb() != expected.ToArgb())
                 {
                     LongCaptureLog.Warn(
-                        $"Browser Agent v0.1.1 self-test pixel mismatch y={y} actual={actual.ToArgb():X8} expected={expected.ToArgb():X8}");
+                        $"Browser Agent self-test pixel mismatch y={y} actual={actual.ToArgb():X8} expected={expected.ToArgb():X8}");
                     return 33;
                 }
             }
 
-            LongCaptureLog.Info("Browser Agent v0.1.1 self-test passed codec + overlap gate + bounded-memory DOM-geometry stitch");
+            LongCaptureLog.Info("Browser Agent v0.1.8 self-test passed codec + rail-aware overlap gate + bounded-memory stitch");
             return 0;
         }
         catch (Exception ex)
         {
-            LongCaptureLog.Error("Browser Agent v0.1.1 self-test threw", ex);
+            LongCaptureLog.Error("Browser Agent v0.1.8 self-test threw", ex);
             return 39;
         }
         finally
@@ -146,6 +171,28 @@ internal static class BrowserAgentPocSelfTest
         using (Graphics graphics = Graphics.FromImage(bitmap))
         {
             graphics.FillRectangle(Brushes.Black, 0, 0, width, Math.Min(height, mutatedRows));
+        }
+        bitmap.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+    }
+
+    private static void WriteLeftRailMutatedFrame(
+        string path,
+        int width,
+        int height,
+        int absoluteStartY,
+        int railWidth,
+        int mutatedRows)
+    {
+        using var bitmap = new Bitmap(width, height);
+        PaintDeterministic(bitmap, absoluteStartY);
+        using (Graphics graphics = Graphics.FromImage(bitmap))
+        {
+            graphics.FillRectangle(
+                Brushes.Magenta,
+                0,
+                0,
+                Math.Min(width, railWidth),
+                Math.Min(height, mutatedRows));
         }
         bitmap.Save(path, System.Drawing.Imaging.ImageFormat.Png);
     }

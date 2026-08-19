@@ -41,7 +41,7 @@ jobs:
           & pwsh -NoProfile -File scripts\prepare-browser-agent-v019-final.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Verify SHA-256 Merkle coverage and fail-closed semantics
+      - name: Verify SHA-256 Merkle coverage fail-closed semantics and release coherence
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -86,7 +86,10 @@ jobs:
           if (-not $project.Contains('<Compile Include="BrowserAgentIntegrityProofV019.cs" />')) { throw "v0.1.9 proof helper is not compiled" }
           if ($proof -match '\bSHA1\b|\bSHA-1\b') { throw "Deprecated SHA-1 appeared in v0.1.9 proof code" }
 
-          $manifest = Get-Content "LongCapture.Standalone\BrowserAgent\Extension\manifest.json" -Raw | ConvertFrom-Json
+          $manifestPath = "LongCapture.Standalone\BrowserAgent\Extension\manifest.json"
+          $workerPath = "LongCapture.Standalone\BrowserAgent\Extension\service-worker.js"
+          $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+          $worker = Get-Content $workerPath -Raw
           $permissions = @($manifest.permissions)
           if ($permissions.Count -ne 3 -or
               $permissions -notcontains "activeTab" -or
@@ -95,6 +98,12 @@ jobs:
               $permissions -contains "debugger" -or
               $manifest.host_permissions) {
             throw "Browser Agent permission boundary expanded unexpectedly"
+          }
+          if ([string]$manifest.name -ne "LongCapture Browser Agent v0.1.9" -or [string]$manifest.version -ne "0.1.9") {
+            throw "Browser Agent release identity drifted: manifest name/version must be v0.1.9"
+          }
+          if (-not $worker.Contains('protocolVersion: "0.1.9"') -or -not $worker.Contains('LongCapture Browser Agent v0.1.9 attached to this tab')) {
+            throw "Browser Agent release identity drifted: service-worker protocol/badge must be v0.1.9"
           }
 
       - name: Restore and publish v0.1.9 x64 portable
@@ -105,10 +114,19 @@ jobs:
           dotnet publish LongCapture.Standalone\LongCapture.Standalone.csproj --no-restore --configuration Release --runtime win-x64 --self-contained true --output artifacts\LongCapture /m:1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Packaged UI audit Browser self-test and RC6 QUICK
+      - name: Packaged release coherence UI audit Browser self-test and RC6 QUICK
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          $packagedManifest = Get-Content "artifacts\LongCapture\BrowserAgent\Extension\manifest.json" -Raw | ConvertFrom-Json
+          $packagedWorker = Get-Content "artifacts\LongCapture\BrowserAgent\Extension\service-worker.js" -Raw
+          if ([string]$packagedManifest.name -ne "LongCapture Browser Agent v0.1.9" -or [string]$packagedManifest.version -ne "0.1.9") {
+            throw "Published Browser Agent manifest is not coherent v0.1.9"
+          }
+          if (-not $packagedWorker.Contains('protocolVersion: "0.1.9"') -or -not $packagedWorker.Contains('LongCapture Browser Agent v0.1.9 attached to this tab')) {
+            throw "Published Browser Agent service-worker is not coherent v0.1.9"
+          }
+
           $audit = Join-Path $PWD "artifacts\UiAudit-v019"
           $p = Start-Process -FilePath (Join-Path $PWD "artifacts\LongCapture\LongCapture.exe") -ArgumentList "--modern-ui-v017-audit=$audit" -WorkingDirectory (Join-Path $PWD "artifacts\LongCapture") -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "v0.1.9 UI audit failed exit=$($p.ExitCode)" }
@@ -143,6 +161,15 @@ jobs:
           $temp = Join-Path $env:RUNNER_TEMP "longcapture-browser-agent-v019-final"
           Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue
           Expand-Archive $zip $temp -Force
+
+          $extractedManifest = Get-Content (Join-Path $temp "BrowserAgent\Extension\manifest.json") -Raw | ConvertFrom-Json
+          $extractedWorker = Get-Content (Join-Path $temp "BrowserAgent\Extension\service-worker.js") -Raw
+          if ([string]$extractedManifest.name -ne "LongCapture Browser Agent v0.1.9" -or [string]$extractedManifest.version -ne "0.1.9") {
+            throw "Extracted Browser Agent manifest is not coherent v0.1.9"
+          }
+          if (-not $extractedWorker.Contains('protocolVersion: "0.1.9"') -or -not $extractedWorker.Contains('LongCapture Browser Agent v0.1.9 attached to this tab')) {
+            throw "Extracted Browser Agent service-worker is not coherent v0.1.9"
+          }
 
           $p = Start-Process -FilePath (Join-Path $temp "LongCapture.exe") -ArgumentList "--browser-agent-poc-self-test" -WorkingDirectory $temp -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "Extracted v0.1.9 Browser self-test failed exit=$($p.ExitCode)" }

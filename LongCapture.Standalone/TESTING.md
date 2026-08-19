@@ -1,112 +1,152 @@
-# LongCapture Browser Agent v0.1.6 — Calibrated Adaptive Real Test Guide
+# LongCapture Browser Agent v0.1.8 — Real Test Guide
 
-Version scope: global fixed speed presets; Browser Assisted benchmark/local calibration, live adaptive parameters, persistent bounded learning, precision repair, inset-sticky suppression, hard F8 stop and diagnostics completeness.
+Version scope: v0.1.7 responsive UI + v0.1.6 calibrated adaptive behavior + v0.1.8 rail-aware sticky/seam detection, Browser background-window capture, and requested capture endpoints.
 
-## Step 0 — update and automated gate
+## Step 0 — update
 
-1. Replace the portable package.
+1. Extract the new portable package to a fresh directory.
 2. Reload the unpacked LongCapture Browser Agent extension in Chromium/Helium.
-3. If the extension ID changed, run `BrowserAgent\INSTALL-BROWSER-AGENT.cmd` again.
-4. Start `LongCapture.exe` normally.
-5. Double-click `1-RUN-AUTOMATED-TESTS.cmd` and continue only after `AUTOMATED ACCEPTANCE: PASS`.
+3. If the extension ID changed, run `BrowserAgent\INSTALL-BROWSER-AGENT.cmd` once.
+4. Start `LongCapture.exe`.
+5. `1-RUN-AUTOMATED-TESTS.cmd` should still end with `AUTOMATED ACCEPTANCE: PASS`.
 
-The release pipeline itself already requires PRE-BUILD QUALITY SCORE >=95 with zero critical failures before publish, then Browser deterministic tests + RC6 QUICK, final ZIP packaging, clean extraction and a second Browser self-test.
+Do not change many parameters after the first failure. Export one Diagnostics ZIP and preserve the final PNG.
 
-## Test 1 — GUI and fixed presets
+## Test 1 — short rail/sticky regression first
 
-Switch among Normal Long Capture, Browser Assisted Capture, Smart Web, Teach and Run Recipe. **Capture speed** must remain visible.
+Use the same Linux.do topic and include the full left avatar rail in the selected F8 region.
 
-Non-Browser fixed presets must update their existing visible controls: Very Low = 500/1200/1, Low = 400/850/2, Medium = 300/550/3, High = 150/350/4, Very High = 0/220/5.
+Recommended settings:
 
-Browser fixed reference presets must show: Very Low = 500/1800/45%, Low = 350/1350/40%, Medium = 200/950/34%, High = 100/700/27%, Very High = 0/520/20%.
+- Capture mode: Browser Assisted Capture
+- Capture speed: Adaptive · Balanced
+- Repair precision: Medium
+- Use local calibration: ON
+- Live params: ON
+- pre-scan: OFF
+- Capture end: Frames ≥ 35
 
-PASS: no clipped/overlapping controls at the user's real Windows scaling; underlying values stay visible/editable; adaptive choices only appear in Browser Assisted.
+Expected:
 
-## Test 2 — local Browser benchmark
+- normal post avatars that move with their posts remain present;
+- the avatar that becomes pinned near the header is not repeatedly stamped through the mosaic;
+- body text remains continuous;
+- automatic end is reported as **Requested range complete**, not “true page end”.
 
-Use the same Chromium/Helium profile and representative Linux.do page that will be captured.
+Diagnostics should contain left/center/right overlap fields. If rail contamination is detected, `[BA_EDGE]` and repair/recovery evidence should explain it.
 
-1. Select **Browser Assisted Capture**.
-2. Attach the active tab with the extension icon / Ctrl+Shift+L.
-3. Leave **Use local calibration** checked.
-4. Press **Browser benchmark** once and do not interact with the page while it runs.
+STOP HERE and send Diagnostics + PNG if this test is visually wrong.
 
-PASS:
+## Test 2 — background-window Browser Assisted capture
 
-- benchmark completes without moving to another page or producing a final screenshot;
-- the completion dialog reports local confidence/sample information;
-- `BrowserAgentCaptures\Calibration\browser-agent-calibration-v016.json` exists;
-- the GUI hint changes to show learned/local confidence;
-- no rapid capture loop violates Chrome's two-calls-per-second limit.
+This test checks “browser behind another desktop app”, not minimized/background-tab capture.
 
-If this fails, send the latest Diagnostics/log information and the calibration JSON if it exists. Do not repeatedly benchmark as a workaround.
-
-## Test 3 — live adaptive parameters + manual F8 stop
-
-Settings:
-
-- Capture speed: `Adaptive · High speed`;
-- Repair precision: `Medium`;
-- Use local calibration: ON;
-- Live params: ON;
-- Optional gentle lazy-content pre-scan: OFF.
-
-Procedure:
-
-1. F8 and select the usual Linux.do content region.
-2. Let it run for roughly 20–40 frames.
-3. Watch the **Adaptive live** monitor while normal content and slower/lazy sections pass.
-4. Press F8 once to stop.
+1. Attach the target Linux.do tab.
+2. Set Capture end to `Frames ≥ 40`.
+3. Press F8 and select the normal region.
+4. After about 5 frames, put Notepad / Explorer / another desktop application in front of the browser.
+5. Leave the browser window open/non-minimized and leave the attached Linux.do tab selected inside that browser window.
+6. Do not bring the browser back until the capture stops automatically.
 
 PASS:
 
-- monitor shows target/current gear, effective Start/Settle/MaxWait/Overlap, measured settle/activity/capture time, risk reasons and calibration confidence;
-- the monitor does not steal focus and does not appear in the captured pixels;
-- normal sections tend back toward the selected high-speed target;
-- risky loading/layout sections may downshift and later recover;
-- F8 stops browser movement promptly;
-- usable frames save a Partial/manual-stop result;
-- `session.json` contains effective and calibration fields;
-- Diagnostics includes `[BA_CALIB]`, `[BA_LIVE]`, `[BA_ADAPT]` and current-run logs.
+- scrolling/capture continues while another application is foreground;
+- output contains the browser page, not the foreground application;
+- `session.json` has `BackgroundWindowCapture=true` on background frames and `BackgroundWindowFrames > 0`;
+- the endpoint stops automatically at the requested frame count.
 
-## Test 4 — sticky circular avatar regression
+Negative checks:
 
-Use `Adaptive · Balanced`, precision `Medium`, calibration ON, and select a region wide enough to include Linux.do's left avatar column and body text. Run at least about 15 frames, then F8 stop.
+- switching to another tab in the same browser window must stop/fail clearly rather than capture the wrong tab;
+- minimizing the browser must stop/fail clearly on this backend rather than silently create bad frames.
 
-PASS: an avatar that becomes pinned below the header is not stamped repeatedly through the final mosaic; normal avatars still moving with their posts are not globally deleted; body text remains continuous around those transitions.
+## Test 3 — DOM progress endpoint
 
-## Test 5 — natural full-page calibrated adaptive completion
+Use a page whose visible fixed counter looks like `current / total`, such as the Linux.do topic.
 
-Only continue after Tests 1–4 pass.
-
-Use `Adaptive · High speed` (or `Adaptive · Balanced` for a more conservative run), **Repair precision High**, calibration ON, pre-scan OFF, live params optional. Let it reach confirmed page end without pressing F8.
+1. Choose `Capture end: DOM progress ≥`.
+2. Set a nearby target such as 225 or 230 so the test is not excessively long.
+3. Start from the normal Browser Assisted flow with F8 region selection.
+4. Do not press F8 after capture starts.
 
 PASS:
 
-- the controller can slow at suspicious lazy/layout sections and recover later;
-- marked sections may be selectively re-captured at page end;
-- Complete is claimed only when confirmed page end plus adaptive review are clean;
-- unresolved marked areas become `Partial / quality-review-unresolved`;
-- no large missing/duplicated document block;
-- later-page quality does not progressively degrade;
-- the local calibration profile's frame sample count/confidence increases after successful real frames.
+- the program continues until the captured frame reports current progress >= the requested value;
+- it performs the normal adaptive review for marked segments;
+- final state is `completed-requested-range` / **Requested range complete**;
+- it does not claim that the whole 320-post page was completed;
+- `[BA_END]` records the target match.
 
-## Test 6 — calibration OFF comparison
+If the site has no usable DOM progress counter, this mode should not guess from pixels. Use Frames / Elapsed / F8 for v0.1.8; OCR fallback is future experimental scope.
 
-Without deleting the profile, uncheck **Use local calibration** and run a short comparison on the same page/region with the same Adaptive target.
+## Test 4 — F8 hard stop regression
 
-PASS: capture still works using the reference gear behavior; the GUI clearly indicates local calibration is off. This is the control run that lets us compare learned timing against the fixed reference without destroying accumulated evidence.
+1. Capture end: Auto · page end / F8.
+2. Run for about 20 frames.
+3. Press F8 exactly once.
+
+PASS:
+
+- browser movement stops promptly;
+- no page-moving post-review begins after F8;
+- existing frames stitch as `partial-manual-stop`;
+- Diagnostics shows the user stop timestamp.
+
+## Test 5 — longer adaptive run
+
+Only do this if Tests 1–4 pass.
+
+Recommended:
+
+- Adaptive · Balanced first; High speed only after Balanced is clean;
+- Repair precision High;
+- local calibration ON;
+- pre-scan OFF;
+- Capture end `DOM progress ≥ 260` or `Frames ≥ 250` for a controlled long run.
+
+PASS:
+
+- center text and side rails remain stable in later frames;
+- page loading can downshift adaptive speed and later recover;
+- no progressively increasing duplicate/missing seams;
+- requested end triggers selective post-review before output;
+- unresolved quality is surfaced instead of falsely reporting success.
+
+## Test 6 — true full-page challenge
+
+Only after the controlled long run is clean:
+
+- Capture end: Auto · page end / F8
+- Adaptive · Balanced or High speed
+- Repair precision High
+
+Let it run to the real page end without F8.
+
+PASS: true page end is confirmed, adaptive review finishes clean, and final status is full `completed` rather than requested-range or Partial.
 
 ## Test 7 — Normal Long Capture regression
 
-Return to **Normal Long Capture**, choose a fixed speed preset, and perform a short F7/F8 Start/Stop run.
+Return to Normal Long Capture and perform a short F7/F8 capture.
 
-PASS: fixed preset changes the existing Normal controls; target/region selection, output save, RC6 overlap/fixed handling and diagnostics still work; Normal capture remains independent from the Browser extension and Browser calibration profile.
+PASS: Normal capture remains independent from Browser Agent, Browser calibration and requested Browser endpoints.
 
-## Evidence after the first failure
+## Experimental roadmap — not claimed by v0.1.8
 
-Stop after the first clear failure instead of sweeping parameters. Send one newest Browser Agent Diagnostics ZIP plus the final PNG when the failure is visual. If the problem concerns learning/benchmarking, also send `BrowserAgentCaptures\Calibration\browser-agent-calibration-v016.json`. The useful markers are `[USER_ACTION]`, `[BA_TIMELINE]`, `[BA_REQ]`, `[BA_AGENT]`, `[BA_ADAPT]`, `[BA_REPAIR]`, `[BA_CALIB]` and `[BA_LIVE]`.
+The following are deliberately not presented as completed in this build:
 
-## Scope honesty
+- OCR-only endpoint recognition when a site draws progress as pixels/canvas;
+- “click Next N times” / “stop on page N” semantic page-loop automation;
+- true minimized browser or inactive-tab screenshot capture;
+- arbitrary Windows app background/minimized capture.
 
-The five fixed speed presets remain available across the GUI modes. Dynamic page-aware adaptive learning and Repair precision are Browser Assisted only because that path has DOM/loading/layout and capture timing evidence. A later model-based tuner should be evaluated offline against accumulated real evidence before it is ever allowed to advise a bounded safe action set in live capture.
+The next-page family belongs to the Recipe/Page Loop model: semantic Next locator + maximum pages + per-page checkpoint + fail-closed behavior. OCR should be a small-region fallback only when DOM/semantic evidence is unavailable, not a full-frame per-scroll hot-path dependency.
+
+## Evidence to send after first failure
+
+For Browser Assisted, send:
+
+1. newest `BrowserAgentDiagnostics-*.zip`;
+2. final PNG if the problem is visual;
+3. screenshot of the GUI if the problem is settings/layout.
+
+Useful markers: `[USER_ACTION]`, `[BA_TIMELINE]`, `[BA_REQ]`, `[BA_AGENT]`, `[BA_ADAPT]`, `[BA_REPAIR]`, `[BA_CALIB]`, `[BA_LIVE]`, `[BA_EDGE]`, `[BA_END]`.

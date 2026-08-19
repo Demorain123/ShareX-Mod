@@ -6,7 +6,7 @@ $repoRoot = (& git rev-parse --show-toplevel).Trim()
 if (-not $repoRoot) { throw "Not inside a Git repository." }
 $ui = Join-Path $repoRoot "LongCapture.Standalone\StandaloneUiPolish.cs"
 $text = [IO.File]::ReadAllText($ui)
-$marker = 'form.ShowInTaskbar = false; // v0.1.7 visual-audit shown-form rendering'
+$marker = 'TryMeasureVisualAuditContent'
 
 if ($text.Contains($marker)) {
     Write-Host "[BrowserAgent-v0.1.7-visual-audit] already present." -ForegroundColor DarkYellow
@@ -51,6 +51,42 @@ $newFrame = @'
                     int width = Math.Max(1, form.ClientSize.Width);
 '@
 
+$oldBitmap = @'
+                    using var bitmap = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+                    form.DrawToBitmap(bitmap, new Rectangle(0, 0, width, height));
+                    string name = $"LongCapture-v017-ui-{size.Width}x{size.Height}.png";
+                    string path = Path.Combine(outputDirectory, name);
+                    bitmap.Save(path, ImageFormat.Png);
+                    captures.Add(new
+                    {
+                        requestedWindow = $"{size.Width}x{size.Height}",
+                        actualClient = $"{width}x{height}",
+                        file = name,
+                        bytes = new FileInfo(path).Length
+                    });
+'@
+$newBitmap = @'
+                    using var bitmap = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+                    form.DrawToBitmap(bitmap, new Rectangle(0, 0, width, height));
+                    if (!TryMeasureVisualAuditContent(bitmap, out double interiorDarkFraction, out int interiorColors))
+                    {
+                        throw new InvalidOperationException(
+                            $"visual-audit frame is visually blank or missing the real control hierarchy: requestedWindow={size.Width}x{size.Height} actualClient={width}x{height} interiorDarkFraction={interiorDarkFraction:F4} interiorColors={interiorColors}");
+                    }
+                    string name = $"LongCapture-v017-ui-{size.Width}x{size.Height}.png";
+                    string path = Path.Combine(outputDirectory, name);
+                    bitmap.Save(path, ImageFormat.Png);
+                    captures.Add(new
+                    {
+                        requestedWindow = $"{size.Width}x{size.Height}",
+                        actualClient = $"{width}x{height}",
+                        interiorDarkFraction = Math.Round(interiorDarkFraction, 5),
+                        interiorColors,
+                        file = name,
+                        bytes = new FileInfo(path).Length
+                    });
+'@
+
 $oldFinally = @'
             finally
             {
@@ -71,10 +107,46 @@ $newFinally = @'
             }
 '@
 
+$oldHelperAnchor = @'
+    private static void StyleHeader(Label? title, Label? subtitle, bool highContrast)
+'@
+$newHelperAnchor = @'
+    private static bool TryMeasureVisualAuditContent(Bitmap bitmap, out double darkFraction, out int interiorColors)
+    {
+        var colors = new HashSet<int>();
+        long darkSamples = 0;
+        long samples = 0;
+        int left = Math.Min(8, Math.Max(0, bitmap.Width - 1));
+        int top = Math.Min(72, Math.Max(0, bitmap.Height - 1));
+        int right = Math.Max(left + 1, bitmap.Width - 8);
+        int bottom = Math.Max(top + 1, bitmap.Height - 8);
+
+        for (int y = top; y < bottom; y += 4)
+        {
+            for (int x = left; x < right; x += 4)
+            {
+                Color pixel = bitmap.GetPixel(x, y);
+                colors.Add(pixel.ToArgb());
+                double luminance = 0.2126 * pixel.R + 0.7152 * pixel.G + 0.0722 * pixel.B;
+                if (luminance < 225.0) darkSamples++;
+                samples++;
+            }
+        }
+
+        interiorColors = colors.Count;
+        darkFraction = samples == 0 ? 0 : darkSamples / (double)samples;
+        return interiorColors >= 12 && darkFraction >= 0.002;
+    }
+
+    private static void StyleHeader(Label? title, Label? subtitle, bool highContrast)
+'@
+
 foreach ($pair in @(
     [pscustomobject]@{ Old = $oldStart; New = $newStart; Name = 'shown-form audit bootstrap' },
     [pscustomobject]@{ Old = $oldFrame; New = $newFrame; Name = 'refresh before bitmap capture' },
-    [pscustomobject]@{ Old = $oldFinally; New = $newFinally; Name = 'hide audit form during cleanup' }
+    [pscustomobject]@{ Old = $oldBitmap; New = $newBitmap; Name = 'semantic nonblank bitmap gate' },
+    [pscustomobject]@{ Old = $oldFinally; New = $newFinally; Name = 'hide audit form during cleanup' },
+    [pscustomobject]@{ Old = $oldHelperAnchor; New = $newHelperAnchor; Name = 'interior visual-content measurement helper' }
 )) {
     if (-not $text.Contains($pair.Old)) {
         throw "Browser Agent v0.1.7 visual-audit hardening anchor missing: $($pair.Name)"
@@ -84,9 +156,9 @@ foreach ($pair in @(
 }
 
 if ($CheckOnly) {
-    Write-Host "Browser Agent v0.1.7 shown-form visual-audit compatibility passed." -ForegroundColor Green
+    Write-Host "Browser Agent v0.1.7 shown-form + semantic-content visual-audit compatibility passed." -ForegroundColor Green
     exit 0
 }
 
 [IO.File]::WriteAllText($ui, $text, [Text.UTF8Encoding]::new($true))
-Write-Host "Browser Agent v0.1.7 visual audit hardened: the real shown WinForms hierarchy is now rendered before screenshot capture." -ForegroundColor Green
+Write-Host "Browser Agent v0.1.7 visual audit hardened: shown WinForms hierarchy required and visually blank frames are rejected." -ForegroundColor Green

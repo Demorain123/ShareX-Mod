@@ -122,3 +122,7 @@ Diagnostics ZIPs are written under:
 `BrowserAgentCaptures\Diagnostics\`
 
 For a failed or suspicious real run, one Diagnostics ZIP is normally enough; v0.1.4 is designed to preserve the Browser Agent request/event timeline inside it.
+
+## CI gate
+
+The v0.1.4 final evidence gate must pass the RC6 overlay chain, v0.1.4 source invariants, portable publish, Browser Agent deterministic self-test, RC6 QUICK regression suite, packaged-extension boundary checks, final ZIP extraction, and a second self-test from the extracted package before the artifact is considered testable.

@@ -1,4 +1,4 @@
-name: LongCapture Browser Agent v0.1.8 Final Reliability R2
+name: LongCapture Browser Agent v0.1.8 Final Integrity Repair R3
 
 on:
   push:
@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: browser-agent-v018-final-r2-${{ github.ref }}
+  group: browser-agent-v018-final-r3-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -22,7 +22,7 @@ permissions:
 jobs:
   final-95-build-package:
     runs-on: windows-2025
-    timeout-minutes: 80
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
 
@@ -32,7 +32,7 @@ jobs:
           & pwsh -NoProfile -File scripts\prepare-browser-agent-v018-final.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Verify final route/security/result semantics
+      - name: Verify final integrity-repair/background/end/security semantics
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -49,20 +49,33 @@ jobs:
           $session = Get-Content "LongCapture.Standalone\BrowserAgentCaptureSession.cs" -Raw
           $main = Get-Content "LongCapture.Standalone\MainForm.cs" -Raw
           $worker = Get-Content "LongCapture.Standalone\BrowserAgent\Extension\service-worker.js" -Raw
+          $adaptive = Get-Content "LongCapture.Standalone\BrowserAgentAdaptivePolicy.cs" -Raw
           foreach ($marker in @(
-            'Requested range complete:',
             'completed-requested-range',
             '[BA_END] requested stop matched',
-            '[BA_EDGE]'
+            '[BA_EDGE]',
+            '[BA_MARK] frame=',
+            'Forward capture stopped by F8. Running Quality Guard',
+            'manual-stop-repaired',
+            'manual-stop-quality-unresolved'
           )) {
             if (-not $session.Contains($marker) -and -not $main.Contains($marker)) { throw "Missing final result marker: $marker" }
           }
           foreach ($marker in @(
-            '.topic-post.sticky-avatar .topic-avatar',
+            'collectSemanticAnchorsV018',
+            'semanticAnchors,',
+            'case "repairReset":',
             'browserWindow.state === "minimized"',
             'backgroundWindowCapture: browserWindow.focused !== true'
           )) {
             if (-not $worker.Contains($marker)) { throw "Missing final worker marker: $marker" }
+          }
+          foreach ($marker in @(
+            'BrowserAgentRepairPrecision.Perfect',
+            'UnlimitedRepairAttempts',
+            'DefaultRepairTimeLimitSeconds'
+          )) {
+            if (-not $adaptive.Contains($marker)) { throw "Missing Perfect repair marker: $marker" }
           }
 
       - name: Restore and publish final x64 portable
@@ -77,7 +90,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $audit = Join-Path $PWD "artifacts\UiAudit-v018-r2"
+          $audit = Join-Path $PWD "artifacts\UiAudit-v018-r3"
           $p = Start-Process -FilePath (Join-Path $PWD "artifacts\LongCapture\LongCapture.exe") -ArgumentList "--modern-ui-v017-audit=$audit" -WorkingDirectory (Join-Path $PWD "artifacts\LongCapture") -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "Final UI audit failed exit=$($p.ExitCode)" }
           if (@(Get-ChildItem $audit -Filter "LongCapture-v017-ui-*.png").Count -ne 4) { throw "Expected four responsive UI snapshots" }
@@ -100,21 +113,21 @@ jobs:
           )) {
             Copy-Item (Join-Path "artifacts" $score) (Join-Path "Output" $score) -Force
           }
-          Copy-Item "artifacts\UiAudit-v018-r2" "Output\UiAudit-v018-r2" -Recurse -Force
+          Copy-Item "artifacts\UiAudit-v018-r3" "Output\UiAudit-v018-r3" -Recurse -Force
 
-          $zip = "Output\LongCapture-Browser-Agent-v0.1.8-Reliability-Background-End-r2-x64.zip"
+          $zip = "Output\LongCapture-Browser-Agent-v0.1.8-Integrity-Repair-Background-End-r3-x64.zip"
           Compress-Archive -Path "artifacts\LongCapture\*" -DestinationPath $zip -CompressionLevel Optimal -Force
           $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
-          Set-Content "Output\LongCapture-Browser-Agent-v0.1.8-Reliability-Background-End-r2-x64.sha256.txt" "$hash  LongCapture-Browser-Agent-v0.1.8-Reliability-Background-End-r2-x64.zip"
+          Set-Content "Output\LongCapture-Browser-Agent-v0.1.8-Integrity-Repair-Background-End-r3-x64.sha256.txt" "$hash  LongCapture-Browser-Agent-v0.1.8-Integrity-Repair-Background-End-r3-x64.zip"
 
-          $temp = Join-Path $env:RUNNER_TEMP "longcapture-browser-agent-v018-r2-final"
+          $temp = Join-Path $env:RUNNER_TEMP "longcapture-browser-agent-v018-r3-final"
           Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue
           Expand-Archive $zip $temp -Force
 
           $p = Start-Process -FilePath (Join-Path $temp "LongCapture.exe") -ArgumentList "--browser-agent-poc-self-test" -WorkingDirectory $temp -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "Extracted final Browser self-test failed exit=$($p.ExitCode)" }
 
-          $reAudit = Join-Path $env:RUNNER_TEMP "longcapture-browser-agent-v018-r2-ui"
+          $reAudit = Join-Path $env:RUNNER_TEMP "longcapture-browser-agent-v018-r3-ui"
           $p = Start-Process -FilePath (Join-Path $temp "LongCapture.exe") -ArgumentList "--modern-ui-v017-audit=$reAudit" -WorkingDirectory $temp -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "Extracted final UI audit failed exit=$($p.ExitCode)" }
           if (@(Get-ChildItem $reAudit -Filter "LongCapture-v017-ui-*.png").Count -ne 4) { throw "Extracted package did not produce four UI snapshots" }
@@ -122,13 +135,13 @@ jobs:
       - name: Upload final v0.1.8 package, scores and visual evidence
         uses: actions/upload-artifact@v7
         with:
-          name: LongCapture-Browser-Agent-v0.1.8-Reliability-Background-End-r2-x64
+          name: LongCapture-Browser-Agent-v0.1.8-Integrity-Repair-Background-End-r3-x64
           path: |
-            Output\LongCapture-Browser-Agent-v0.1.8-Reliability-Background-End-r2-x64.zip
-            Output\LongCapture-Browser-Agent-v0.1.8-Reliability-Background-End-r2-x64.sha256.txt
+            Output\LongCapture-Browser-Agent-v0.1.8-Integrity-Repair-Background-End-r3-x64.zip
+            Output\LongCapture-Browser-Agent-v0.1.8-Integrity-Repair-Background-End-r3-x64.sha256.txt
             Output\browser-agent-v016-quality-score.json
             Output\browser-agent-v017-ui-quality-score.json
             Output\browser-agent-v018-quality-score.json
-            Output\UiAudit-v018-r2\ui-audit.json
-            Output\UiAudit-v018-r2\LongCapture-v017-ui-*.png
+            Output\UiAudit-v018-r3\ui-audit.json
+            Output\UiAudit-v018-r3\LongCapture-v017-ui-*.png
           if-no-files-found: error

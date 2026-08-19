@@ -41,13 +41,18 @@ Expected evidence:
 - the final PNG has `FinalImageSha256` and `FinalImagePngHeaderVerified = true`;
 - `[BA_HASH]` log lines explain exact-repeat, pre-stitch and final proof decisions.
 
-Offline re-check from PowerShell:
+Offline re-check from PowerShell (using an exit code so it also works reliably with the GUI-subsystem executable):
 
 ```powershell
-.\LongCapture.exe --verify-browser-agent-integrity="<full path to BrowserAgent-YYYYMMDD-HHMMSS>"
+$Session = "<full path to BrowserAgent-YYYYMMDD-HHMMSS>"
+$Arg = "--verify-browser-agent-integrity=`"$Session`""
+$p = Start-Process -FilePath .\LongCapture.exe -ArgumentList $Arg -Wait -PassThru
+$p.ExitCode
 ```
 
-PASS prints `Integrity verification PASS`. To prove the verifier is not ceremonial, copy a completed session to a temporary folder, change/delete one copied frame, then run the verifier on the copy: it must fail. Do **not** alter the original evidence folder for this negative test.
+`0` means the persisted proof is fully verified **and** all frame/final-image bytes still match. A byte-clean session whose `integrity.json` still says coverage/duplicate/repair quality is unresolved must return non-zero; hash consistency is not allowed to override screenshot-quality evidence.
+
+To prove the verifier is not ceremonial, copy a completed session to a temporary folder, change/delete one copied frame, then run the verifier on the copy: it must return non-zero. Do **not** alter the original evidence folder for this negative test.
 
 '@ 'A hash does not prove screenshot completeness'
 
@@ -67,7 +72,7 @@ v0.1.9 implements the baseline's three-layer model rather than treating a checks
 
 A cryptographic hash proves that saved bytes match the bytes LongCapture accepted; it **does not prove** that the browser showed every intended document region. Therefore a clean SHA-256 alone can never upgrade a capture with unresolved coverage/repair evidence to “verified”. Critical hash/file mismatches fail closed before stitching. Coverage/exact-repeat anomalies feed the existing suspect-frame repair ledger and, if still unresolved after repair, keep the result Partial.
 
-`integrity.json` contains the frame proofs, coverage summary, ordered Merkle root and final PNG digest. `integrity.json.sha256` protects the proof file against accidental later corruption. `LongCapture.exe --verify-browser-agent-integrity=<session>` rechecks the proof file, every frame and the final PNG. This is an accidental-corruption/integrity mechanism, not a cryptographic signature against an attacker who can rewrite the whole folder.
+`integrity.json` contains the frame proofs, coverage summary, ordered Merkle root and final PNG digest. `integrity.json.sha256` protects the proof file against accidental later corruption. `LongCapture.exe --verify-browser-agent-integrity=<session>` rechecks the proof file, its fully-verified quality state, the manifest/root linkage, every frame and the final PNG. It returns success only when those layers agree. This is an accidental-corruption/integrity mechanism, not a cryptographic signature against an attacker who can rewrite the whole folder.
 
 '@ '## SHA-256 + Coverage Integrity Proof'
 

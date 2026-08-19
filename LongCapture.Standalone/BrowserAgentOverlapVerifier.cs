@@ -13,6 +13,19 @@ internal sealed class BrowserAgentOverlapCheck
     public int VisualDeltaOffsetPixels { get; init; }
     public double AlignmentScore { get; init; }
     public double AlignmentConfidence { get; init; }
+
+    // v0.1.8: keep the center band as the scroll-geometry authority, but do not
+    // let a moving/fixed object in the outer page rails disappear inside a median.
+    public double LeftBandMeanAbsoluteError { get; init; }
+    public double CenterBandMeanAbsoluteError { get; init; }
+    public double RightBandMeanAbsoluteError { get; init; }
+    public double LeftBandStrongDiffRatio { get; init; }
+    public double CenterBandStrongDiffRatio { get; init; }
+    public double RightBandStrongDiffRatio { get; init; }
+    public bool LeftEdgeContamination { get; init; }
+    public bool RightEdgeContamination { get; init; }
+    public bool EdgeContamination => LeftEdgeContamination || RightEdgeContamination;
+
     public string Detail { get; init; } = string.Empty;
 }
 
@@ -21,6 +34,8 @@ internal static class BrowserAgentOverlapVerifier
     internal const double MaxMeanAbsoluteError = 3.00;
     internal const double MaxStrongDiffRatio = 0.0125;
     private const int MaximumVisualCorrectionPixels = 72;
+    private const double MinimumEdgeMaeForContamination = 4.50;
+    private const double MinimumEdgeStrongForContamination = 0.025;
 
     private readonly record struct ScoreResult(
         int Delta,
@@ -28,7 +43,13 @@ internal static class BrowserAgentOverlapVerifier
         double Mae,
         double StrongRatio,
         double Composite,
-        int Samples);
+        int Samples,
+        double LeftMae,
+        double CenterMae,
+        double RightMae,
+        double LeftStrong,
+        double CenterStrong,
+        double RightStrong);
 
     public static BrowserAgentOverlapCheck Measure(
         string sessionDirectory,
@@ -123,7 +144,21 @@ internal static class BrowserAgentOverlapVerifier
             resolved.StrongRatio <= MaxStrongDiffRatio;
         bool correctionSafe = Math.Abs(correction) <= MaximumVisualCorrectionPixels;
         bool correctionConfident = correction == 0 || confidence >= 0.08 || expected.Mae > resolved.Mae + 0.35;
-        bool acceptable = visuallyStrong && correctionSafe && correctionConfident;
+
+        // A median of three bands intentionally protects scroll alignment from one animated
+        // rail, but v0.1.7's real Linux.do evidence showed that the same median could hide a
+        // sticky avatar that jumped in the left rail while the center text remained perfect.
+        // Treat a rail as contaminated only when BOTH its absolute error and strong-difference
+        // density are materially above the center band. This preserves normal document avatars
+        // that move with the text while surfacing screen-space sticky/fixed transitions.
+        double edgeMaeLimit = Math.Max(MinimumEdgeMaeForContamination, resolved.CenterMae * 3.5 + 1.0);
+        double edgeStrongLimit = Math.Max(MinimumEdgeStrongForContamination, resolved.CenterStrong * 4.0 + 0.01);
+        bool leftEdgeContamination =
+            resolved.LeftMae > edgeMaeLimit && resolved.LeftStrong > edgeStrongLimit;
+        bool rightEdgeContamination =
+            resolved.RightMae > edgeMaeLimit && resolved.RightStrong > edgeStrongLimit;
+        bool acceptable = visuallyStrong && correctionSafe && correctionConfident &&
+            !leftEdgeContamination && !rightEdgeContamination;
 
         return new BrowserAgentOverlapCheck
         {
@@ -138,9 +173,19 @@ internal static class BrowserAgentOverlapVerifier
             VisualDeltaOffsetPixels = correction,
             AlignmentScore = resolved.Composite,
             AlignmentConfidence = confidence,
+            LeftBandMeanAbsoluteError = resolved.LeftMae,
+            CenterBandMeanAbsoluteError = resolved.CenterMae,
+            RightBandMeanAbsoluteError = resolved.RightMae,
+            LeftBandStrongDiffRatio = resolved.LeftStrong,
+            CenterBandStrongDiffRatio = resolved.CenterStrong,
+            RightBandStrongDiffRatio = resolved.RightStrong,
+            LeftEdgeContamination = leftEdgeContamination,
+            RightEdgeContamination = rightEdgeContamination,
             Detail =
                 $"mae={resolved.Mae:F3} strong={resolved.StrongRatio:P2} overlap={resolved.Overlap}px samples={resolved.Samples} " +
-                $"expected={expectedDelta}px resolved={resolved.Delta}px correction={correction:+#;-#;0}px confidence={confidence:F3}"
+                $"expected={expectedDelta}px resolved={resolved.Delta}px correction={correction:+#;-#;0}px confidence={confidence:F3} " +
+                $"bands=({resolved.LeftMae:F2}/{resolved.CenterMae:F2}/{resolved.RightMae:F2}) " +
+                $"edgeContamination={(leftEdgeContamination ? "L" : "-")}{(rightEdgeContamination ? "R" : "-")}"
         };
     }
 
@@ -152,11 +197,13 @@ internal static class BrowserAgentOverlapVerifier
             return default;
         }
 
-        int left = Math.Max(0, (int)Math.Round(previous.Width * 0.07));
-        int right = Math.Min(previous.Width, (int)Math.Round(previous.Width * 0.93));
+        // Include the outer rails. The old 7%-93% crop excluded Linux.do/Discourse sticky
+        // avatars almost exactly where they live. Keep a tiny 2% trim for browser/page borders.
+        int left = Math.Max(0, (int)Math.Round(previous.Width * 0.02));
+        int right = Math.Min(previous.Width, (int)Math.Round(previous.Width * 0.98));
         int usableWidth = Math.Max(1, right - left);
-        int xStep = dense ? Math.Max(6, previous.Width / 220) : Math.Max(14, previous.Width / 110);
-        int yStep = dense ? Math.Max(3, overlapPixels / 72) : Math.Max(8, overlapPixels / 30);
+        int xStep = dense ? Math.Max(4, previous.Width / 280) : Math.Max(10, previous.Width / 130);
+        int yStep = dense ? Math.Max(2, overlapPixels / 96) : Math.Max(7, overlapPixels / 36);
 
         long[] channelDifference = new long[3];
         int[] strong = new int[3];
@@ -174,31 +221,48 @@ internal static class BrowserAgentOverlapVerifier
                 int dg = Math.Abs(a.G - b.G);
                 int db = Math.Abs(a.B - b.B);
                 int mean = (dr + dg + db) / 3;
-                int band = Math.Min(2, Math.Max(0, (x - left) * 3 / usableWidth));
+                double normalizedX = (x - left) / (double)usableWidth;
+                int band = normalizedX < 0.22 ? 0 : normalizedX > 0.78 ? 2 : 1;
                 channelDifference[band] += dr + dg + db;
                 if (mean > 30) strong[band]++;
                 samples[band]++;
             }
         }
 
+        double[] bandMae = new double[3];
+        double[] bandStrong = new double[3];
         var maes = new List<double>(3);
         var strongRatios = new List<double>(3);
         int totalSamples = 0;
         for (int band = 0; band < 3; band++)
         {
             if (samples[band] <= 0) continue;
-            maes.Add(channelDifference[band] / (samples[band] * 3.0));
-            strongRatios.Add(strong[band] / (double)samples[band]);
+            bandMae[band] = channelDifference[band] / (samples[band] * 3.0);
+            bandStrong[band] = strong[band] / (double)samples[band];
+            maes.Add(bandMae[band]);
+            strongRatios.Add(bandStrong[band]);
             totalSamples += samples[band];
         }
-        if (maes.Count < 2) return default;
+        if (maes.Count < 3) return default;
 
         maes.Sort();
         strongRatios.Sort();
-        double medianMae = maes[maes.Count / 2];
-        double medianStrong = strongRatios[strongRatios.Count / 2];
+        double medianMae = maes[1];
+        double medianStrong = strongRatios[1];
         double composite = medianMae + medianStrong * 70.0;
-        return new ScoreResult(deltaPixels, overlapPixels, medianMae, medianStrong, composite, totalSamples);
+        return new ScoreResult(
+            deltaPixels,
+            overlapPixels,
+            medianMae,
+            medianStrong,
+            composite,
+            totalSamples,
+            bandMae[0],
+            bandMae[1],
+            bandMae[2],
+            bandStrong[0],
+            bandStrong[1],
+            bandStrong[2]);
     }
 
     private static BrowserAgentOverlapCheck Reject(string detail, int expectedDelta = 0) => new()

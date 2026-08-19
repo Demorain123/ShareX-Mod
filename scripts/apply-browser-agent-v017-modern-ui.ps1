@@ -22,12 +22,26 @@ if ($text.Contains($marker)) {
             string output = modernUiAuditArg.Contains('=')
                 ? modernUiAuditArg[(modernUiAuditArg.IndexOf('=') + 1)..].Trim('"')
                 : Path.Combine(AppContext.BaseDirectory, "UiAudit-v017");
-            using var auditForm = new MainForm();
-            StandaloneUiPolish.Apply(auditForm);
-            int code = StandaloneUiPolish.CaptureVisualAudit(auditForm, output, out string detail);
-            Console.WriteLine($"LongCapture v0.1.7 UI audit: {detail}");
-            LongCaptureLog.Info($"--modern-ui-v017-audit completed exitCode={code} detail={LongCaptureLog.OneLine(detail)} output={LongCaptureLog.OneLine(output)}");
-            return code;
+            try
+            {
+                using var auditForm = new MainForm();
+                StandaloneUiPolish.Apply(auditForm);
+                int code = StandaloneUiPolish.CaptureVisualAudit(auditForm, output, out string detail);
+                Console.WriteLine($"LongCapture v0.1.7 UI audit: {detail}");
+                LongCaptureLog.Info($"--modern-ui-v017-audit completed exitCode={code} detail={LongCaptureLog.OneLine(detail)} output={LongCaptureLog.OneLine(output)}");
+                return code;
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    Directory.CreateDirectory(output);
+                    File.WriteAllText(Path.Combine(output, "ui-audit-exception.txt"), ex.ToString());
+                }
+                catch { }
+                LongCaptureLog.Error("--modern-ui-v017-audit crashed", ex);
+                return 78;
+            }
         }
 
         using var exclusionWatcher = CaptureExclusionWatcher.Start();

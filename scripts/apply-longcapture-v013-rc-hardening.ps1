@@ -12,7 +12,6 @@ function Replace-Literal {
         [Parameter(Mandatory=$true)][string]$New,
         [Parameter(Mandatory=$true)][string]$Marker
     )
-
     if (-not (Test-Path -LiteralPath $Path)) { throw "RC hardening target not found: $Path" }
     $text = [IO.File]::ReadAllText($Path)
     if ($text.Contains($Marker)) {
@@ -22,11 +21,9 @@ function Replace-Literal {
     if (-not $text.Contains($Old)) {
         throw "LongCapture v0.1.3 RC compatibility check failed: '$Marker' anchor not found in $Path"
     }
-
     Write-Host "[LongCapture-v0.1.3-rc] compatible: $Marker" -ForegroundColor Green
     if (-not $CheckOnly) {
-        $text = $text.Replace($Old, $New)
-        [IO.File]::WriteAllText($Path, $text, [Text.UTF8Encoding]::new($true))
+        [IO.File]::WriteAllText($Path, $text.Replace($Old, $New), [Text.UTF8Encoding]::new($true))
         Write-Host "[LongCapture-v0.1.3-rc] applied: $Marker" -ForegroundColor Cyan
     }
 }
@@ -35,9 +32,11 @@ $ui = Join-Path $repoRoot "LongCapture.Standalone\StandaloneUiPolish.cs"
 $program = Join-Path $repoRoot "LongCapture.Standalone\Program.cs"
 $manager = Join-Path $repoRoot "ShareX.ScreenCaptureLib\ScrollingCaptureManager.cs"
 $settle = Join-Path $repoRoot "mod-overlay\src\ShareX.ScreenCaptureLib\ShareXModAdaptiveSettleV042.cs"
+$isModernV017 = ([IO.File]::ReadAllText($ui)).Contains('ExperienceVersion = "0.1.7"')
 
-# v0.1.3 added Export diagnostics after the original UI hardening was written. Preserve every
-# auxiliary action button instead of assuming there can only ever be one non-capture button.
+# v0.1.3 added Export diagnostics after the original responsive shell. Preserve every auxiliary
+# action instead of assuming there is only one non-capture button. v0.1.7 modernizes the same shell,
+# so it uses equivalent hardening with its own sizing/styling anchors rather than weakening RC safety.
 Replace-Literal -Path $ui `
     -Old @'
         Button? openOutput = actionPanel.Controls.OfType<Button>()
@@ -53,10 +52,35 @@ Replace-Literal -Path $ui `
             ?? auxiliaryButtons.FirstOrDefault();
         Label? quality = actionPanel.Controls.OfType<Label>().FirstOrDefault();
 '@ `
-    -Marker "Button[] auxiliaryButtons = actionPanel.Controls.OfType<Button>()"
+    -Marker 'Button[] auxiliaryButtons = actionPanel.Controls.OfType<Button>()'
 
-Replace-Literal -Path $ui `
-    -Old @'
+if ($isModernV017) {
+    Replace-Literal -Path $ui `
+        -Old @'
+            openOutput.Dock = DockStyle.Top;
+            openOutput.AutoSize = true;
+            openOutput.MinimumSize = new Size(152, 36);
+            openOutput.Margin = new Padding(0, 0, 14, 0);
+            StyleButton(openOutput, highContrast, primary: false);
+
+            quality.Dock = DockStyle.Fill;
+'@ `
+        -New @'
+            foreach (Button auxiliary in auxiliaryButtons)
+            {
+                auxiliary.Dock = DockStyle.None;
+                auxiliary.AutoSize = true;
+                auxiliary.MinimumSize = new Size(152, 36);
+                auxiliary.Margin = new Padding(0, 0, 10, 6);
+                StyleButton(auxiliary, highContrast, primary: false);
+            }
+
+            quality.Dock = DockStyle.Fill;
+'@ `
+        -Marker 'foreach (Button auxiliary in auxiliaryButtons)'
+} else {
+    Replace-Literal -Path $ui `
+        -Old @'
             openOutput.Dock = DockStyle.Top;
             openOutput.AutoSize = true;
             openOutput.MinimumSize = new Size(150, 34);
@@ -64,7 +88,7 @@ Replace-Literal -Path $ui `
 
             quality.Dock = DockStyle.Fill;
 '@ `
-    -New @'
+        -New @'
             foreach (Button auxiliary in auxiliaryButtons)
             {
                 auxiliary.Dock = DockStyle.None;
@@ -75,7 +99,8 @@ Replace-Literal -Path $ui `
 
             quality.Dock = DockStyle.Fill;
 '@ `
-    -Marker "foreach (Button auxiliary in auxiliaryButtons)"
+        -Marker 'foreach (Button auxiliary in auxiliaryButtons)'
+}
 
 Replace-Literal -Path $ui `
     -Old @'
@@ -103,12 +128,86 @@ Replace-Literal -Path $ui `
             layout.Controls.Add(quality, 1, 1);
             actionPanel.Controls.Add(layout);
 '@ `
-    -Marker "var auxiliaryPanel = new FlowLayoutPanel"
+    -Marker 'var auxiliaryPanel = new FlowLayoutPanel'
 
-# Reflow quality text against the complete auxiliary-button group, not whichever button happens
-# to be first in Controls order.
-Replace-Literal -Path $ui `
-    -Old @'
+if ($isModernV017) {
+    Replace-Literal -Path $ui `
+        -Old @'
+            Button? openOutput = Descendants(actionPanel).OfType<Button>()
+                .FirstOrDefault(x => !IsPrimaryCaptureButton(x));
+            Label? quality = Descendants(actionPanel).OfType<Label>().FirstOrDefault();
+            if (quality is not null)
+            {
+                int openWidth = openOutput?.PreferredSize.Width ?? 152;
+                int width = Math.Max(220, body.ClientSize.Width - body.Padding.Horizontal - openWidth - 40);
+'@ `
+        -New @'
+            Button[] auxiliaryButtons = Descendants(actionPanel).OfType<Button>()
+                .Where(x => !IsPrimaryCaptureButton(x))
+                .ToArray();
+            Label? quality = Descendants(actionPanel).OfType<Label>().FirstOrDefault();
+            if (quality is not null)
+            {
+                int auxiliaryWidth = Math.Min(360, Math.Max(152, auxiliaryButtons.Sum(x => x.PreferredSize.Width + x.Margin.Horizontal)));
+                int width = Math.Max(220, body.ClientSize.Width - body.Padding.Horizontal - auxiliaryWidth - 40);
+'@ `
+        -Marker 'int auxiliaryWidth = Math.Min(360'
+
+    Replace-Literal -Path $ui `
+        -Old @'
+    {
+        if (body.IsDisposed || form.IsDisposed) return;
+
+        int maxLabel = body.Controls.OfType<Label>()
+'@ `
+        -New @'
+    {
+        if (body.IsDisposed || form.IsDisposed) return;
+        StandaloneButtonTextFit.Apply(form);
+
+        int maxLabel = body.Controls.OfType<Label>()
+'@ `
+        -Marker 'StandaloneButtonTextFit.Apply(form);'
+
+    Replace-Literal -Path $ui `
+        -Old @'
+        Button? open = Descendants(panel).OfType<Button>()
+            .FirstOrDefault(x => x.Text.StartsWith("Open output folder", StringComparison.OrdinalIgnoreCase));
+        Label? quality = Descendants(panel).OfType<Label>().FirstOrDefault();
+
+        if (capture is null || open is null || quality is null)
+        {
+            detail = "primary actions were not rebuilt into the responsive action layout";
+            return false;
+        }
+        if (capture.Bounds.Height < 52 || open.Bounds.Height < 34)
+        {
+            detail = "primary action button height is too small";
+            return false;
+        }
+'@ `
+        -New @'
+        Button? open = Descendants(panel).OfType<Button>()
+            .FirstOrDefault(x => x.Text.StartsWith("Open output folder", StringComparison.OrdinalIgnoreCase));
+        Button? diagnostics = Descendants(panel).OfType<Button>()
+            .FirstOrDefault(x => x.Text.StartsWith("Export diagnostics", StringComparison.OrdinalIgnoreCase));
+        Label? quality = Descendants(panel).OfType<Label>().FirstOrDefault();
+
+        if (capture is null || open is null || diagnostics is null || quality is null)
+        {
+            detail = "primary actions were not rebuilt into the responsive action layout (Start/Open output/Export diagnostics/Quality required)";
+            return false;
+        }
+        if (capture.Bounds.Height < 52 || open.Bounds.Height < 34 || diagnostics.Bounds.Height < 34)
+        {
+            detail = "primary action button height is too small";
+            return false;
+        }
+'@ `
+        -Marker 'Export diagnostics/Quality required'
+} else {
+    Replace-Literal -Path $ui `
+        -Old @'
             Button? openOutput = Descendants(actionPanel).OfType<Button>()
                 .FirstOrDefault(x => !x.Text.StartsWith("Start long capture", StringComparison.OrdinalIgnoreCase) &&
                                      !x.Text.StartsWith("Stop capture", StringComparison.OrdinalIgnoreCase));
@@ -118,7 +217,7 @@ Replace-Literal -Path $ui `
                 int openWidth = openOutput?.PreferredSize.Width ?? 150;
                 int width = Math.Max(260, body.ClientSize.Width - body.Padding.Horizontal - openWidth - 36);
 '@ `
-    -New @'
+        -New @'
             Button[] auxiliaryButtons = Descendants(actionPanel).OfType<Button>()
                 .Where(x => !x.Text.StartsWith("Start long capture", StringComparison.OrdinalIgnoreCase) &&
                             !x.Text.StartsWith("Stop capture", StringComparison.OrdinalIgnoreCase))
@@ -129,27 +228,23 @@ Replace-Literal -Path $ui `
                 int auxiliaryWidth = Math.Min(360, Math.Max(150, auxiliaryButtons.Sum(x => x.PreferredSize.Width + x.Margin.Horizontal)));
                 int width = Math.Max(260, body.ClientSize.Width - body.Padding.Horizontal - auxiliaryWidth - 36);
 '@ `
-    -Marker "int auxiliaryWidth = Math.Min(360"
+        -Marker 'int auxiliaryWidth = Math.Min(360'
 
-# Recompute button minimums from their actual font every time layout reflows. This catches 125–200%
-# DPI/font growth for every current and future button instead of hard-coding one larger width for the
-# specific caption that happened to fail CI.
-Replace-Literal -Path $ui `
-    -Old @'
+    Replace-Literal -Path $ui `
+        -Old @'
     {
         int labelColumn = body.ColumnStyles.Count > 0
 '@ `
-    -New @'
+        -New @'
     {
         StandaloneButtonTextFit.Apply(form);
 
         int labelColumn = body.ColumnStyles.Count > 0
 '@ `
-    -Marker "StandaloneButtonTextFit.Apply(form);"
+        -Marker 'StandaloneButtonTextFit.Apply(form);'
 
-# Validation must prove both output and diagnostics actions survived the responsive rebuild.
-Replace-Literal -Path $ui `
-    -Old @'
+    Replace-Literal -Path $ui `
+        -Old @'
         Button? open = Descendants(panel).OfType<Button>()
             .FirstOrDefault(x => x.Text.StartsWith("Open output folder", StringComparison.OrdinalIgnoreCase));
         Label? quality = Descendants(panel).OfType<Label>().FirstOrDefault();
@@ -166,7 +261,7 @@ Replace-Literal -Path $ui `
             return false;
         }
 '@ `
-    -New @'
+        -New @'
         Button? open = Descendants(panel).OfType<Button>()
             .FirstOrDefault(x => x.Text.StartsWith("Open output folder", StringComparison.OrdinalIgnoreCase));
         Button? diagnostics = Descendants(panel).OfType<Button>()
@@ -185,9 +280,10 @@ Replace-Literal -Path $ui `
             return false;
         }
 '@ `
-    -Marker "Export diagnostics/Quality required"
+        -Marker 'Export diagnostics/Quality required'
+}
 
-# Do not throw away the validator's reason. A future CI failure must say which control clipped.
+# Do not throw away validator details.
 Replace-Literal -Path $program `
     -Old @'
                 if (!StandaloneUiPolish.Validate(form, out _)) return 15;
@@ -199,13 +295,9 @@ Replace-Literal -Path $program `
                     return 15;
                 }
 '@ `
-    -Marker "responsive GUI self-test failed detail="
+    -Marker 'responsive GUI self-test failed detail='
 
-# The first-generation visual overlay cleaner can repair a current sticky header from pixels that
-# existed lower in the previous frame, but a fixed footer/right-bottom widget has no Y+delta source.
-# Before combining the next frame, use that next frame's newly exposed Y-delta pixels to repair the
-# previous viewport already stored at the mosaic tail. This prevents local fixed widgets from being
-# written into every appended strip while still preserving the real document pixels underneath.
+# Engine hardening retained unchanged.
 Replace-Literal -Path $manager `
     -Old @'
                             int modRepairedOverlayTiles = 0;
@@ -229,18 +321,15 @@ Replace-Literal -Path $manager `
                             if (modHasAnchor)
                             {
 '@ `
-    -Marker "TryRepairPreviousResultTail("
+    -Marker 'TryRepairPreviousResultTail('
 
-# The 54px settle probe previously used 6px-high bottom tiles, leaving only about three vertical
-# sampling bands. Refine to 3px so a mostly-unloaded lower viewport cannot be accepted merely
-# because one coarse band straddles already-loaded content.
 Replace-Literal -Path $settle `
-    -Old "            const int tileHeight = 6;" `
-    -New "            const int tileHeight = 3;" `
-    -Marker "const int tileHeight = 3;"
+    -Old '            const int tileHeight = 6;' `
+    -New '            const int tileHeight = 3;' `
+    -Marker 'const int tileHeight = 3;'
 
 if ($CheckOnly) {
-    Write-Host "LongCapture v0.1.3 RC hardening compatibility passed." -ForegroundColor Green
+    Write-Host "LongCapture v0.1.3 RC hardening compatibility passed (modernV017=$isModernV017)." -ForegroundColor Green
 } else {
-    Write-Host "LongCapture v0.1.3 RC hardening hooks applied." -ForegroundColor Green
+    Write-Host "LongCapture v0.1.3 RC hardening hooks applied (modernV017=$isModernV017)." -ForegroundColor Green
 }

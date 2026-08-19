@@ -17,7 +17,7 @@ internal sealed class BrowserAgentUiModeAdapterV013
     private decimal browserStartDelay = 450;
     private decimal browserSettle = 1100;
     private decimal browserOverlapPercent = 32;
-    private bool browserPreload = true;
+    private bool browserPreload = false;
     private bool browserFullViewport;
 
     public void SetMode(
@@ -237,7 +237,7 @@ internal sealed class BrowserAgentUiModeAdapterV013
             scrollMethod.EndUpdate();
         }
 
-        autoScrollTop.Text = "Preload lazy/dynamic content before capture (slower, more stable)";
+        autoScrollTop.Text = "Optional gentle lazy-content pre-scan (visible, slower)";
         autoScrollTop.Checked = browserPreload;
         wholeWindowCapture.Text = "Full browser viewport (skip F8 region selection)";
         wholeWindowCapture.Checked = browserFullViewport;
@@ -308,8 +308,8 @@ internal sealed class BrowserAgentUiModeAdapterV013
         scrollMethod.Enabled = false;
         autoScrollTop.Enabled = true;
         wholeWindowCapture.Enabled = true;
-        debugCaptureUi.Enabled = false;
-        includeInternalDebugWindows.Enabled = false;
+        debugCaptureUi.Enabled = true;
+        includeInternalDebugWindows.Enabled = debugCaptureUi.Checked;
     }
 
     private static void SetRowLabel(TableLayoutPanel body, int row, string text)

@@ -18,7 +18,7 @@ $requiredTesting = @(
 $requiredReadme = @(
   'Perfect',
   'no attempt-count limit',
-  'Repair time',
+  'repair-time selector',
   '[BA_MARK]',
   'semantic DOM-anchor',
   'manual F8 stop',

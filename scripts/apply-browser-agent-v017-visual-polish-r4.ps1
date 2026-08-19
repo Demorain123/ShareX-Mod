@@ -69,25 +69,18 @@ Patch-Literal `
 '@ `
     -Marker 'int minimumHeight = primaryCommand ? 42 : 38;'
 
-# The old validator encoded the previous bottom-of-form 54px CTA geometry. The R2-R4 design moves
-# that action into the compact top command surface, where a 42px primary button is intentional.
-# Keep this a real hierarchy gate: >=40px for the primary CTA and >=34px for the secondary output
-# command. Include measured values in failures so future iterations are diagnosable.
+# The previous validator encoded the old bottom-of-form 54px CTA geometry. The R2-R4 design moves
+# the action into the compact top command surface, so validate the new hierarchy rather than the
+# obsolete placement. Patch the two semantically stable lines independently because R2 changes the
+# surrounding method signature and earlier overlays can change whitespace/newline shape.
 Patch-Literal `
-    -Old @'
-        if (capture.Bounds.Height < 52 || open.Bounds.Height < 34)
-        {
-            detail = "primary action button height is too small";
-            return false;
-        }
-'@ `
-    -New @'
-        if (capture.Bounds.Height < 40 || open.Bounds.Height < 34)
-        {
-            detail = $"primary action button height is too small: capture={capture.Bounds.Height}px open={open.Bounds.Height}px";
-            return false;
-        }
-'@ `
+    -Old 'if (capture.Bounds.Height < 52 || open.Bounds.Height < 34)' `
+    -New 'if (capture.Bounds.Height < 40 || open.Bounds.Height < 34)' `
+    -Marker 'if (capture.Bounds.Height < 40 || open.Bounds.Height < 34)'
+
+Patch-Literal `
+    -Old 'detail = "primary action button height is too small";' `
+    -New 'detail = $"primary action button height is too small: capture={capture.Bounds.Height}px open={open.Bounds.Height}px";' `
     -Marker 'capture={capture.Bounds.Height}px open={open.Bounds.Height}px'
 
 if ($CheckOnly) {

@@ -86,7 +86,8 @@ jobs:
             "scripts\apply-browser-agent-v014-prep.ps1",
             "scripts\apply-browser-agent-v014-cancel-timeline.ps1",
             "scripts\apply-browser-agent-v014-operation-log.ps1",
-            "scripts\apply-browser-agent-v015-adaptive-quality.ps1"
+            "scripts\apply-browser-agent-v015-adaptive-quality.ps1",
+            "scripts\apply-browser-agent-v015-global-speed-ui.ps1"
           )
           foreach ($hook in $hooks) {
             Write-Host "=== $hook ==="
@@ -107,13 +108,13 @@ jobs:
           $adaptiveUi = Get-Content "LongCapture.Standalone\BrowserAgentAdaptiveUiV015.cs" -Raw
           $manifest = Get-Content "LongCapture.Standalone\BrowserAgent\Extension\manifest.json" -Raw | ConvertFrom-Json
 
-          foreach ($marker in @("BrowserAgentAdaptiveUiV015", "Browser Agent v0.1.5 options strategy=", "browserAgentAdaptiveUi.SetMode(true")) {
+          foreach ($marker in @("BrowserAgentAdaptiveUiV015", "Browser Agent v0.1.5 options strategy=", "browserAgentAdaptiveUi.SetMode(true", "browserAgentAdaptiveUi.MountGlobalSpeedStrip(targetStrip)")) {
             if (-not $main.Contains($marker)) { throw "Missing v0.1.5 main marker: $marker" }
           }
           foreach ($marker in @("BrowserAgentSpeedStrategy", "AdaptiveHighSpeed", "Adaptive · High speed", "BrowserAgentAdaptiveController", "PostReviewBudget", "SelfTest")) {
             if (-not $policy.Contains($marker)) { throw "Missing adaptive policy marker: $marker" }
           }
-          foreach ($marker in @("Capture speed", "Repair precision", "EnrichOptions")) {
+          foreach ($marker in @("Capture speed", "Repair precision", "MountGlobalSpeedStrip", "nativeStrategy", "EnrichOptions")) {
             if (-not $adaptiveUi.Contains($marker)) { throw "Missing adaptive UI marker: $marker" }
           }
           foreach ($marker in @("[BA_ADAPT]", "[BA_REPAIR]", "RunAdaptivePostReviewAsync", "EffectiveStableWindowMs", "StabilityLayoutShiftScore")) {

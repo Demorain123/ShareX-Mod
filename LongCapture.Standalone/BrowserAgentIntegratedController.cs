@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace LongCapture.Standalone;
 
 internal sealed class BrowserAgentIntegratedController : IDisposable
@@ -71,17 +73,89 @@ internal sealed class BrowserAgentIntegratedController : IDisposable
         }
     }
 
+    public async Task<BrowserAgentCalibrationResult> RunCalibrationAsync(Action<string>? status = null)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (!bridge.IsConnected)
+        {
+            throw new InvalidOperationException("Attach the target Chromium/Helium tab before running Browser benchmark.");
+        }
+        if (captureCancellation is not null)
+        {
+            throw new InvalidOperationException("Finish the active Browser Assisted Capture before calibration.");
+        }
+
+        BrowserAgentCalibrationProfile profile = BrowserAgentCalibrationStore.Current;
+        const int bridgeSamples = 5;
+        int captureSamples = 0;
+        LongCaptureLog.Info("[BA_CALIB] benchmark-start");
+
+        for (int i = 0; i < bridgeSamples; i++)
+        {
+            status?.Invoke($"Calibration: Native Messaging/DOM probe {i + 1}/{bridgeSamples}...");
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            _ = await bridge.SendRequestAsync(
+                "probe",
+                new { calibration = true, sample = i + 1 },
+                TimeSpan.FromSeconds(8),
+                CancellationToken.None).ConfigureAwait(false);
+            watch.Stop();
+            profile.ObserveBridgeRtt(watch.Elapsed.TotalMilliseconds);
+        }
+
+        status?.Invoke("Calibration: measuring capture and page-stability pipeline...");
+        JsonElement benchmark = await bridge.SendRequestAsync(
+            "benchmark",
+            new
+            {
+                samples = 3,
+                stableWindowMs = 450,
+                maxWaitMs = 4500,
+                sampleMs = 100
+            },
+            TimeSpan.FromSeconds(35),
+            CancellationToken.None).ConfigureAwait(false);
+
+        if (benchmark.TryGetProperty("samples", out JsonElement samples) && samples.ValueKind == JsonValueKind.Array)
+        {
+            foreach (JsonElement sample in samples.EnumerateArray())
+            {
+                double captureMs = ReadDouble(sample, "captureDurationMs");
+                double waitedMs = ReadDouble(sample, "waitedMs");
+                double quietMs = ReadDouble(sample, "quietMs");
+                double activityMs = sample.TryGetProperty("activityMs", out JsonElement activity) && activity.TryGetDouble(out double parsedActivity)
+                    ? parsedActivity
+                    : Math.Max(0, waitedMs - quietMs);
+                double falseQuietMs = ReadDouble(sample, "maxFalseQuietMs");
+                profile.ObserveBenchmarkSample(captureMs, activityMs, falseQuietMs);
+                captureSamples++;
+            }
+        }
+
+        if (captureSamples < 2)
+        {
+            throw new InvalidOperationException("Browser benchmark returned too few capture samples; calibration was not trusted.");
+        }
+
+        BrowserAgentCalibrationStore.Save();
+        string summary = "Local Browser calibration saved.\n\n" + profile.Summary() +
+                         "\n\nThe learned values remain bounded by LongCapture safety limits and continue learning from real captures.";
+        LongCaptureLog.Info($"[BA_CALIB] benchmark-complete bridgeSamples={bridgeSamples} captureSamples={captureSamples} {profile.Summary()}");
+        return new BrowserAgentCalibrationResult
+        {
+            BridgeSamples = bridgeSamples,
+            CaptureSamples = captureSamples,
+            Confidence = profile.Confidence,
+            Summary = summary
+        };
+    }
+
     public void Stop()
     {
         CancellationTokenSource? local = captureCancellation;
         if (local is null) return;
 
         LongCaptureLog.Info("[BA_TIMELINE] user-stop requested; forwarding explicit cancel to extension and cancelling desktop wait");
-
-        // v0.1.4: cancelling the desktop Task alone is not sufficient. A long-running
-        // chrome.scripting.executeScript() Promise keeps running in the extension even
-        // after the desktop abandons its request, so send an out-of-band cancel command
-        // over the same native-messaging Port as well.
         if (Interlocked.Exchange(ref remoteStopDispatching, 1) == 0)
         {
             _ = Task.Run(async () =>
@@ -106,14 +180,8 @@ internal sealed class BrowserAgentIntegratedController : IDisposable
             });
         }
 
-        try
-        {
-            local.Cancel();
-        }
-        catch (ObjectDisposedException)
-        {
-            // A concurrently finishing capture already owns cleanup.
-        }
+        try { local.Cancel(); }
+        catch (ObjectDisposedException) { }
     }
 
     public string ExportLastDiagnostics()
@@ -139,10 +207,7 @@ internal sealed class BrowserAgentIntegratedController : IDisposable
 
     private void OnConnectionChanged(bool connected)
     {
-        if (!connected)
-        {
-            AttachedSummary = "No Chromium tab attached";
-        }
+        if (!connected) AttachedSummary = "No Chromium tab attached";
         LongCaptureLog.Info($"[BA_TIMELINE] connection changed connected={connected}");
         RaiseStateChanged();
     }
@@ -156,13 +221,13 @@ internal sealed class BrowserAgentIntegratedController : IDisposable
 
     private void RaiseStateChanged()
     {
-        try
-        {
-            StateChanged?.Invoke();
-        }
-        catch (Exception ex)
-        {
-            LongCaptureLog.Warn($"Browser Agent integrated state subscriber failed: {LongCaptureLog.OneLine(ex.Message)}");
-        }
+        try { StateChanged?.Invoke(); }
+        catch (Exception ex) { LongCaptureLog.Warn($"Browser Agent integrated state subscriber failed: {LongCaptureLog.OneLine(ex.Message)}"); }
+    }
+
+    private static double ReadDouble(JsonElement element, string name)
+    {
+        if (element.TryGetProperty(name, out JsonElement value) && value.TryGetDouble(out double result)) return result;
+        return 0;
     }
 }

@@ -9,14 +9,12 @@ $text = [IO.File]::ReadAllText($program)
 $marker = '--modern-ui-v017-audit'
 
 if ($text.Contains($marker)) {
-    Write-Host "[BrowserAgent-v0.1.7-ui] already present." -ForegroundColor DarkYellow
-    exit 0
-}
-
-$old = @'
+    Write-Host "[BrowserAgent-v0.1.7-ui] audit CLI already present." -ForegroundColor DarkYellow
+} else {
+    $old = @'
         using var exclusionWatcher = CaptureExclusionWatcher.Start();
 '@
-$new = @'
+    $new = @'
         string? modernUiAuditArg = args.FirstOrDefault(x =>
             x.StartsWith("--modern-ui-v017-audit", StringComparison.OrdinalIgnoreCase));
         if (modernUiAuditArg is not null)
@@ -35,11 +33,29 @@ $new = @'
         using var exclusionWatcher = CaptureExclusionWatcher.Start();
 '@
 
-if (-not $text.Contains($old)) {
-    throw "Browser Agent v0.1.7 modern-UI audit anchor missing. Apply v0.1 Browser overlay first."
+    if (-not $text.Contains($old)) {
+        throw "Browser Agent v0.1.7 modern-UI audit anchor missing. Apply v0.1 Browser overlay first."
+    }
+    Write-Host "[BrowserAgent-v0.1.7-ui] compatible: modern UI visual-audit CLI." -ForegroundColor Green
+    if (-not $CheckOnly) {
+        [IO.File]::WriteAllText($program, $text.Replace($old, $new), [Text.UTF8Encoding]::new($true))
+        Write-Host "[BrowserAgent-v0.1.7-ui] audit CLI applied." -ForegroundColor Cyan
+    }
 }
-Write-Host "[BrowserAgent-v0.1.7-ui] compatible: modern UI visual-audit CLI." -ForegroundColor Green
-if (-not $CheckOnly) {
-    [IO.File]::WriteAllText($program, $text.Replace($old, $new), [Text.UTF8Encoding]::new($true))
-    Write-Host "[BrowserAgent-v0.1.7-ui] applied." -ForegroundColor Cyan
+
+$followup = Join-Path $PSScriptRoot "apply-browser-agent-v017-responsive-followup.ps1"
+if (-not (Test-Path -LiteralPath $followup)) {
+    throw "Missing Browser Agent v0.1.7 responsive follow-up: $followup"
+}
+if ($CheckOnly) {
+    & pwsh -NoProfile -File $followup -CheckOnly
+} else {
+    & pwsh -NoProfile -File $followup
+}
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+if ($CheckOnly) {
+    Write-Host "Browser Agent v0.1.7 modern responsive UI compatibility passed." -ForegroundColor Green
+} else {
+    Write-Host "Browser Agent v0.1.7 modern responsive UI overlay chain applied." -ForegroundColor Green
 }

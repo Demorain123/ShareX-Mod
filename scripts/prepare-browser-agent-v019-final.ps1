@@ -18,6 +18,8 @@ if ($CheckOnly) {
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     & pwsh -NoProfile -File scripts\apply-browser-agent-v019-integrity-docs.ps1 -CheckOnly
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & pwsh -NoProfile -File scripts\apply-browser-agent-v019-release-coherence.ps1 -CheckOnly
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     Write-Host "Browser Agent v0.1.9 overlay compatibility passed." -ForegroundColor Green
     exit 0
 }
@@ -47,6 +49,12 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 & pwsh -NoProfile -File scripts\apply-browser-agent-v019-integrity-docs.ps1
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+# Round-5 independent archive review found that the packaged extension still identified
+# itself and its service-worker protocol as v0.1.8. Normalize all release-facing extension
+# metadata to v0.1.9 and fail closed if the expected source anchors are no longer compatible.
+& pwsh -NoProfile -File scripts\apply-browser-agent-v019-release-coherence.ps1
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 # Hard pre-build gate: publishing is forbidden below 95/100 or with any critical failure.

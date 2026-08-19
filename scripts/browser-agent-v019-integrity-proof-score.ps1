@@ -24,6 +24,7 @@ $selftest = Text "LongCapture.Standalone\BrowserAgentPocSelfTest.cs"
 $project = Text "LongCapture.Standalone\LongCapture.Standalone.csproj"
 $testing = Text "LongCapture.Standalone\TESTING.md"
 $readme = Text "LongCapture.Standalone\BrowserAgent\README.md"
+$worker = Text "LongCapture.Standalone\BrowserAgent\Extension\service-worker.js"
 $manifest = Get-Content "LongCapture.Standalone\BrowserAgent\Extension\manifest.json" -Raw | ConvertFrom-Json
 
 # A. Exact saved-byte integrity — 35.
@@ -53,6 +54,11 @@ $permissionBoundary = $permissions.Count -eq 3 -and
     $permissions -contains 'nativeMessaging' -and
     $permissions -notcontains 'debugger' -and -not $manifest.host_permissions
 Add-Check "extension permission boundary remains unchanged" 5 $permissionBoundary $true
+$releaseCoherent = ([string]$manifest.name -eq 'LongCapture Browser Agent v0.1.9') -and
+    ([string]$manifest.version -eq '0.1.9') -and
+    (Has $worker 'protocolVersion: "0.1.9"') -and
+    (Has $worker 'LongCapture Browser Agent v0.1.9 attached to this tab')
+Add-Check "extension manifest, service-worker protocol and attached badge agree on v0.1.9" 0 $releaseCoherent $true "zero-point critical gate: release identity must never drift even when the numeric quality score is otherwise 100"
 $noSha1Code = -not ($proof -match '\bSHA1\b|\bSHA-1\b')
 Add-Check "new integrity code uses SHA-256, not deprecated SHA-1" 4 ($noSha1Code -and (Has $proof 'SHA256.HashData')) $true "NIST recommends SHA-2/SHA-3 for new collision-resistant uses"
 $noHeavyHotPath = -not ($project -match '<PackageReference[^>]+(OpenCv|Tesseract|Paddle|OnnxRuntime)')

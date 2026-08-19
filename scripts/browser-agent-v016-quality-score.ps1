@@ -22,6 +22,7 @@ function Add-Check {
 
 function Text([string]$Path) { [IO.File]::ReadAllText((Join-Path $repoRoot $Path)) }
 function Has([string]$Text, [string]$Marker) { $Text.Contains($Marker) }
+function Matches([string]$Text, [string]$Pattern) { [regex]::IsMatch($Text, $Pattern, [Text.RegularExpressions.RegexOptions]::Singleline) }
 
 $policy = Text "LongCapture.Standalone\BrowserAgentAdaptivePolicy.cs"
 $calib = Text "LongCapture.Standalone\BrowserAgentAdaptiveCalibrationV016.cs"
@@ -41,7 +42,10 @@ Add-Check "five bounded gears" 5 (([regex]::Matches($policy, 'Gear = [0-4]')).Co
 Add-Check "calibrated controller constructor" 5 (Has $policy 'BrowserAgentCalibrationProfile? calibration = null') $true
 Add-Check "AIMD-like slow-fast recovery" 5 ((Has $policy 'currentGear = Math.Max(0, currentGear - 2)') -and (Has $policy 'currentGear++')) $true
 Add-Check "RFC-style smoothing + variation" 5 ((Has $calib '0.875 * old') -and (Has $calib '0.75 * variation') -and (Has $calib '4 * FalseQuietVariationMs')) $true
-Add-Check "calibration clamps" 5 ((Has $calib 'Math.Clamp(overlap, 0.20, 0.50)') -and (Has $calib '450, 3000') -and (Has $calib '3000, 12000')) $true
+$clampsOk = (Has $calib 'Math.Clamp(overlap, 0.20, 0.50)') -and
+    (Matches $calib 'ClampInt\s*\(\s*fastSettle\s*\*\s*settleScale\s*,\s*450\s*,\s*3000\s*\)') -and
+    (Matches $calib 'int\s+maxWait\s*=\s*ClampInt\s*\([\s\S]*?3000\s*,\s*12000\s*\)')
+Add-Check "calibration clamps" 5 $clampsOk $true "settle 450-3000ms, overlap 20-50%, maxWait 3000-12000ms"
 
 # 2) Real benchmark and live evidence: 25 points.
 Add-Check "real benchmark command" 5 ((Has $worker 'case "benchmark":') -and (Has $worker 'benchmarkCapturePipeline')) $true

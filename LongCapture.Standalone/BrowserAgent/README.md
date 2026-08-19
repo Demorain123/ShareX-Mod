@@ -1,95 +1,98 @@
-# LongCapture Browser Agent v0.1.4 — Hard Stop + Timeline
+# LongCapture Browser Agent v0.1.5 — Adaptive Quality
 
-Browser Agent remains integrated into the normal `LongCapture.exe` main window. Normal Long Capture / RC6 remains available and unchanged.
+Browser Agent remains integrated into the normal `LongCapture.exe` main window. Normal Long Capture / RC6 remains available; the Browser Agent is an optional browser-aware capture backend, not a replacement for LongCapture.
 
-## Why v0.1.4 exists
+## Why v0.1.5 exists
 
-Real v0.1.3 Linux.do diagnostics exposed a pre-frame control-flow bug rather than a stitching failure:
+The latest Linux.do run showed two different real-world problems:
 
-- F8 region selection succeeded;
-- the selected region was stored correctly;
-- the optional global preload was enabled;
-- **zero capture frames** had been accepted when the user saw the page rapidly moving;
-- the v0.1.3 preload implementation jumped to the currently known document bottom to trigger lazy/infinite loading;
-- pressing F8 cancelled the desktop request, but the already-running asynchronous browser-side preload continued scrolling.
+1. a fixed capture cadence is a poor trade-off for long dynamic pages — fast settings are desirable most of the time, but lazy loading / layout shifts need a temporary slowdown;
+2. some Linux.do circular avatars remain stationary in screen space while document text moves. They are sticky UI with a non-zero CSS inset, so the earlier `touches viewport edge` heuristic could fail to suppress them.
 
-v0.1.4 therefore separates **optional pre-scan**, **real capture**, and **hard cancellation**, and adds timestamped telemetry for each boundary.
+v0.1.5 therefore adds a named speed strategy, adaptive risk control, selective post-capture repair, layout-shift evidence, and inset-aware sticky suppression.
+
+## Capture speed
+
+Browser Assisted Capture now exposes **Capture speed** presets. The selected preset also writes the underlying Start delay / Page settle / Overlap controls so the behavior is visible rather than hidden.
+
+Fixed presets are constant for the whole run:
+
+| Preset | Start delay | Settle | Overlap |
+|---|---:|---:|---:|
+| Very Low | 500 ms | 1800 ms | 45% |
+| Low | 350 ms | 1350 ms | 40% |
+| Medium | 200 ms | 950 ms | 34% |
+| High | 100 ms | 700 ms | 27% |
+| Very High | 0 ms | 520 ms | 20% |
+
+Adaptive presets use the same gears but can change gear while capturing:
+
+- **Adaptive · Robust** — target Medium;
+- **Adaptive · Balanced** — target High;
+- **Adaptive · High speed** — target Very High.
+
+The adaptive controller starts at the selected target. Risk >= medium downshifts one gear; strong risk can downshift two gears. After three clean frames it recovers one gear toward the target. It never accelerates above the selected target.
+
+The risk score reuses evidence already collected by the capture path instead of adding OCR or a heavyweight model to every frame:
+
+- stability timeout / long settle;
+- DOM mutation / resize activity;
+- pending images;
+- scrollHeight growth / lazy-load warm-up;
+- post-load layout-shift score;
+- capture-state changes;
+- PNG overlap MAE / strong-difference ratio;
+- unusually large visual correction relative to DOM-predicted motion.
+
+## Repair precision
+
+Adaptive modes expose **Repair precision**:
+
+- **Low** — mark only higher-risk sections; up to 3 post-review candidates; 1 repair attempt each;
+- **Medium** — up to 8 candidates; 2 attempts each;
+- **High** — more sensitive marking, up to 16 candidates; 3 attempts each and a slower repair gear.
+
+High-risk sections can also trigger immediate recent-window recovery during capture. On a natural full-page completion, marked sections are reviewed before final stitching. A repair repositions the existing tab to the recorded logical Y, waits with conservative settings, re-captures the exact selected region, and verifies both neighbouring overlaps. If suspicious sections remain unresolved, the result is reported as **Partial / quality-review-unresolved** rather than silently claiming Complete.
+
+`session.json` records each frame's risk score/reasons, effective speed/overlap, repair-candidate flag, repair attempts/status, and session repair totals. Logs add `[BA_ADAPT]` and `[BA_REPAIR]` markers.
+
+## Sticky / fixed controls
+
+Fixed elements continue to be hidden during frames after the first. Sticky detection is now inset-aware: a sticky element can be considered pinned when its screen-space position matches its computed CSS `top`, `bottom`, `left`, or `right` inset, even when it does not literally touch the viewport edge.
+
+This is specifically intended for controls such as forum avatars that stick below a header. A sticky element that has not yet reached its sticky inset is not hidden merely because its CSS `position` is `sticky`.
+
+## Layout-shift evidence
+
+When the Chromium engine supports the Layout Instability API, Browser Agent observes `layout-shift` entries without recent user input during the settle window. Count and score are added to the existing MutationObserver / ResizeObserver / pending-image / height-growth evidence. This is an extra risk signal, not the sole definition of correctness.
 
 ## Normal workflow
 
 1. Start `LongCapture.exe`.
 2. Choose **Browser Assisted Capture**.
 3. Attach the active Chromium/Helium tab with the extension icon or **Ctrl+Shift+L**.
-4. Press **F8**.
-5. Drag the exact capture region. **Esc** cancels; **Enter** uses the full browser viewport.
-6. By default, LongCapture starts the real incremental capture from the top. The old global bottom-seeking preload is **OFF by default**.
-7. Do nothing to continue until confirmed page end, or press **F8** again for a hard manual stop.
+4. Choose a Capture speed. **Adaptive · Balanced** is the default.
+5. For adaptive modes choose Repair precision. **Medium** is the default.
+6. Keep **Optional gentle lazy-content pre-scan** OFF unless deliberately testing it.
+7. Press **F8**, then drag the exact capture region. Esc cancels; Enter uses the full browser viewport.
+8. Do nothing to continue until confirmed page end, or press **F8** again for a hard manual stop.
 
-## F8 hard stop
+## F8 hard stop retained from v0.1.4
 
-v0.1.4 does not rely on desktop `CancellationToken` cancellation alone.
+F8 cancels both the desktop-side wait and the browser-side active operation over Native Messaging. Region selection, stability waits, optional pre-scan and scrolling all observe the cancellation marker. A cancellation before frame 1 is reported as cancelled, not as a generic capture failure.
 
-When F8 is pressed during Browser Assisted Capture:
+## Diagnostics
 
-- LongCapture records the user-stop timestamp;
-- the desktop request wait is cancelled immediately;
-- an explicit `cancel` command is also sent to the extension over the existing native-messaging Port;
-- the extension sets an in-page cancellation marker and emits a cancel event;
-- region selection, page-stability waits, pre-scan, and scrolling functions check that marker and abort;
-- a cancellation before frame 1 is reported as **cancelled**, not as a generic capture failure.
+Diagnostics ZIP export now always includes the active main-process log plus the most recent LongCapture logs, in addition to the session-window selection. This closes the case where filesystem timestamp filtering could omit the log that contains the current run.
 
-This is required because a script injected with `chrome.scripting.executeScript()` may itself be awaiting a Promise; abandoning the desktop-side request does not inherently terminate that browser-side Promise.
+Important markers:
 
-## Optional gentle pre-scan
-
-The Browser-mode checkbox is now labelled:
-
-**Optional gentle lazy-content pre-scan (visible, slower)**
-
-It is OFF by default.
-
-When explicitly enabled, v0.1.4 no longer jumps directly to `scrollHeight - viewportHeight`. It walks forward in bounded viewport-sized steps, waits for stability, emits a timestamped `preload-step` event after every step, remains cancellable, and returns to the top before the real pass only if it was not cancelled.
-
-Per-frame lazy-boundary warm-up and true-end confirmation remain active even when this optional global pre-scan is OFF.
-
-## Debug mode in Browser Assisted Capture
-
-**Debug: GUI + raw replay evidence** is user-selectable in Browser Assisted Capture again. The internal-helper debug option follows the parent Debug checkbox. This allows real screenshots of the LongCapture GUI while preserving the existing debug/window-affinity behavior.
-
-## Timestamped diagnostics timeline
-
-v0.1.4 upgrades the normal LongCapture log with Browser Agent phase telemetry. Diagnostics ZIP export already includes the overlapping LongCapture logs, so no separate manual log-copy step is required.
-
-Important markers include:
-
-- `[USER_ACTION]` — capture-button clicks and Browser-mode setting changes;
-- `[BA_TIMELINE]` — capture/connection milestones, status text and F8 stop;
-- `[BA_REQ]` — native request id, command type, create/send/complete/cancel/error phase, elapsed milliseconds;
-- `[BA_AGENT]` — extension-side timestamped events such as region selection, optional pre-scan steps, real capture scroll steps and cancel acknowledgement.
-
-This makes it possible to reconstruct a run chronologically: attach → settings → F8 → region selected → optional pre-scan → frame/scroll requests → recovery/end checks → F8 stop/automatic completion.
-
-## Browser quality controls
-
-In Browser Assisted Capture:
-
-- **Start delay (ms)** — delay before the real pass;
-- **Page settle (ms)** — DOM/layout quiet window;
-- **Overlap (%)** — retained frame overlap;
-- **DOM + visual verification** — required scroll engine;
-- **Optional gentle lazy-content pre-scan** — OFF by default;
-- **Full browser viewport** — skips manual region selection when enabled;
-- **Debug: GUI + raw replay evidence** — user-selectable.
-
-## Visual geometry retained from v0.1.3
-
-The browser reports DOM scroll positions as a prediction. LongCapture also resolves visual movement from adjacent PNGs and records expected DOM delta, resolved PNG delta, correction, alignment score and confidence. The streaming compositor uses cumulative resolved movement rather than treating absolute DOM `scrollY` as sufficient placement proof.
-
-## Automatic completion
-
-There is no normal 200-frame completion limit. Browser Agent continues until repeated stable-bottom confirmation succeeds. A high internal frame limit remains only as a runaway guard and is reported as Partial.
-
-Visible DOM counters such as `319 / 322` are supporting evidence, not the sole completion rule.
+- `[USER_ACTION]` — button / setting changes;
+- `[BA_TIMELINE]` — capture milestones and F8 stop;
+- `[BA_REQ]` — Native Messaging request lifecycle and elapsed time;
+- `[BA_AGENT]` — browser-side region / scroll / cancel events;
+- `[BA_ADAPT]` — per-frame risk and speed changes;
+- `[BA_REPAIR]` — local review / re-capture attempts and results.
 
 ## Permission boundary
 
@@ -107,11 +110,11 @@ For an existing unpacked installation:
 
 1. Replace the portable package.
 2. Open the browser extensions page and press **Reload** on LongCapture Browser Agent.
-3. If the extension ID stays the same, native-host registration normally remains valid.
+3. If the extension ID stays the same, Native Host registration normally remains valid.
 4. If the ID changes, run `BrowserAgent\INSTALL-BROWSER-AGENT.cmd` again with the new ID.
 5. Start `LongCapture.exe` normally.
 
-## Output / diagnostics
+## Output
 
 Browser Assisted sessions remain beside the portable app under:
 
@@ -121,8 +124,10 @@ Diagnostics ZIPs are written under:
 
 `BrowserAgentCaptures\Diagnostics\`
 
-For a failed or suspicious real run, one Diagnostics ZIP is normally enough; v0.1.4 is designed to preserve the Browser Agent request/event timeline inside it.
+## Deliberate scope limit
+
+v0.1.5 makes the fixed/adaptive speed controller and precision-based local repair real in **Browser Assisted Capture** first, because that mode has DOM/layout/loading evidence needed for safe adaptation. It does not pretend that the same adaptive controller is already wired into Normal/Smart Web/Teach/Recipe engines. Their existing speed controls and capture paths remain available and must get mode-specific integration instead of a cosmetic shared dropdown.
 
 ## CI gate
 
-The v0.1.4 final evidence gate must pass the RC6 overlay chain, v0.1.4 source invariants, portable publish, Browser Agent deterministic self-test, RC6 QUICK regression suite, packaged-extension boundary checks, final ZIP extraction, and a second self-test from the extracted package before the artifact is considered testable.
+The v0.1.5 gate applies the complete RC6 + Browser Agent overlay chain, verifies the adaptive/sticky/logging source invariants and permission boundary, publishes self-contained win-x64, runs the Browser Agent deterministic self-test (including adaptive downshift/recovery), runs the existing RC6 QUICK regression suite, packages the final ZIP, extracts it into a fresh directory, reruns the Browser Agent self-test, and only then uploads the artifact.

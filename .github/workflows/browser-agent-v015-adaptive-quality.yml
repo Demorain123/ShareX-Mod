@@ -86,8 +86,7 @@ jobs:
             "scripts\apply-browser-agent-v014-prep.ps1",
             "scripts\apply-browser-agent-v014-cancel-timeline.ps1",
             "scripts\apply-browser-agent-v014-operation-log.ps1",
-            "scripts\apply-browser-agent-v015-adaptive-quality.ps1",
-            "scripts\apply-browser-agent-v015-sticky-followup.ps1"
+            "scripts\apply-browser-agent-v015-adaptive-quality.ps1"
           )
           foreach ($hook in $hooks) {
             Write-Host "=== $hook ==="
@@ -120,9 +119,11 @@ jobs:
           foreach ($marker in @("[BA_ADAPT]", "[BA_REPAIR]", "RunAdaptivePostReviewAsync", "EffectiveStableWindowMs", "StabilityLayoutShiftScore")) {
             if (-not $session.Contains($marker)) { throw "Missing adaptive session marker: $marker" }
           }
-          foreach ($marker in @('PerformanceObserver.supportedEntryTypes?.includes("layout-shift")', "layoutShiftScore", "v0.1.5 hide-pinned-sticky", 'protocolVersion: "0.1.5"')) {
+          foreach ($marker in @('PerformanceObserver.supportedEntryTypes?.includes("layout-shift")', "layoutShiftScore", "const topInset = inset(\"top\")", 'protocolVersion: "0.1.5"')) {
             if (-not $worker.Contains($marker)) { throw "Missing Browser evidence marker: $marker" }
           }
+          $pinnedCount = ([regex]::Matches($worker, 'const pinned =')).Count
+          if ($pinnedCount -lt 2) { throw "Expected inset sticky evidence in both collection and hide passes, found $pinnedCount" }
           foreach ($marker in @("HashSet<string> selectedLogs", "[BA_ADAPT]", "[BA_REPAIR]")) {
             if (-not $diag.Contains($marker)) { throw "Missing diagnostics marker: $marker" }
           }
@@ -157,9 +158,11 @@ jobs:
           $manifest = Get-Content "artifacts\LongCapture\BrowserAgent\Extension\manifest.json" -Raw | ConvertFrom-Json
           if ($manifest.version -ne "0.1.5") { throw "Packaged extension is not v0.1.5" }
           $worker = Get-Content "artifacts\LongCapture\BrowserAgent\Extension\service-worker.js" -Raw
-          foreach ($marker in @('protocolVersion: "0.1.5"', "layoutShiftScore", "v0.1.5 hide-pinned-sticky", "captureCancelled")) {
+          foreach ($marker in @('protocolVersion: "0.1.5"', "layoutShiftScore", "captureCancelled")) {
             if (-not $worker.Contains($marker)) { throw "Packaged worker missing $marker" }
           }
+          $pinnedCount = ([regex]::Matches($worker, 'const pinned =')).Count
+          if ($pinnedCount -lt 2) { throw "Packaged worker does not contain both inset sticky checks" }
 
           New-Item -ItemType Directory -Force Output | Out-Null
           $zip = "Output\LongCapture-Browser-Agent-v0.1.5-Adaptive-Quality-x64.zip"

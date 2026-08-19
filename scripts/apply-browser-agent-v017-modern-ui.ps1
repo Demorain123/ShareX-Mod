@@ -43,16 +43,21 @@ if ($text.Contains($marker)) {
     }
 }
 
-$followup = Join-Path $PSScriptRoot "apply-browser-agent-v017-responsive-followup.ps1"
-if (-not (Test-Path -LiteralPath $followup)) {
-    throw "Missing Browser Agent v0.1.7 responsive follow-up: $followup"
+$followups = @(
+    (Join-Path $PSScriptRoot "apply-browser-agent-v017-responsive-followup.ps1"),
+    (Join-Path $PSScriptRoot "apply-browser-agent-v017-visual-audit-hardening.ps1")
+)
+foreach ($followup in $followups) {
+    if (-not (Test-Path -LiteralPath $followup)) {
+        throw "Missing Browser Agent v0.1.7 UI follow-up: $followup"
+    }
+    if ($CheckOnly) {
+        & pwsh -NoProfile -File $followup -CheckOnly
+    } else {
+        & pwsh -NoProfile -File $followup
+    }
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
-if ($CheckOnly) {
-    & pwsh -NoProfile -File $followup -CheckOnly
-} else {
-    & pwsh -NoProfile -File $followup
-}
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 if ($CheckOnly) {
     Write-Host "Browser Agent v0.1.7 modern responsive UI compatibility passed." -ForegroundColor Green

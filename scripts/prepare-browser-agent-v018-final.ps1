@@ -81,6 +81,8 @@ foreach ($hook in @(
 if (-not $CheckOnly) {
   & pwsh -NoProfile -File scripts\browser-agent-v018-quality-score.ps1 -MinimumScore 95
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  & pwsh -NoProfile -File scripts\browser-agent-v018-docs-check.ps1
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   git diff --check
 }
 

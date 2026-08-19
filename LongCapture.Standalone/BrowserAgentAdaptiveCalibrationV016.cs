@@ -39,19 +39,16 @@ internal sealed class BrowserAgentCalibrationProfile
 
     public void ObserveBridgeRtt(double milliseconds)
     {
-        Observe(ref BridgeRttMs, ref BridgeRttVariationMs, milliseconds);
+        (BridgeRttMs, BridgeRttVariationMs) = Observe(BridgeRttMs, BridgeRttVariationMs, milliseconds);
         BenchmarkSamples++;
         UpdatedUtc = DateTime.UtcNow;
     }
 
-    public void ObserveBenchmarkSample(
-        double captureMs,
-        double activityMs,
-        double falseQuietMs)
+    public void ObserveBenchmarkSample(double captureMs, double activityMs, double falseQuietMs)
     {
-        Observe(ref CaptureMs, ref CaptureVariationMs, captureMs);
-        Observe(ref ActivityMs, ref ActivityVariationMs, activityMs);
-        Observe(ref FalseQuietMs, ref FalseQuietVariationMs, falseQuietMs);
+        (CaptureMs, CaptureVariationMs) = Observe(CaptureMs, CaptureVariationMs, captureMs);
+        (ActivityMs, ActivityVariationMs) = Observe(ActivityMs, ActivityVariationMs, activityMs);
+        (FalseQuietMs, FalseQuietVariationMs) = Observe(FalseQuietMs, FalseQuietVariationMs, falseQuietMs);
         BenchmarkSamples++;
         UpdatedUtc = DateTime.UtcNow;
     }
@@ -64,15 +61,15 @@ internal sealed class BrowserAgentCalibrationProfile
 
         if (frame.CaptureVisibleTabMs > 0)
         {
-            Observe(ref CaptureMs, ref CaptureVariationMs, frame.CaptureVisibleTabMs);
+            (CaptureMs, CaptureVariationMs) = Observe(CaptureMs, CaptureVariationMs, frame.CaptureVisibleTabMs);
         }
         if (frame.StabilityActivityMs >= 0)
         {
-            Observe(ref ActivityMs, ref ActivityVariationMs, frame.StabilityActivityMs);
+            (ActivityMs, ActivityVariationMs) = Observe(ActivityMs, ActivityVariationMs, frame.StabilityActivityMs);
         }
         if (frame.StabilityMaxFalseQuietMs >= 0)
         {
-            Observe(ref FalseQuietMs, ref FalseQuietVariationMs, frame.StabilityMaxFalseQuietMs);
+            (FalseQuietMs, FalseQuietVariationMs) = Observe(FalseQuietMs, FalseQuietVariationMs, frame.StabilityMaxFalseQuietMs);
         }
 
         RiskScore = Ewma(RiskScore, frame.AdaptiveRiskScore, 0.08);
@@ -81,42 +78,30 @@ internal sealed class BrowserAgentCalibrationProfile
             OverlapMae = Ewma(OverlapMae, frame.OverlapMeanAbsoluteError, 0.08);
             StrongDiffRatio = Ewma(StrongDiffRatio, frame.OverlapStrongDiffRatio, 0.08);
         }
-        VisualCorrectionPixels = Ewma(
-            VisualCorrectionPixels,
-            Math.Abs(frame.VisualDeltaOffsetPixels),
-            0.08);
+        VisualCorrectionPixels = Ewma(VisualCorrectionPixels, Math.Abs(frame.VisualDeltaOffsetPixels), 0.08);
         UpdatedUtc = DateTime.UtcNow;
     }
 
     public BrowserAgentFrameTuning Tune(BrowserAgentFrameTuning baseline)
     {
-        if (Confidence < 0.10)
-        {
-            return Clone(baseline);
-        }
+        if (Confidence < 0.10) return Clone(baseline);
 
-        // RFC 6298-inspired idea: use a smoothed observation plus variation as a
-        // conservative guard. This is not TCP; it is deliberately bounded for capture.
+        // RFC 6298-inspired idea: smoothed observations plus variation create a
+        // conservative local guard. This is bounded capture tuning, not TCP.
         double falseQuietGuard = FalseQuietMs + 4 * FalseQuietVariationMs;
         double activityGuard = ActivityMs + 2 * ActivityVariationMs;
         double captureGuard = CaptureMs + 2 * CaptureVariationMs;
         double bridgeGuard = BridgeRttMs + 2 * BridgeRttVariationMs;
 
-        int fastSettle = ClampInt(
-            Math.Round(Math.Max(450, falseQuietGuard + 110)),
-            450,
-            1050);
+        int fastSettle = ClampInt(Math.Max(450, falseQuietGuard + 110), 450, 1050);
         double settleScale = baseline.StableWindowMs / 520.0;
-        int settle = ClampInt(Math.Round(fastSettle * settleScale), 450, 3000);
+        int settle = ClampInt(fastSettle * settleScale, 450, 3000);
 
-        // Start delay is intentionally only weakly calibrated. Per-frame stability is
-        // the stronger signal; a benchmark must never create a huge artificial delay.
+        // Start delay is only weakly calibrated. Runtime stability evidence remains
+        // authoritative, so a microbenchmark cannot create a huge delay by itself.
         double baseDelayWeight = 0.72 + 0.28 * (1 - Confidence);
-        int localIoGuard = ClampInt(Math.Round((bridgeGuard + captureGuard) * 0.18), 0, 260);
-        int startDelay = ClampInt(
-            Math.Round(baseline.StartDelayMs * baseDelayWeight + localIoGuard),
-            0,
-            1000);
+        int localIoGuard = ClampInt((bridgeGuard + captureGuard) * 0.18, 0, 260);
+        int startDelay = ClampInt(baseline.StartDelayMs * baseDelayWeight + localIoGuard, 0, 1000);
         if (baseline.Gear == 4 && captureGuard <= 500) startDelay = Math.Min(startDelay, 80);
 
         double overlap = baseline.OverlapRatio;
@@ -137,9 +122,7 @@ internal sealed class BrowserAgentCalibrationProfile
         overlap = Math.Clamp(overlap, 0.20, 0.50);
 
         int maxWait = ClampInt(
-            Math.Round(Math.Max(
-                baseline.MaxWaitMs,
-                settle * 4.5 + Math.Max(0, activityGuard))),
+            Math.Max(baseline.MaxWaitMs, settle * 4.5 + Math.Max(0, activityGuard)),
             3000,
             12000);
 
@@ -154,12 +137,10 @@ internal sealed class BrowserAgentCalibrationProfile
         };
     }
 
-    public string Summary()
-    {
-        return $"confidence={Confidence:P0}, samples={BenchmarkSamples} benchmark + {FrameSamples} frames, " +
-               $"bridge={BridgeRttMs:F0}±{BridgeRttVariationMs:F0}ms, capture={CaptureMs:F0}±{CaptureVariationMs:F0}ms, " +
-               $"activity={ActivityMs:F0}±{ActivityVariationMs:F0}ms, falseQuiet={FalseQuietMs:F0}±{FalseQuietVariationMs:F0}ms";
-    }
+    public string Summary() =>
+        $"confidence={Confidence:P0}, samples={BenchmarkSamples} benchmark + {FrameSamples} frames, " +
+        $"bridge={BridgeRttMs:F0}±{BridgeRttVariationMs:F0}ms, capture={CaptureMs:F0}±{CaptureVariationMs:F0}ms, " +
+        $"activity={ActivityMs:F0}±{ActivityVariationMs:F0}ms, falseQuiet={FalseQuietMs:F0}±{FalseQuietVariationMs:F0}ms";
 
     public static BrowserAgentCalibrationProfile CreateSyntheticForSelfTest()
     {
@@ -194,19 +175,15 @@ internal sealed class BrowserAgentCalibrationProfile
         OverlapRatio = source.OverlapRatio
     };
 
-    private static void Observe(ref double smoothed, ref double variation, double sample)
+    private static (double Smoothed, double Variation) Observe(double smoothed, double variation, double sample)
     {
-        if (!double.IsFinite(sample) || sample < 0) return;
-        if (smoothed <= 0)
-        {
-            smoothed = sample;
-            variation = sample / 2.0;
-            return;
-        }
+        if (!double.IsFinite(sample) || sample < 0) return (smoothed, variation);
+        if (smoothed <= 0) return (sample, sample / 2.0);
 
         double old = smoothed;
-        variation = 0.75 * variation + 0.25 * Math.Abs(old - sample);
-        smoothed = 0.875 * old + 0.125 * sample;
+        double nextVariation = 0.75 * variation + 0.25 * Math.Abs(old - sample);
+        double nextSmoothed = 0.875 * old + 0.125 * sample;
+        return (nextSmoothed, nextVariation);
     }
 
     private static double Ewma(double current, double sample, double alpha)
@@ -224,24 +201,12 @@ internal static class BrowserAgentCalibrationStore
     private static readonly object Gate = new();
     private static BrowserAgentCalibrationProfile? current;
 
-    public static string DirectoryPath => Path.Combine(
-        AppContext.BaseDirectory,
-        "BrowserAgentCaptures",
-        "Calibration");
-
-    public static string ProfilePath => Path.Combine(
-        DirectoryPath,
-        "browser-agent-calibration-v016.json");
+    public static string DirectoryPath => Path.Combine(AppContext.BaseDirectory, "BrowserAgentCaptures", "Calibration");
+    public static string ProfilePath => Path.Combine(DirectoryPath, "browser-agent-calibration-v016.json");
 
     public static BrowserAgentCalibrationProfile Current
     {
-        get
-        {
-            lock (Gate)
-            {
-                return current ??= LoadCore();
-            }
-        }
+        get { lock (Gate) return current ??= LoadCore(); }
     }
 
     public static void Save()
@@ -342,11 +307,7 @@ internal static class BrowserAgentAdaptiveTelemetryHub
     private static BrowserAgentAdaptiveRuntimeSnapshot? last;
 
     public static event Action<BrowserAgentAdaptiveRuntimeSnapshot>? Updated;
-
-    public static BrowserAgentAdaptiveRuntimeSnapshot? Last
-    {
-        get { lock (Gate) return last; }
-    }
+    public static BrowserAgentAdaptiveRuntimeSnapshot? Last { get { lock (Gate) return last; } }
 
     public static void Publish(BrowserAgentAdaptiveRuntimeSnapshot snapshot)
     {

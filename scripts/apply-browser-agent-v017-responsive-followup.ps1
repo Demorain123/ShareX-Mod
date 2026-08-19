@@ -53,32 +53,36 @@ Replace-Literal -Path $ui `
 '@ `
     -Marker 'int preferredWidth = Math.Min(1120'
 
-# Test the range that actually fits a standard hosted Windows desktop, including a 925px window
-# that directly exercises the user's reported ~927px clipping case. Larger windows are easier once
-# the narrow layout is correct; DPI pressure remains covered by the existing 100-200% shell tests.
-$oldSizes = @'
-                new Size(840, 720),
-                new Size(925, 760),
-                new Size(1080, 820),
-                new Size(1280, 900)
-'@
-$newSizes = @'
-                new Size(840, 680),
-                new Size(900, 700),
-                new Size(925, 720),
-                new Size(1000, 740)
-'@
+# Normalize every legacy viewport literal independently rather than requiring two byte-identical
+# blocks. Earlier overlay hooks can legitimately rewrite one of the matrices, and the previous
+# exact-count gate failed before build even though the UI source itself was compatible.
+$viewportMap = [ordered]@{
+    'new Size(840, 720)' = 'new Size(840, 680)'
+    'new Size(925, 760)' = 'new Size(925, 720)'
+    'new Size(1080, 820)' = 'new Size(900, 700)'
+    'new Size(1280, 900)' = 'new Size(1000, 740)'
+}
 $text = [IO.File]::ReadAllText($ui)
-$count = ([regex]::Matches($text, [regex]::Escape($oldSizes))).Count
-if ($count -eq 0 -and $text.Contains('new Size(1000, 740)')) {
-    Write-Host "[BrowserAgent-v0.1.7-responsive] audit viewport set already present." -ForegroundColor DarkYellow
-} elseif ($count -ne 2) {
-    throw "Expected exactly two v0.1.7 viewport-size blocks, found $count."
+$legacyHits = 0
+foreach ($oldLiteral in $viewportMap.Keys) {
+    $legacyHits += ([regex]::Matches($text, [regex]::Escape($oldLiteral))).Count
+}
+$alreadyNormalized = $text.Contains('new Size(840, 680)') -and
+                     $text.Contains('new Size(900, 700)') -and
+                     $text.Contains('new Size(925, 720)') -and
+                     $text.Contains('new Size(1000, 740)')
+if ($legacyHits -eq 0 -and $alreadyNormalized) {
+    Write-Host "[BrowserAgent-v0.1.7-responsive] hosted-desktop viewport matrix already present." -ForegroundColor DarkYellow
+} elseif ($legacyHits -eq 0) {
+    throw "No legacy or normalized v0.1.7 viewport literals were found."
 } elseif (-not $CheckOnly) {
-    [IO.File]::WriteAllText($ui, $text.Replace($oldSizes, $newSizes), [Text.UTF8Encoding]::new($true))
-    Write-Host "[BrowserAgent-v0.1.7-responsive] applied hosted-desktop viewport matrix." -ForegroundColor Cyan
+    foreach ($oldLiteral in $viewportMap.Keys) {
+        $text = $text.Replace($oldLiteral, $viewportMap[$oldLiteral])
+    }
+    [IO.File]::WriteAllText($ui, $text, [Text.UTF8Encoding]::new($true))
+    Write-Host "[BrowserAgent-v0.1.7-responsive] normalized hosted-desktop viewport literals (legacyHits=$legacyHits)." -ForegroundColor Cyan
 } else {
-    Write-Host "[BrowserAgent-v0.1.7-responsive] compatible: hosted-desktop viewport matrix." -ForegroundColor Green
+    Write-Host "[BrowserAgent-v0.1.7-responsive] compatible: hosted-desktop viewport normalization (legacyHits=$legacyHits)." -ForegroundColor Green
 }
 
 Replace-Literal -Path $ui `

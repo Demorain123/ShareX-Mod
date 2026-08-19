@@ -56,6 +56,24 @@ internal sealed class BrowserAgentFrameRecord
     public double VisualAlignmentScore { get; set; }
     public double VisualAlignmentConfidence { get; set; }
 
+    // v0.1.8: edge-band evidence catches sticky/fixed contamination that a center/
+    // median overlap score can miss (for example Discourse sticky avatars).
+    public double OverlapLeftBandMae { get; set; }
+    public double OverlapCenterBandMae { get; set; }
+    public double OverlapRightBandMae { get; set; }
+    public double OverlapLeftBandStrongRatio { get; set; }
+    public double OverlapCenterBandStrongRatio { get; set; }
+    public double OverlapRightBandStrongRatio { get; set; }
+    public bool OverlapLeftEdgeContamination { get; set; }
+    public bool OverlapRightEdgeContamination { get; set; }
+
+    // Background-window evidence. captureVisibleTab still requires this to be the
+    // active tab in its own browser window; the browser window itself may be behind
+    // another desktop application, but minimized capture is rejected fail-closed.
+    public bool TargetWindowFocused { get; set; }
+    public string TargetWindowState { get; set; } = string.Empty;
+    public bool BackgroundWindowCapture { get; set; }
+
     // v0.1.5+: adaptive evidence is auditable in session.json.
     public int EffectiveStartDelayMs { get; set; }
     public int EffectiveStableWindowMs { get; set; }
@@ -71,7 +89,7 @@ internal sealed class BrowserAgentFrameRecord
     public double CalibrationConfidence { get; set; }
 
     // v0.1.2+: progress / true-end evidence. The DOM counter is only a hint;
-    // geometry + repeated stable-bottom confirmation remains authoritative.
+    // geometry + repeated stable-bottom confirmation remains authoritative for full-page mode.
     public int PageCounterCurrent { get; set; }
     public int PageCounterTotal { get; set; }
     public string PageCounterText { get; set; } = string.Empty;
@@ -85,7 +103,7 @@ internal sealed class BrowserAgentFrameRecord
 
 internal sealed class BrowserAgentSessionManifest
 {
-    public string ProtocolVersion { get; set; } = "0.1.5";
+    public string ProtocolVersion { get; set; } = "0.1.8";
     public DateTime StartedUtc { get; set; }
     public DateTime? CompletedUtc { get; set; }
     public string Status { get; set; } = "capturing";
@@ -114,6 +132,12 @@ internal sealed class BrowserAgentSessionManifest
     public double CaptureRegionTopCss { get; set; }
     public double CaptureRegionWidthCss { get; set; }
     public double CaptureRegionHeightCss { get; set; }
+
+    public string RequestedStopMode { get; set; } = BrowserAgentStopModeV018.AutoPageEnd.ToString();
+    public int RequestedStopValue { get; set; }
+    public bool BackgroundWindowAllowed { get; set; } = true;
+    public int BackgroundWindowFrames { get; set; }
+    public int EdgeContaminationFrames { get; set; }
 
     public bool PreloadEnabled { get; set; }
     public bool PreloadReachedEnd { get; set; }

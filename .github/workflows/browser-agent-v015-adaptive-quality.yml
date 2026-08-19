@@ -110,10 +110,10 @@ jobs:
           foreach ($marker in @("BrowserAgentAdaptiveUiV015", "Browser Agent v0.1.5 options strategy=", "browserAgentAdaptiveUi.SetMode(true")) {
             if (-not $main.Contains($marker)) { throw "Missing v0.1.5 main marker: $marker" }
           }
-          foreach ($marker in @("BrowserAgentSpeedStrategy", "AdaptiveHighSpeed", "BrowserAgentAdaptiveController", "PostReviewBudget", "SelfTest")) {
+          foreach ($marker in @("BrowserAgentSpeedStrategy", "AdaptiveHighSpeed", "Adaptive · High speed", "BrowserAgentAdaptiveController", "PostReviewBudget", "SelfTest")) {
             if (-not $policy.Contains($marker)) { throw "Missing adaptive policy marker: $marker" }
           }
-          foreach ($marker in @("Capture speed", "Repair precision", "Adaptive · High speed", "EnrichOptions")) {
+          foreach ($marker in @("Capture speed", "Repair precision", "EnrichOptions")) {
             if (-not $adaptiveUi.Contains($marker)) { throw "Missing adaptive UI marker: $marker" }
           }
           foreach ($marker in @("[BA_ADAPT]", "[BA_REPAIR]", "RunAdaptivePostReviewAsync", "EffectiveStableWindowMs", "StabilityLayoutShiftScore")) {

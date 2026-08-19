@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace LongCapture.Standalone;
 
 internal sealed class BrowserAgentIntegratedController : IDisposable
@@ -88,7 +90,7 @@ internal sealed class BrowserAgentIntegratedController : IDisposable
             {
                 try
                 {
-                    JsonElement result = await bridge.SendRequestAsync(
+                    _ = await bridge.SendRequestAsync(
                         "cancel",
                         new { reason = "desktop-f8-stop", utc = DateTime.UtcNow.ToString("O") },
                         TimeSpan.FromSeconds(4),

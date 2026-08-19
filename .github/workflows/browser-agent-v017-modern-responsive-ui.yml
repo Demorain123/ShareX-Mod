@@ -151,7 +151,11 @@ jobs:
           $ErrorActionPreference = "Stop"
           $audit = Join-Path $PWD "artifacts\UiAudit-v017"
           $auditProcess = Start-Process -FilePath (Join-Path $PWD "artifacts\LongCapture\LongCapture.exe") -ArgumentList "--modern-ui-v017-audit=$audit" -WorkingDirectory (Join-Path $PWD "artifacts\LongCapture") -Wait -PassThru
-          if ($auditProcess.ExitCode -ne 0) { throw "v0.1.7 packaged UI audit failed exit=$($auditProcess.ExitCode)" }
+          if ($auditProcess.ExitCode -ne 0) {
+            $exception = Join-Path $audit "ui-audit-exception.txt"
+            if (Test-Path $exception) { Write-Host "=== ui-audit-exception.txt ==="; Get-Content $exception }
+            throw "v0.1.7 packaged UI audit failed exit=$($auditProcess.ExitCode)"
+          }
           $manifest = Join-Path $audit "ui-audit.json"
           if (-not (Test-Path $manifest)) { throw "UI audit manifest missing" }
           $shots = @(Get-ChildItem $audit -Filter "LongCapture-v017-ui-*.png")
@@ -159,9 +163,6 @@ jobs:
 
           Add-Type -AssemblyName System.Drawing
           foreach ($shot in $shots) {
-            # PNG byte size is not a valid blank-image test: flat desktop UIs can compress to only
-            # a few KiB. Prove the artifact is decodable, near the requested viewport size and has
-            # enough densely sampled visual variation to contain real controls/text instead.
             if ($shot.Length -lt 2000) { throw "UI snapshot is implausibly small/truncated: $($shot.Name) bytes=$($shot.Length)" }
             $match = [regex]::Match($shot.Name, '-(\d+)x(\d+)\.png$')
             if (-not $match.Success) { throw "Cannot parse expected UI dimensions from $($shot.Name)" }
@@ -214,7 +215,11 @@ jobs:
           $reAudit = Join-Path $env:RUNNER_TEMP "longcapture-browser-agent-v017-final-ui-audit"
           Remove-Item $reAudit -Recurse -Force -ErrorAction SilentlyContinue
           $process = Start-Process -FilePath (Join-Path $temp "LongCapture.exe") -ArgumentList "--modern-ui-v017-audit=$reAudit" -WorkingDirectory $temp -Wait -PassThru
-          if ($process.ExitCode -ne 0) { throw "Extracted v0.1.7 UI audit failed with exit code $($process.ExitCode)" }
+          if ($process.ExitCode -ne 0) {
+            $exception = Join-Path $reAudit "ui-audit-exception.txt"
+            if (Test-Path $exception) { Write-Host "=== extracted ui-audit-exception.txt ==="; Get-Content $exception }
+            throw "Extracted v0.1.7 UI audit failed with exit code $($process.ExitCode)"
+          }
           if (@(Get-ChildItem $reAudit -Filter "LongCapture-v017-ui-*.png").Count -ne 4) { throw "Extracted package did not produce four UI snapshots" }
 
           $process = Start-Process -FilePath (Join-Path $temp "LongCapture.exe") -ArgumentList "--browser-agent-poc-self-test" -WorkingDirectory $temp -Wait -PassThru

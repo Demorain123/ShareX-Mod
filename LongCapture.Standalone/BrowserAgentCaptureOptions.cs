@@ -12,6 +12,12 @@ internal sealed class BrowserAgentCaptureOptions
     public int PreloadMaxSeconds { get; init; } = 90;
     public bool RequireRegionSelection { get; init; } = true;
 
+    // v0.1.5: a fixed strategy maps the GUI preset to constant parameters;
+    // adaptive strategies start near their target speed and downshift on real
+    // loading/layout/seam evidence before gradually recovering.
+    public BrowserAgentSpeedStrategy SpeedStrategy { get; init; } = BrowserAgentSpeedStrategy.AdaptiveBalanced;
+    public BrowserAgentRepairPrecision RepairPrecision { get; init; } = BrowserAgentRepairPrecision.Medium;
+
     public static BrowserAgentCaptureOptions Default => new();
 
     public BrowserAgentCaptureOptions Normalize()
@@ -23,7 +29,9 @@ internal sealed class BrowserAgentCaptureOptions
             OverlapRatio = Math.Clamp(OverlapRatio, 0.20, 0.50),
             PreloadDynamicContent = PreloadDynamicContent,
             PreloadMaxSeconds = Math.Clamp(PreloadMaxSeconds, 10, 180),
-            RequireRegionSelection = RequireRegionSelection
+            RequireRegionSelection = RequireRegionSelection,
+            SpeedStrategy = Enum.IsDefined(SpeedStrategy) ? SpeedStrategy : BrowserAgentSpeedStrategy.AdaptiveBalanced,
+            RepairPrecision = Enum.IsDefined(RepairPrecision) ? RepairPrecision : BrowserAgentRepairPrecision.Medium
         };
     }
 }

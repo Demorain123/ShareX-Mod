@@ -1,5 +1,3 @@
-using System.Text.Json;
-
 namespace LongCapture.Standalone;
 
 internal sealed class BrowserAgentIntegratedController : IDisposable

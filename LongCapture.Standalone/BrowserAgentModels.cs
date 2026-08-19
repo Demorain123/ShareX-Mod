@@ -30,6 +30,8 @@ internal sealed class BrowserAgentFrameRecord
     public int StabilityHeightChangeCount { get; set; }
     public int StabilityPendingImages { get; set; }
     public double StabilityHeightGrowthCss { get; set; }
+    public int StabilityLayoutShiftCount { get; set; }
+    public double StabilityLayoutShiftScore { get; set; }
     public bool LazyWarmupTriggered { get; set; }
     public double LazyWarmupGrowthCss { get; set; }
     public bool CaptureStateChanged { get; set; }
@@ -49,6 +51,18 @@ internal sealed class BrowserAgentFrameRecord
     public double VisualAlignmentScore { get; set; }
     public double VisualAlignmentConfidence { get; set; }
 
+    // v0.1.5 adaptive evidence. These fields make the speed decision and local
+    // repair policy auditable from session.json instead of hiding it in heuristics.
+    public int EffectiveStableWindowMs { get; set; }
+    public double EffectiveOverlapRatio { get; set; }
+    public int AdaptiveRiskScore { get; set; }
+    public string AdaptiveRiskReasons { get; set; } = string.Empty;
+    public string AdaptiveSpeedBefore { get; set; } = string.Empty;
+    public string AdaptiveSpeedAfter { get; set; } = string.Empty;
+    public bool RepairCandidate { get; set; }
+    public int RepairAttempts { get; set; }
+    public string RepairStatus { get; set; } = string.Empty;
+
     // v0.1.2+: progress / true-end evidence. The DOM counter is only a hint;
     // geometry + repeated stable-bottom confirmation remains authoritative.
     public int PageCounterCurrent { get; set; }
@@ -64,7 +78,7 @@ internal sealed class BrowserAgentFrameRecord
 
 internal sealed class BrowserAgentSessionManifest
 {
-    public string ProtocolVersion { get; set; } = "0.1.3";
+    public string ProtocolVersion { get; set; } = "0.1.5";
     public DateTime StartedUtc { get; set; }
     public DateTime? CompletedUtc { get; set; }
     public string Status { get; set; } = "capturing";
@@ -76,6 +90,12 @@ internal sealed class BrowserAgentSessionManifest
     public int StartDelayMs { get; set; }
     public int StableWindowMs { get; set; }
     public double OverlapRatio { get; set; }
+    public string SpeedStrategy { get; set; } = BrowserAgentSpeedStrategy.AdaptiveBalanced.ToString();
+    public string RepairPrecision { get; set; } = BrowserAgentRepairPrecision.Medium.ToString();
+    public int AdaptiveRepairCandidates { get; set; }
+    public int AdaptiveRepairAttempts { get; set; }
+    public int AdaptiveRepairSuccesses { get; set; }
+    public int AdaptiveRepairFailures { get; set; }
     public bool RegionSelectionRequired { get; set; }
     public double CaptureRegionLeftCss { get; set; }
     public double CaptureRegionTopCss { get; set; }

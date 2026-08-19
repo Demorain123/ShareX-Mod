@@ -88,7 +88,7 @@ jobs:
             "scripts\apply-browser-agent-v014-operation-log.ps1",
             "scripts\apply-browser-agent-v015-adaptive-quality.ps1",
             "scripts\apply-browser-agent-v015-global-speed-ui.ps1",
-            "scripts\apply-browser-agent-v016-calibration-learning.ps1"
+            "scripts\apply-browser-agent-v016-calibration-learning-v2.ps1"
           )
           foreach ($hook in $hooks) {
             Write-Host "=== $hook ==="

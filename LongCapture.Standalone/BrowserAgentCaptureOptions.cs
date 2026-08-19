@@ -5,7 +5,12 @@ internal sealed class BrowserAgentCaptureOptions
     public int StartDelayMs { get; init; } = 450;
     public int StableWindowMs { get; init; } = 1100;
     public double OverlapRatio { get; init; } = 0.32;
-    public bool PreloadDynamicContent { get; init; } = true;
+
+    // v0.1.4: global pre-scan is intentionally opt-in. The real v0.1.3 Linux.do
+    // evidence showed that an unconditional bottom-seeking preload looked like a
+    // runaway capture and could outlive a desktop F8 cancellation. Per-frame
+    // lazy-boundary warm-up remains enabled independently in the Browser Agent.
+    public bool PreloadDynamicContent { get; init; } = false;
     public int PreloadMaxSeconds { get; init; } = 90;
     public bool RequireRegionSelection { get; init; } = true;
 

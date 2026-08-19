@@ -34,7 +34,12 @@ $project = Text "LongCapture.Standalone\LongCapture.Standalone.csproj"
 $overlay = Text "scripts\apply-browser-agent-v017-modern-ui.ps1"
 
 # 1) Responsive layout and text integrity — 30 points.
-Add-Check "compact responsive target/speed command surface" 5 ((Has $ui 'RebuildModernTargetSurface') -and (Has $ui 'targetStrip.RowCount = 3') -and (Has $ui 'speedBar.WrapContents = true')) $true
+$compactSurface = (Has $ui 'RebuildModernTargetSurface') -and
+    (Has $ui 'targetStrip.RowCount = 3') -and
+    (Has $ui 'speedBar.WrapContents = true') -and
+    (Has $ui 'targetStrip.SetColumnSpan(actions, 1)') -and
+    (Has $ui 'targetStrip.SetColumnSpan(speedBar, 1)')
+Add-Check "compact span-safe target/speed command surface" 5 $compactSurface $true
 Add-Check "scroll-safe settings surface" 5 ((Has $ui 'body.AutoScroll = true') -and (Has $ui 'body.RowStyles[i].SizeType = SizeType.AutoSize')) $true
 Add-Check "readiness can wrap instead of clipping" 5 ((Has $ui 'panel.WrapContents = true') -and (Has $ui 'readiness.MaximumSize')) $true
 Add-Check "important labels explicitly avoid ellipsis" 5 ((Has $ui 'subtitle.AutoEllipsis = false') -and (Has $ui 'status.AutoEllipsis = false') -and (Has $ui 'output.AutoEllipsis = false')) $true
@@ -43,7 +48,11 @@ Add-Check "target strip child clipping is measured" 5 ((Has $ui 'ValidateTargetS
 
 # 2) Modern visual hierarchy — 25 points.
 Add-Check "Fluent-like canvas/surface/text palette" 5 ((Has $ui 'Palette.Canvas') -and (Has $ui 'Palette.Surface') -and (Has $ui 'Palette.TextMuted')) $false
-Add-Check "persistent primary capture CTA has accent hierarchy" 5 ((Has $ui 'actions.Controls.SetChildIndex(capture, 0)') -and (Has $ui 'button.BackColor = Palette.Accent') -and (Has $ui 'AccentHover') -and (Has $ui 'AccentPressed')) $true
+$compactCommands = (Has $ui '"Start capture (F8)"') -and
+    (Has $ui 'foreground.Text = "Foreground (F7)"') -and
+    (Has $ui 'refresh.Text = "Refresh"') -and
+    (Has $ui 'logs.Text = "Logs"')
+Add-Check "persistent concise primary command hierarchy" 5 ((Has $ui 'actions.Controls.SetChildIndex(capture, 0)') -and (Has $ui 'button.BackColor = Palette.Accent') -and $compactCommands) $true "primary capture stays visible; secondary labels are short enough for narrow widths"
 Add-Check "rounded settings surface" 5 ((Has $ui 'RoundedSurfacePanelV017') -and (Has $ui 'CornerRadius = 12')) $false
 Add-Check "Windows typography + concise product copy" 5 ((Has $ui 'Segoe UI Semibold') -and (Has $ui '24F') -and (Has $ui 'Browser-assisted capture · Quality guard · Recipes')) $false
 $progressiveDisclosure = (Has $ui 'ApplyModeVisibility') -and
@@ -73,7 +82,7 @@ $realMultiWidthAudit = (Has $ui 'CaptureVisualAudit') -and
     (Has $ui 'TryMeasureVisualAuditContent') -and
     (Has $ui 'visual-audit frame is visually blank or missing the real control hierarchy')
 Add-Check "multi-width visual snapshots prove real nonblank viewports" 5 $realMultiWidthAudit $true
-Add-Check "packaged CLI can run the UI audit" 5 ((Has $overlay '--modern-ui-v017-audit') -and (Has $overlay 'apply-browser-agent-v017-visual-polish-r2.ps1')) $true
+Add-Check "packaged CLI can run the complete R3 UI audit chain" 5 ((Has $overlay '--modern-ui-v017-audit') -and (Has $overlay 'apply-browser-agent-v017-visual-polish-r2.ps1') -and (Has $overlay 'apply-browser-agent-v017-visual-polish-r3.ps1')) $true
 $screenAware = (Has $ui 'int preferredWidth = Math.Min(1120') -and (Has $ui 'workArea.Width - 64') -and (Has $ui 'workArea.Height - 64')
 Add-Check "responsive validation + monitor-aware default sizing" 5 ((Has $ui 'ExperienceVersion = "0.1.7"') -and (Has $ui 'ValidateModernHierarchy') -and $screenAware) $true
 Add-Check "no new third-party UI framework dependency" 5 ((Has $project '<UseWindowsForms>true</UseWindowsForms>') -and -not ($project -match '<PackageReference[^>]+(MaterialSkin|ReaLTaiizor|Krypton|Guna|AntdUI|SunnyUI)')) $false
@@ -85,7 +94,7 @@ $passed = $score -ge $MinimumScore -and $criticalFailures.Count -eq 0
 
 $result = [pscustomobject]@{
     version = "0.1.7"
-    gate = "pre-build-modern-responsive-ui-r2"
+    gate = "pre-build-modern-responsive-ui-r3"
     score = $score
     maximum = $maximum
     minimum = $MinimumScore

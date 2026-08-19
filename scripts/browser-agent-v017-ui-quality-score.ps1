@@ -38,7 +38,7 @@ Add-Check "responsive target/speed command surface" 5 ((Has $ui 'targetStrip.Aut
 Add-Check "scroll-safe settings surface" 5 ((Has $ui 'body.AutoScroll = true') -and (Has $ui 'body.RowStyles[i].SizeType = SizeType.AutoSize')) $true
 Add-Check "readiness can wrap instead of clipping" 5 ((Has $ui 'panel.WrapContents = true') -and (Has $ui 'readiness.MaximumSize')) $true
 Add-Check "important labels explicitly avoid ellipsis" 5 ((Has $ui 'subtitle.AutoEllipsis = false') -and (Has $ui 'status.AutoEllipsis = false') -and (Has $ui 'output.AutoEllipsis = false')) $true
-Add-Check "reported 927px-class width is a real regression viewport" 5 ((Has $ui 'new Size(925, 720)') -and (Has $ui 'new Size(840, 680)') -and (Has $ui 'new Size(1000, 740)')) $true "hosted-desktop-safe 840/900/925/1000 matrix"
+Add-Check "reported 927px-class width is a real regression viewport" 5 ((Has $ui 'new Size(840, 680)') -and (Has $ui 'new Size(900, 700)') -and (Has $ui 'new Size(925, 720)') -and (Has $ui 'new Size(1000, 740)')) $true "hosted-desktop-safe 840/900/925/1000 matrix"
 Add-Check "target strip child clipping is measured" 5 ((Has $ui 'ValidateTargetStrip') -and (Has $ui 'Capture speed child clipped')) $true
 
 # 2) Modern visual hierarchy — 25 points.

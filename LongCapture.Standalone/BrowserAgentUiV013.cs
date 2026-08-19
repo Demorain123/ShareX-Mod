@@ -308,6 +308,9 @@ internal sealed class BrowserAgentUiModeAdapterV013
         scrollMethod.Enabled = false;
         autoScrollTop.Enabled = true;
         wholeWindowCapture.Enabled = true;
+
+        // v0.1.4: keep the existing Debug capture-affinity switch available in
+        // Browser mode so the main UI can be included in diagnostic screenshots.
         debugCaptureUi.Enabled = true;
         includeInternalDebugWindows.Enabled = debugCaptureUi.Checked;
     }

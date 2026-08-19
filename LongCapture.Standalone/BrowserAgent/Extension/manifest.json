@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "LongCapture Browser Agent v0.1.3",
-  "version": "0.1.3",
-  "description": "Active-tab helper with user-selected capture regions, dynamic-content preload, visual overlap verification and confirmed page-end detection.",
+  "name": "LongCapture Browser Agent v0.1.4",
+  "version": "0.1.4",
+  "description": "Active-tab helper with user-selected regions, hard cancellation, timestamped operation telemetry, visual overlap verification and confirmed page-end detection.",
   "permissions": [
     "activeTab",
     "scripting",

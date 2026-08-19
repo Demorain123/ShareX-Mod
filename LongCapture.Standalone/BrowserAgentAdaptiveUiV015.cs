@@ -88,6 +88,11 @@ internal sealed class BrowserAgentAdaptiveUiV015
         targetStrip.SuspendLayout();
         try
         {
+            // ReflowTargetStrip intentionally leaves its legacy two-row table in
+            // FixedSize mode. v0.1.5+ owns one additional controls row, so opt into
+            // AddRows before increasing RowCount. This is also required by the
+            // 100-200% layout-pressure self-test, where Controls.Add otherwise throws.
+            targetStrip.GrowStyle = TableLayoutPanelGrowStyle.AddRows;
             targetStrip.RowCount = Math.Max(3, targetStrip.RowCount);
             while (targetStrip.RowStyles.Count < 3) targetStrip.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
             targetStrip.RowStyles[2].SizeType = SizeType.Absolute;
@@ -122,7 +127,7 @@ internal sealed class BrowserAgentAdaptiveUiV015
             bar.Controls.Add(liveMonitorToggle);
             bar.Controls.Add(speedHint);
             targetStrip.Controls.Add(bar, 0, 2);
-            targetStrip.SetColumnSpan(bar, 4);
+            targetStrip.SetColumnSpan(bar, Math.Max(1, targetStrip.ColumnCount));
         }
         finally
         {

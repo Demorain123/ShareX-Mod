@@ -8,6 +8,8 @@ Set-Location $repoRoot
 if ($CheckOnly) {
     & pwsh -NoProfile -File scripts\prepare-browser-agent-v018-final.ps1 -CheckOnly
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & pwsh -NoProfile -File scripts\apply-browser-agent-v019-integrity-anchor-compat.ps1 -CheckOnly
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     & pwsh -NoProfile -File scripts\apply-browser-agent-v019-integrity-proof.ps1 -CheckOnly
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     & pwsh -NoProfile -File scripts\apply-browser-agent-v019-integrity-docs.ps1 -CheckOnly
@@ -21,6 +23,11 @@ if ($CheckOnly) {
 & pwsh -NoProfile -File scripts\prepare-browser-agent-v018-final.ps1
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+# v0.1.8's calibrated/adaptive layers have changed the exact capture-loop layout over
+# time. Seed the SHA-256 fast-path at a semantic integrity-evaluation point first; the
+# full overlay then sees the marker and does not depend on a brittle whitespace block.
+& pwsh -NoProfile -File scripts\apply-browser-agent-v019-integrity-anchor-compat.ps1
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & pwsh -NoProfile -File scripts\apply-browser-agent-v019-integrity-proof.ps1
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & pwsh -NoProfile -File scripts\apply-browser-agent-v019-integrity-docs.ps1

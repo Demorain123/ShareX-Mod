@@ -55,7 +55,11 @@ Add-Check "false quiet measurement" 5 ((Has $worker 'maxFalseQuietMs') -and (Has
 Add-Check "per-frame live effective values" 5 ((Has $session 'BrowserAgentAdaptiveTelemetryHub.Publish') -and (Has $models 'EffectiveMaxWaitMs') -and (Has $models 'CaptureVisibleTabMs')) $true
 
 # 3) UX/observability/persistence: 20 points.
-Add-Check "benchmark GUI" 4 ((Has $ui 'Browser benchmark') -and (Has $ui 'AttachCalibrationHandler')) $true
+$benchmarkGuiSafe = (Has $ui 'Browser benchmark') -and
+    (Has $ui 'AttachCalibrationHandler') -and
+    (Has $ui 'targetStrip.GrowStyle = TableLayoutPanelGrowStyle.AddRows') -and
+    (Has $ui 'targetStrip.SetColumnSpan(bar, Math.Max(1, targetStrip.ColumnCount))')
+Add-Check "benchmark GUI + layout-safe global strip" 4 $benchmarkGuiSafe $true "must survive FixedSize target strip and DPI/layout pressure"
 Add-Check "calibration user opt-out" 4 ((Has $ui 'Use local calibration') -and (Has $options 'UseLocalCalibration')) $true
 Add-Check "live params user opt-out" 4 ((Has $ui 'Live params') -and (Has $options 'ShowLiveAdaptiveMonitor')) $false
 Add-Check "no-activate capture-excluded monitor" 4 ((Has $monitor 'WS_EX_NOACTIVATE') -and (Has $monitor 'CaptureExclusion.Apply')) $true

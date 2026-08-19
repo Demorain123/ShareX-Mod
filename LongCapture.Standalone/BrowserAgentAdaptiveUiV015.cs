@@ -6,23 +6,24 @@ internal sealed class BrowserAgentAdaptiveUiV015
     private readonly ComboBox precisionSelector = new();
     private readonly Label speedHint = new();
     private readonly Label precisionHint = new();
-    private readonly TableLayoutPanel speedPanel = new();
     private readonly TableLayoutPanel precisionPanel = new();
 
-    private Control? normalRow3Control;
     private Control? normalRow4Control;
-    private string normalRow3Label = "Recipe";
     private string normalRow4Label = "Recipe actions";
     private bool initialized;
     private bool browserMode;
     private bool applyingPreset;
+    private bool globalSpeedMounted;
+    private BrowserAgentSpeedStrategy browserStrategy = BrowserAgentSpeedStrategy.AdaptiveBalanced;
+    private BrowserAgentSpeedStrategy nativeStrategy = BrowserAgentSpeedStrategy.FixedMedium;
 
     public BrowserAgentAdaptiveUiV015()
     {
         speedSelector.DropDownStyle = ComboBoxStyle.DropDownList;
-        speedSelector.Items.AddRange(BrowserAgentAdaptiveProfiles.StrategyDisplayNames.Cast<object>().ToArray());
-        speedSelector.SelectedIndex = (int)BrowserAgentSpeedStrategy.AdaptiveBalanced;
-        speedSelector.Dock = DockStyle.Fill;
+        speedSelector.MinimumSize = new Size(205, 30);
+        speedSelector.Width = 225;
+        speedSelector.Anchor = AnchorStyles.Left | AnchorStyles.Top;
+        RebuildSpeedItems(browser: false);
 
         precisionSelector.DropDownStyle = ComboBoxStyle.DropDownList;
         precisionSelector.Items.AddRange(BrowserAgentAdaptiveProfiles.PrecisionDisplayNames.Cast<object>().ToArray());
@@ -30,33 +31,87 @@ internal sealed class BrowserAgentAdaptiveUiV015
         precisionSelector.Dock = DockStyle.Left;
         precisionSelector.Width = 145;
 
-        speedHint.Text = "Adaptive slows down on loading/layout risk, then gradually returns to the selected target speed.";
+        speedHint.Text = "Fixed Medium";
         speedHint.AutoSize = true;
         speedHint.ForeColor = Color.DimGray;
-        speedHint.Padding = new Padding(8, 6, 0, 0);
+        speedHint.Padding = new Padding(8, 5, 0, 0);
 
         precisionHint.Text = "Controls how often suspicious sections are reviewed/re-captured.";
         precisionHint.AutoSize = true;
         precisionHint.ForeColor = Color.DimGray;
         precisionHint.Padding = new Padding(8, 6, 0, 0);
 
-        BuildPanel(speedPanel, speedSelector, speedHint);
         BuildPanel(precisionPanel, precisionSelector, precisionHint);
     }
 
-    public BrowserAgentSpeedStrategy Strategy => (BrowserAgentSpeedStrategy)Math.Clamp(speedSelector.SelectedIndex, 0, BrowserAgentAdaptiveProfiles.StrategyDisplayNames.Length - 1);
+    public BrowserAgentSpeedStrategy Strategy => browserMode ? browserStrategy : nativeStrategy;
     public BrowserAgentRepairPrecision Precision => (BrowserAgentRepairPrecision)Math.Clamp(precisionSelector.SelectedIndex, 0, 2);
+
+    public void MountGlobalSpeedStrip(TableLayoutPanel targetStrip)
+    {
+        if (globalSpeedMounted) return;
+        globalSpeedMounted = true;
+
+        targetStrip.SuspendLayout();
+        try
+        {
+            targetStrip.RowCount = Math.Max(3, targetStrip.RowCount);
+            while (targetStrip.RowStyles.Count < 3)
+            {
+                targetStrip.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+            }
+            targetStrip.RowStyles[2].SizeType = SizeType.Absolute;
+            targetStrip.RowStyles[2].Height = 38;
+            targetStrip.Height = Math.Max(targetStrip.Height, 140);
+
+            var bar = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                AutoSize = false,
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = false,
+                Margin = new Padding(0, 2, 0, 0),
+                Padding = new Padding(0)
+            };
+            var label = new Label
+            {
+                Text = "Capture speed",
+                AutoSize = true,
+                MinimumSize = new Size(120, 30),
+                TextAlign = ContentAlignment.MiddleLeft,
+                Margin = new Padding(0, 4, 8, 0)
+            };
+            speedSelector.Margin = new Padding(0, 2, 6, 0);
+            bar.Controls.Add(label);
+            bar.Controls.Add(speedSelector);
+            bar.Controls.Add(speedHint);
+            targetStrip.Controls.Add(bar, 0, 2);
+            targetStrip.SetColumnSpan(bar, 2);
+        }
+        finally
+        {
+            targetStrip.ResumeLayout(true);
+        }
+    }
 
     public void AttachHandlers(
         NumericUpDown startDelay,
         NumericUpDown pageSettle,
-        NumericUpDown overlap,
-        CheckBox preScan)
+        NumericUpDown scrollAmountOrOverlap,
+        CheckBox browserPreScanOrNativeScrollTop)
     {
         speedSelector.SelectionChangeCommitted += (_, _) =>
         {
-            ApplyPreset(startDelay, pageSettle, overlap, preScan);
-            LongCaptureLog.Info($"[USER_ACTION] browser-setting speedStrategy={Strategy}");
+            if (browserMode)
+            {
+                browserStrategy = (BrowserAgentSpeedStrategy)Math.Clamp(speedSelector.SelectedIndex, 0, BrowserAgentAdaptiveProfiles.StrategyDisplayNames.Length - 1);
+            }
+            else
+            {
+                nativeStrategy = (BrowserAgentSpeedStrategy)Math.Clamp(speedSelector.SelectedIndex, 0, 4);
+            }
+            ApplyPreset(startDelay, pageSettle, scrollAmountOrOverlap, browserPreScanOrNativeScrollTop);
+            LongCaptureLog.Info($"[USER_ACTION] capture-setting speedStrategy={Strategy} browserMode={browserMode}");
         };
         precisionSelector.SelectionChangeCommitted += (_, _) =>
         {
@@ -69,37 +124,30 @@ internal sealed class BrowserAgentAdaptiveUiV015
         TableLayoutPanel body,
         NumericUpDown startDelay,
         NumericUpDown pageSettle,
-        NumericUpDown overlap,
-        CheckBox preScan)
+        NumericUpDown scrollAmountOrOverlap,
+        CheckBox browserPreScanOrNativeScrollTop)
     {
         InitializeRows(body);
-        if (browserMode == this.browserMode)
+        bool changed = browserMode != this.browserMode;
+        this.browserMode = browserMode;
+
+        if (changed)
         {
-            if (browserMode)
-            {
-                precisionSelector.Enabled = BrowserAgentAdaptiveProfiles.IsAdaptive(Strategy);
-            }
-            return;
+            RebuildSpeedItems(browserMode);
         }
 
-        this.browserMode = browserMode;
         body.SuspendLayout();
         try
         {
             if (browserMode)
             {
-                SetRowLabel(body, 3, "Capture speed");
                 SetRowLabel(body, 4, "Repair precision");
-                ReplaceRowControl(body, 3, speedPanel);
                 ReplaceRowControl(body, 4, precisionPanel);
-                ApplyPreset(startDelay, pageSettle, overlap, preScan);
                 precisionSelector.Enabled = BrowserAgentAdaptiveProfiles.IsAdaptive(Strategy);
             }
             else
             {
-                SetRowLabel(body, 3, normalRow3Label);
                 SetRowLabel(body, 4, normalRow4Label);
-                if (normalRow3Control is not null) ReplaceRowControl(body, 3, normalRow3Control);
                 if (normalRow4Control is not null) ReplaceRowControl(body, 4, normalRow4Control);
             }
         }
@@ -107,12 +155,17 @@ internal sealed class BrowserAgentAdaptiveUiV015
         {
             body.ResumeLayout(true);
         }
+
+        if (changed)
+        {
+            ApplyPreset(startDelay, pageSettle, scrollAmountOrOverlap, browserPreScanOrNativeScrollTop);
+        }
     }
 
     public BrowserAgentCaptureOptions EnrichOptions(BrowserAgentCaptureOptions source)
     {
-        BrowserAgentFrameTuning tuning = BrowserAgentAdaptiveProfiles.BaseTuning(Strategy);
-        bool adaptive = BrowserAgentAdaptiveProfiles.IsAdaptive(Strategy);
+        BrowserAgentFrameTuning tuning = BrowserAgentAdaptiveProfiles.BaseTuning(browserStrategy);
+        bool adaptive = BrowserAgentAdaptiveProfiles.IsAdaptive(browserStrategy);
         return new BrowserAgentCaptureOptions
         {
             StartDelayMs = adaptive ? tuning.StartDelayMs : source.StartDelayMs,
@@ -121,7 +174,7 @@ internal sealed class BrowserAgentAdaptiveUiV015
             PreloadDynamicContent = source.PreloadDynamicContent,
             PreloadMaxSeconds = source.PreloadMaxSeconds,
             RequireRegionSelection = source.RequireRegionSelection,
-            SpeedStrategy = Strategy,
+            SpeedStrategy = browserStrategy,
             RepairPrecision = Precision
         }.Normalize();
     }
@@ -129,22 +182,67 @@ internal sealed class BrowserAgentAdaptiveUiV015
     private void ApplyPreset(
         NumericUpDown startDelay,
         NumericUpDown pageSettle,
-        NumericUpDown overlap,
-        CheckBox preScan)
+        NumericUpDown scrollAmountOrOverlap,
+        CheckBox browserPreScanOrNativeScrollTop)
     {
         if (applyingPreset) return;
         applyingPreset = true;
         try
         {
-            BrowserAgentFrameTuning tuning = BrowserAgentAdaptiveProfiles.BaseTuning(Strategy);
-            startDelay.Value = Clamp(tuning.StartDelayMs, startDelay.Minimum, startDelay.Maximum);
-            pageSettle.Value = Clamp(tuning.StableWindowMs, pageSettle.Minimum, pageSettle.Maximum);
-            overlap.Value = Clamp((decimal)(tuning.OverlapRatio * 100.0), overlap.Minimum, overlap.Maximum);
-            preScan.Checked = false;
-            precisionSelector.Enabled = BrowserAgentAdaptiveProfiles.IsAdaptive(Strategy);
-            speedHint.Text = BrowserAgentAdaptiveProfiles.IsAdaptive(Strategy)
-                ? $"Target {tuning.Name}: adaptive controller can slow down on risk and recover speed after clean frames."
-                : $"Fixed {tuning.Name}: {tuning.StableWindowMs} ms settle, {tuning.OverlapRatio:P0} overlap.";
+            if (browserMode)
+            {
+                BrowserAgentFrameTuning tuning = BrowserAgentAdaptiveProfiles.BaseTuning(browserStrategy);
+                startDelay.Value = Clamp(tuning.StartDelayMs, startDelay.Minimum, startDelay.Maximum);
+                pageSettle.Value = Clamp(tuning.StableWindowMs, pageSettle.Minimum, pageSettle.Maximum);
+                scrollAmountOrOverlap.Value = Clamp((decimal)(tuning.OverlapRatio * 100.0), scrollAmountOrOverlap.Minimum, scrollAmountOrOverlap.Maximum);
+                browserPreScanOrNativeScrollTop.Checked = false;
+                precisionSelector.Enabled = BrowserAgentAdaptiveProfiles.IsAdaptive(browserStrategy);
+                speedHint.Text = BrowserAgentAdaptiveProfiles.IsAdaptive(browserStrategy)
+                    ? $"Target {tuning.Name}; slows on loading/layout risk, then recovers after clean frames."
+                    : $"Fixed {tuning.Name}: {tuning.StableWindowMs} ms settle, {tuning.OverlapRatio:P0} overlap.";
+            }
+            else
+            {
+                int gear = Math.Clamp((int)nativeStrategy, 0, 4);
+                (int delay, int settle, int scroll) = gear switch
+                {
+                    0 => (500, 1200, 1),
+                    1 => (400, 850, 2),
+                    2 => (300, 550, 3),
+                    3 => (150, 350, 4),
+                    _ => (0, 220, 5)
+                };
+                startDelay.Value = Clamp(delay, startDelay.Minimum, startDelay.Maximum);
+                pageSettle.Value = Clamp(settle, pageSettle.Minimum, pageSettle.Maximum);
+                scrollAmountOrOverlap.Value = Clamp(scroll, scrollAmountOrOverlap.Minimum, scrollAmountOrOverlap.Maximum);
+                string name = BrowserAgentAdaptiveProfiles.ForGear(gear).Name;
+                speedHint.Text = $"Fixed {name}: {settle} ms settle, scroll amount {scroll}.";
+            }
+        }
+        finally
+        {
+            applyingPreset = false;
+        }
+    }
+
+    private void RebuildSpeedItems(bool browser)
+    {
+        applyingPreset = true;
+        try
+        {
+            speedSelector.BeginUpdate();
+            speedSelector.Items.Clear();
+            if (browser)
+            {
+                speedSelector.Items.AddRange(BrowserAgentAdaptiveProfiles.StrategyDisplayNames.Cast<object>().ToArray());
+                speedSelector.SelectedIndex = Math.Clamp((int)browserStrategy, 0, BrowserAgentAdaptiveProfiles.StrategyDisplayNames.Length - 1);
+            }
+            else
+            {
+                speedSelector.Items.AddRange(BrowserAgentAdaptiveProfiles.StrategyDisplayNames.Take(5).Cast<object>().ToArray());
+                speedSelector.SelectedIndex = Math.Clamp((int)nativeStrategy, 0, 4);
+            }
+            speedSelector.EndUpdate();
         }
         finally
         {
@@ -155,9 +253,7 @@ internal sealed class BrowserAgentAdaptiveUiV015
     private void InitializeRows(TableLayoutPanel body)
     {
         if (initialized) return;
-        normalRow3Control = body.GetControlFromPosition(1, 3);
         normalRow4Control = body.GetControlFromPosition(1, 4);
-        normalRow3Label = (body.GetControlFromPosition(0, 3) as Label)?.Text ?? normalRow3Label;
         normalRow4Label = (body.GetControlFromPosition(0, 4) as Label)?.Text ?? normalRow4Label;
         initialized = true;
     }
@@ -168,7 +264,7 @@ internal sealed class BrowserAgentAdaptiveUiV015
         panel.ColumnCount = 2;
         panel.RowCount = 1;
         panel.Margin = new Padding(0);
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 240));
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 160));
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         panel.Controls.Add(selector, 0, 0);
         panel.Controls.Add(hint, 1, 0);
